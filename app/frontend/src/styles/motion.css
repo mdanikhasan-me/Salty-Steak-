@@ -1,0 +1,187 @@
+
+
+
+
+
+
+
+
+
+
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes salty-rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes salty-dialog-in {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes salty-fade-in {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes salty-skeleton-sweep {
+    from {
+      background-position: 200% 0;
+    }
+
+    to {
+      background-position: -200% 0;
+    }
+  }
+
+
+
+  .button,
+  .plugin-action,
+  .icon-button,
+  .composer-tool,
+  .sidebar-row,
+  .workspace-switch__button,
+  .message__tools button,
+  .agent-activity__stop {
+    transition:
+      background-color var(--motion-hover) ease,
+      border-color var(--motion-hover) ease,
+      color var(--motion-hover) ease,
+      opacity var(--motion-hover) ease,
+      transform var(--motion-press) ease;
+  }
+
+
+  .button:active:not(:disabled),
+  .plugin-action:active:not(:disabled),
+  .icon-button:active:not(:disabled),
+  .composer-tool:active:not(:disabled),
+  .workspace-switch__button:active,
+  .message__tools button:active:not(:disabled),
+  .agent-activity__stop:active {
+    transform: scale(0.97);
+  }
+
+  .sidebar-row:active {
+    transform: scale(0.99);
+  }
+
+
+
+  .sidebar-row,
+  .workspace-switch__button {
+    transition:
+      background-color var(--motion-hover) ease,
+      color var(--motion-hover) ease,
+      transform var(--motion-press) ease;
+  }
+
+
+
+  .message {
+    animation: salty-rise var(--motion-enter) var(--ease-enter) both;
+    transition: background-color var(--motion-hover) ease;
+  }
+
+
+  .message-scroll {
+    animation: none;
+  }
+
+  .message__tools {
+    transition:
+      opacity var(--motion-hover) ease,
+      visibility var(--motion-hover) ease;
+  }
+
+  .message-generated-image,
+  .message-details,
+  .context-omission,
+  .message-quality-warning {
+    animation: salty-fade-in var(--motion-enter) var(--ease-enter) both;
+  }
+
+
+
+  .dialog-layer {
+    animation: salty-fade-in var(--motion-exit) var(--ease-exit) both;
+  }
+
+  .dialog {
+    animation: salty-dialog-in var(--motion-enter) var(--ease-enter) both;
+  }
+
+  .chat-settings-layer,
+  .cooking-activity-backdrop {
+    animation: salty-fade-in var(--motion-exit) var(--ease-exit) both;
+  }
+
+  .cooking-activity,
+  .host-action,
+  .automation-permission-review,
+  .automation-invocation-form {
+    animation: salty-rise var(--motion-enter) var(--ease-enter) both;
+  }
+
+
+
+  .stat-card,
+  .metric-card,
+  .panel-card,
+  .status-pill,
+  .plugin-row,
+  .automation-audit li {
+    animation: salty-rise var(--motion-enter) var(--ease-enter) both;
+  }
+
+  .status-pill,
+  .plugin-state,
+  .plugin-row {
+    transition:
+      background-color var(--motion-hover) ease,
+      border-color var(--motion-hover) ease,
+      color var(--motion-hover) ease;
+  }
+
+
+
+  .salty-skeleton {
+    background-image: linear-gradient(
+      90deg,
+      var(--surface-muted) 25%,
+      var(--surface-soft) 37%,
+      var(--surface-muted) 63%
+    );
+    background-size: 400% 100%;
+    animation: salty-skeleton-sweep 1.4s ease-in-out infinite;
+  }
+}
+
+
+
+.salty-skeleton {
+  min-height: 1rem;
+  background-color: var(--surface-muted);
+  border-radius: var(--radius-sm);
+}

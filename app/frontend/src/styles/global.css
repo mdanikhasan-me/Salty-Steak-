@@ -1,0 +1,49 @@
+@import "./tokens-base.css";
+@import "./shell-navigation.css";
+@import "./shared-components.css";
+@import "./workbench-pages.css";
+@import "./workstation-r13.css";
+@import "./responsive.css";
+@import "./chat.css";
+@import "./design-r18.css";
+@import "./chat-cooking.css";
+@import "./chat-transcript-polish.css";
+@import "./agent-activity.css";
+
+
+@import "./motion.css";
+
+
+.composer {
+  background: var(--canvas);
+}
+
+.generation-inspector { background: var(--surface); }
+
+.cooking-activity { background: var(--rail); }
+
+.message--user .message__body {
+  background: var(--surface-soft);
+}
+
+.rich-code {
+  background: var(--chrome);
+  border-color: var(--line);
+}
+
+.rich-code__bar {
+  background: var(--surface-muted);
+  border-bottom-color: var(--line);
+}
+
+.composer-popover,
+.conversation-actions-menu {
+  background: var(--popover);
+  border-color: var(--line-strong);
+}
+
+.send-button,
+.composer-action:not(.composer-action--stop),
+.chat-welcome > button {
+  color: var(--accent-ink);
+}

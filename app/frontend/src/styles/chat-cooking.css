@@ -1,0 +1,313 @@
+
+.chat-page {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+}
+
+.chat-page--sidebar-open {
+  grid-template-columns: 252px minmax(0, 1fr) 0;
+}
+
+.chat-page--activity-open {
+  grid-template-columns: 0 minmax(0, 1fr) 328px;
+}
+
+.chat-page--sidebar-open.chat-page--activity-open {
+  grid-template-columns: 252px minmax(0, 1fr) 328px;
+}
+
+
+
+
+
+
+.activity-phrase {
+  display: inline-block;
+  color: var(--r18-muted, var(--muted));
+  background-image: linear-gradient(
+    100deg,
+    var(--r18-muted, var(--muted)) 0%,
+    var(--r18-muted, var(--muted)) 38%,
+    var(--r18-text, var(--ink)) 49%,
+    var(--r18-text-soft, var(--ink-soft)) 53%,
+    var(--r18-muted, var(--muted)) 64%,
+    var(--r18-muted, var(--muted)) 100%
+  );
+  background-position: 115% 0;
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: salty-activity-sweep 2.15s cubic-bezier(.45, 0, .25, 1) infinite;
+  will-change: background-position;
+}
+
+.activity-phrase--response { font-weight: 540; }
+.activity-phrase--compact { width: max-content; max-width: 100%; }
+.activity-phrase--headline { max-width: 100%; }
+
+@keyframes salty-activity-sweep {
+  from { background-position: 115% 0; }
+  to { background-position: -115% 0; }
+}
+
+.cooking-status {
+  display: inline-flex;
+  width: max-content;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 7px;
+  padding: 0;
+  color: var(--r18-muted, var(--muted));
+  background: transparent;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.25;
+}
+
+button.cooking-status:hover,
+button.cooking-status:focus-visible,
+.cooking-status--open {
+  color: var(--r18-text-soft, var(--ink-soft));
+  background: transparent;
+}
+
+.cooking-glyph {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  overflow: visible;
+  color: var(--r18-accent, var(--accent));
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.7;
+  transform-origin: center;
+}
+
+.cooking-status__chevron {
+  width: 13px;
+  height: 13px;
+  margin-left: -3px;
+  color: currentColor;
+  transition: transform 130ms ease;
+}
+
+.cooking-status--open .cooking-status__chevron {
+  transform: rotate(90deg);
+}
+
+.message--generating {
+  min-height: 52px;
+}
+
+.message-generating__status {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+}
+
+.message-generating__status .cooking-status {
+  margin: 0;
+}
+
+.message-generating__instant {
+  display: inline-flex;
+  padding: 0;
+  color: var(--r18-muted, var(--muted));
+  background: transparent;
+  font-size: 12.5px;
+  line-height: 1.25;
+}
+
+.message-generating__instant:hover,
+.message-generating__instant:focus-visible { color: var(--r18-text-soft, var(--ink-soft)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-phrase {
+    color: var(--r18-muted, var(--muted));
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    animation: none;
+    will-change: auto;
+  }
+}
+
+.cooking-activity {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  color: var(--r18-text-soft, var(--ink-soft));
+  background: #171a1e;
+  border-left: 1px solid var(--r18-line, var(--line));
+}
+
+.cooking-activity-backdrop { display: none; }
+
+.cooking-activity__header {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 13px 8px 18px;
+  border-bottom: 1px solid var(--r18-line, var(--line));
+}
+
+.cooking-activity__header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.cooking-activity__header strong {
+  color: var(--r18-text, var(--ink));
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.cooking-activity__header span {
+  color: var(--r18-muted, var(--muted));
+  font-size: 11px;
+}
+
+.cooking-activity__header button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: var(--r18-muted, var(--muted));
+  background: transparent;
+  border-radius: 5px;
+}
+
+.cooking-activity__header button:hover,
+.cooking-activity__header button:focus-visible {
+  color: var(--r18-text, var(--ink));
+  background: rgb(255 255 255 / 5%);
+}
+
+.cooking-activity__header svg {
+  width: 15px;
+  height: 15px;
+}
+
+.cooking-activity__body {
+  min-height: 0;
+  padding: 18px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.cooking-activity__live {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+}
+
+.cooking-activity__live p,
+.cooking-activity__empty {
+  margin: 0;
+  color: var(--r18-muted, var(--muted));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cooking-activity__metrics {
+  display: grid;
+  gap: 0;
+  margin: 12px 0 16px;
+  border-top: 1px solid var(--r18-line, var(--line));
+  border-bottom: 1px solid var(--r18-line, var(--line));
+}
+
+.cooking-activity__metrics > div {
+  display: grid;
+  min-height: 34px;
+  grid-template-columns: minmax(88px, .8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.cooking-activity__metrics > div + div { border-top: 1px solid var(--r18-line, var(--line)); }
+.cooking-activity__metrics dt,
+.cooking-activity__metrics dd { margin: 0; font-size: 11.5px; }
+.cooking-activity__metrics dt { color: var(--r18-muted, var(--muted)); }
+.cooking-activity__metrics dd { color: var(--r18-text-soft, var(--ink-soft)); text-align: right; font-variant-numeric: tabular-nums; }
+
+.cooking-activity__section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 13px;
+  color: var(--r18-text-soft, var(--ink-soft));
+  font-size: 12.5px;
+  font-weight: 620;
+}
+
+.cooking-activity__section-title > svg { width: 15px; height: 15px; color: var(--r18-accent, var(--accent)); }
+.cooking-activity__research { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--r18-line, var(--line)); }
+.cooking-activity__research ol { display: grid; gap: 7px; padding: 0 0 0 20px; margin: 0; }
+.cooking-activity__research li { min-width: 0; color: var(--r18-muted, var(--muted)); font-size: 11px; }
+.cooking-activity__research a { display: block; overflow: hidden; color: var(--r18-text-soft, var(--ink-soft)); text-overflow: ellipsis; white-space: nowrap; }
+.cooking-activity__research a:hover { color: var(--r18-text, var(--ink)); text-decoration: underline; }
+
+.cooking-activity__content {
+  overflow-wrap: anywhere;
+  color: var(--r18-muted, var(--muted));
+  font-size: 12.5px;
+  line-height: 1.58;
+}
+
+.cooking-activity__content.rich-text p,
+.cooking-activity__content.rich-text ul,
+.cooking-activity__content.rich-text ol,
+.cooking-activity__content.rich-text blockquote {
+  margin-bottom: .72em;
+}
+
+.cooking-activity__content .rich-code pre code {
+  font-size: 11px;
+}
+
+@media (min-width: 961px) and (max-width: 1180px) {
+  .chat-page--sidebar-open {
+    grid-template-columns: 220px minmax(0, 1fr) 0;
+  }
+
+  .chat-page--sidebar-open.chat-page--activity-open {
+    grid-template-columns: 220px minmax(0, 1fr) 300px;
+  }
+
+  .chat-page--activity-open {
+    grid-template-columns: 0 minmax(0, 1fr) 300px;
+  }
+}
+
+@media (max-width: 960px) {
+  .chat-page,
+  .chat-page--sidebar-open,
+  .chat-page--activity-open,
+  .chat-page--sidebar-open.chat-page--activity-open {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cooking-activity {
+    position: absolute;
+    z-index: 70;
+    inset: 0 0 0 auto;
+    width: min(360px, calc(100vw - 48px));
+    box-shadow: -18px 0 42px rgb(0 0 0 / 32%);
+  }
+
+  .cooking-activity-backdrop {
+    position: absolute;
+    z-index: 69;
+    inset: 0;
+    display: block;
+    background: rgb(4 5 7 / 48%);
+    backdrop-filter: blur(2px);
+  }
+}

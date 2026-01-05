@@ -1,0 +1,87 @@
+# Salty Steak — version control scope.
+#
+# This repository versions SOURCE and CONFIGURATION only. Model weights,
+# packaged builds, validation evidence, caches and user data stay on disk but
+# out of history: they are large, regenerable, or private.
+#
+# Ignoring is not deleting. Everything excluded here remains where it is.
+
+# ---------------------------------------------------------------- environments
+.venv/
+.python/
+node_modules/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# --------------------------------------------------------------- build output
+dist/
+build/
+/app/desktop/native/bin/
+/app/desktop/native/obj/
+app/frontend/dist/assets/*.map
+/Salty Potato AI.exe
+/Salty Steak.exe
+
+# --------------------------------------------- validation evidence (~358 GB)
+# Historical run evidence, including whole workspace copies per candidate.
+validation/
+
+# ------------------------------------------------------------ vendored source
+vendor/
+
+# ------------------------------------------------------- workspace (~32 GB)
+# Model weights, runtime binaries, conversation database, caches and generated
+# artifacts. The bundle manifests below are small, meaningful configuration and
+# are deliberately kept.
+workspace/*
+!workspace/models/
+workspace/models/*
+!workspace/models/text-generation/
+!workspace/models/image-generation/
+workspace/models/text-generation/*
+workspace/models/image-generation/*
+!workspace/models/*/*/
+workspace/models/*/*/*
+!workspace/models/*/*/model.json
+
+# Model weights, wherever they appear.
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.bin
+*.ckpt
+
+# Private data and local state.
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# --------------------------------------------------------------- credentials
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+secrets.json
+plugin-secrets/
+config/local.toml
+
+# --------------------------------------------------------- logs and captures
+*.log
+logs/
+screenshot.png
+screenshots/
+
+# ------------------------------------------------------------------ platform
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Compiled probe; regenerate from check_abi.cpp
+tools/native_engine/*.exe
+tools/native_engine/*.obj

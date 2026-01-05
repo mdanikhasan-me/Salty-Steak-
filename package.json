@@ -1,0 +1,28 @@
+{
+  "name": "salty-steak",
+  "productName": "Salty Steak",
+  "version": "2.0.0",
+  "description": "Private offline training and chat desktop software for Salty Steak",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite --config app/frontend/vite.config.js --host 127.0.0.1",
+    "build": "vite build --config app/frontend/vite.config.js",
+    "build:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\build_desktop.ps1",
+    "clean:generated": "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\clean_generated_artifacts.ps1",
+    "test:backend": ".venv\\Scripts\\python.exe -m pytest tests -q",
+    "test:frontend": "node --test app/frontend/src/**/*.test.mjs",
+    "test:all": "npm run test:frontend && npm run test:backend",
+    "start": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '.\\Salty Steak.exe'\"",
+    "server": ".venv\\Scripts\\python.exe -m app.backend.server"
+  },
+  "dependencies": {
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.7"
+  }
+}

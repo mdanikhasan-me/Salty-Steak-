@@ -1,0 +1,647 @@
+"""Re-entrant tool loop for local Windows automation.
+
+Ordinary chat turns are single-shot: the model answers once and the turn ends.
+An automation task needs the opposite shape, because the model cannot know what
+a click did until it looks again.  This module runs the observe/act cycle,
+feeding every tool result back into the conversation until the model reports
+that the task is finished.
+
+The model still has no execution authority.  Each step is validated here and
+performed by ``AutomationBroker``, which independently enforces its own grants
+and writes its own audit record.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
+
+from ..automation.broker import (
+    APPLICATION_LAUNCH_CAPABILITY,
+    INPUT_CONTROL_CAPABILITY,
+    SCREEN_CAPTURE_CAPABILITY,
+    TERMINAL_CAPABILITY,
+    WINDOW_CONTROL_CAPABILITY,
+)
+from ..automation.routing import (
+    execution_route_record,
+    ordered_capabilities,
+    resolve_execution,
+)
+from .actions import _looks_destructive
+from .task_runtime import (
+    EXECUTING,
+    OBSERVING,
+    PLANNING,
+    TaskCancelled,
+    TaskContext,
+)
+
+
+AGENT_SCHEMA = "salty-steak-agent-task-v1"
+RESPOND_ACTION = "respond"
+MAX_ITERATIONS = 20
+MAX_PARSE_FAILURES = 3
+MAX_OBSERVATION_CHARACTERS = 2_000
+MAX_INSTRUCTION_CHARACTERS = 4_000
+STALE_ANALYSIS_CHARACTERS = 160
+
+
+
+MAX_IDENTICAL_ATTEMPTS = 3
+VISION_PROMPT = (
+    "Describe this screen for an automation agent. List the visible windows, "
+    "buttons, menus, text fields, and any readable text, and say roughly where "
+    "each one sits on screen. Be factual and specific."
+)
+VISION_OUTPUT_TOKENS = 256
+
+TOOL_DESCRIPTIONS = {
+    SCREEN_CAPTURE_CAPABILITY: (
+        'screen.capture — Take a screenshot of the primary display. Use this to '
+        'observe the current state.\n'
+        '  Arguments: {}'
+    ),
+    INPUT_CONTROL_CAPABILITY: (
+        'input.control — Control the mouse and keyboard.\n'
+        '  Arguments: {"action": "mouse_move"|"mouse_click"|"mouse_scroll"|'
+        '"key_press"|"type_text"|"key_combo", ...action-specific arguments}\n'
+        '  mouse_move/mouse_click/mouse_scroll take "x" and "y" in real screen '
+        'pixels. mouse_click also takes "button" and optional "double". '
+        'mouse_scroll takes "clicks" (negative scrolls down). key_press takes '
+        '"key". type_text takes "text". key_combo takes "combo" such as "Ctrl+S".'
+    ),
+    APPLICATION_LAUNCH_CAPABILITY: (
+        'application.launch — Launch an installed application or open a link.\n'
+        '  Arguments: {"target": "app name, https URL, or absolute file path", '
+        '"wait_ms": optional milliseconds to wait after launching}'
+    ),
+    TERMINAL_CAPABILITY: (
+        'terminal.execute — Run a terminal command and capture its output.\n'
+        '  Arguments: {"argv": ["executable", "arg1"], "timeout_seconds": 10}'
+    ),
+    WINDOW_CONTROL_CAPABILITY: (
+        'window.control — List, focus, or close real windows by their titles. '
+        'Windows already knows what is open, so use this instead of hunting for '
+        'a window in a screenshot.\n'
+        '  Arguments: {"action": "list"|"focus"|"close", "title": "part of the '
+        'window title"}'
+    ),
+}
+
+AGENT_RULES_BY_CAPABILITY_EXTRA = {
+    WINDOW_CONTROL_CAPABILITY: (
+        "- To reach an application that is already open, use window.control "
+        "focus. Do not screenshot the desktop looking for it.\n"
+    ),
+}
+
+AGENT_RULES_HEAD = (
+    "Rules:\n"
+    "- The tools above are listed best route first. Always take the highest one "
+    "that can do the job. Reading structured information beats looking at "
+    "pixels, and looking at pixels beats moving the mouse.\n"
+    "- Prefer the most direct capability that accomplishes the task. Do not add "
+    "steps the task does not need.\n"
+)
+
+
+
+
+AGENT_RULES_BY_CAPABILITY = {
+    APPLICATION_LAUNCH_CAPABILITY: (
+        "- Opening a website or an application is a single application.launch "
+        "call. Do it straight away, without observing the screen first.\n"
+    ),
+    INPUT_CONTROL_CAPABILITY: (
+        "- Take a screenshot before input.control, and only then. You need to "
+        "see the screen to know where to click or type; you do not need to see "
+        "it to launch something or to run a command.\n"
+        "- After a click or keystroke changes the screen, take one screenshot "
+        "to confirm the result, then continue.\n"
+    ),
+    SCREEN_CAPTURE_CAPABILITY: (
+        "- A screenshot observation carries a visual_analysis field describing "
+        "what is on screen. Read it before deciding where to click; it is your "
+        "sight.\n"
+        "- Screen coordinates are real screen pixels. If a screenshot reports a "
+        "scale_divisor above 1, multiply the coordinates you read off the image "
+        "by that number before using them.\n"
+    ),
+}
+
+AGENT_RULES_TAIL = (
+    "- Use respond only when the task is fully complete or you have confirmed "
+    "it is impossible.\n"
+    "- Never ask the user clarifying questions mid-task. Make a reasonable "
+    "decision and continue.\n"
+    "- If an action fails, try a different approach before giving up.\n"
+    "- Describe each action briefly in the reason field so the user can follow "
+    "your progress.\n\n"
+    "Output format — reply with exactly this JSON object and nothing else:\n"
+    '{"action": "<tool name>", "reason": "<one sentence: why this action now>", '
+    '"arguments": { }, "answer": "<only when action is respond>"}'
+)
+
+
+class AgentTaskError(RuntimeError):
+    """Raised when an automation task cannot be run at all."""
+
+
+def build_system_prompt(capabilities: Sequence[str]) -> str:
+    """Describe only the tools whose grants are currently enabled.
+
+    Advertising a capability the broker will refuse makes the model plan around
+    a door it cannot open, so an ungranted tool is simply absent.  The ones that
+    remain are listed in ladder order, because the order the model reads them in
+    is itself a recommendation.
+    """
+
+    ordered = ordered_capabilities(capabilities)
+    lines = [
+        "You are a local Windows automation agent running inside Salty Steak on "
+        "this computer.",
+        "",
+        "You have these tools, best route first:",
+    ]
+    for capability in ordered:
+        description = TOOL_DESCRIPTIONS.get(capability)
+        if description:
+            lines.append(description)
+    lines.append(
+        "respond — Give your final answer when the task is complete or "
+        "confirmed impossible.\n"
+        '  Arguments: {"answer": "your message to the user"}'
+    )
+    rules = AGENT_RULES_HEAD
+    for capability in ordered:
+        rules += AGENT_RULES_BY_CAPABILITY.get(capability, "")
+        rules += AGENT_RULES_BY_CAPABILITY_EXTRA.get(capability, "")
+    rules += AGENT_RULES_TAIL
+    lines.extend(["", rules])
+    return "\n".join(lines)
+
+
+def parse_agent_action(text: str, allowed: Sequence[str]) -> dict[str, Any]:
+    """Validate one whole-JSON action from the model.
+
+    Only a complete JSON object is accepted.  Scraping an action out of
+    surrounding prose would let stray model text act as an instruction.
+    """
+
+    raw = str(text or "").strip()
+    if raw.startswith("```"):
+
+        newline = raw.find("\n")
+        raw = raw[newline + 1 :] if newline >= 0 else ""
+        if raw.rstrip().endswith("```"):
+            raw = raw.rstrip()[:-3].strip()
+    if not raw.startswith("{") or not raw.endswith("}"):
+        raise ValueError("Reply with exactly one JSON object and no other text.")
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"That was not valid JSON: {error}") from error
+    if not isinstance(parsed, dict):
+        raise ValueError("The JSON value must be an object.")
+
+    action = str(parsed.get("action") or "").strip().casefold().replace("_", ".")
+    if action == "respond":
+        answer = str(parsed.get("answer") or "").strip()
+        if not answer:
+            arguments = parsed.get("arguments")
+            if isinstance(arguments, Mapping):
+                answer = str(arguments.get("answer") or "").strip()
+        if not answer:
+            raise ValueError("A respond action needs a non-empty answer.")
+        return {
+            "action": RESPOND_ACTION,
+            "reason": str(parsed.get("reason") or "").strip()[:500],
+            "arguments": {},
+            "answer": answer,
+        }
+    if action not in set(allowed):
+        raise ValueError(
+            "Unknown action. Choose one of: " + ", ".join([*allowed, RESPOND_ACTION])
+        )
+    arguments = parsed.get("arguments", {})
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, Mapping):
+        raise ValueError("The arguments field must be a JSON object.")
+    return {
+        "action": action,
+        "reason": str(parsed.get("reason") or "").strip()[:500],
+        "arguments": dict(arguments),
+        "answer": None,
+    }
+
+
+def step_fingerprint(
+    capability: str,
+    arguments: Mapping[str, Any],
+    observation: Mapping[str, Any],
+) -> str:
+    """Identify a step by what it did and what came back.
+
+    Volatile fields are excluded so that "the same thing happened again" is not
+    hidden by a changing path or timestamp.
+    """
+
+    stable = {
+        key: value
+        for key, value in observation.items()
+        if key not in {"screenshot_path", "duration_ms", "audit_record_id"}
+    }
+    return json.dumps(
+        {"capability": capability, "arguments": dict(arguments), "observation": stable},
+        sort_keys=True,
+        default=str,
+    )
+
+
+def is_destructive(action: str, arguments: Mapping[str, Any]) -> bool:
+    """Report whether a step needs review before it can run unattended."""
+
+    if action != TERMINAL_CAPABILITY:
+        return False
+    argv = arguments.get("argv")
+    if not isinstance(argv, list) or not argv:
+        return False
+    return _looks_destructive([str(item) for item in argv])
+
+
+def summarise_observation(
+    action: str,
+    result: Mapping[str, Any],
+    *,
+    describe_screenshot: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """Reduce a broker result to what the model needs for its next decision."""
+
+    status = str(result.get("status") or "unknown")
+    observation: dict[str, Any] = {"action": action, "status": status}
+    if action == SCREEN_CAPTURE_CAPABILITY:
+        artifact = dict(result.get("artifact") or {})
+        observation.update(
+            {
+                "screenshot_path": artifact.get("path"),
+                "image_width": artifact.get("width"),
+                "image_height": artifact.get("height"),
+                "screen_width": artifact.get("source_width"),
+                "screen_height": artifact.get("source_height"),
+                "scale_divisor": artifact.get("scale_divisor"),
+            }
+        )
+
+
+
+        path = str(artifact.get("path") or "")
+        if describe_screenshot is not None and path:
+            try:
+                description = describe_screenshot(path)
+            except Exception as error:
+                observation["visual_analysis_error"] = (
+                    f"{type(error).__name__}: {error}"[:MAX_OBSERVATION_CHARACTERS]
+                )
+            else:
+                if description:
+                    observation["visual_analysis"] = description[
+                        :MAX_OBSERVATION_CHARACTERS
+                    ]
+    elif action == TERMINAL_CAPABILITY:
+        observation.update(
+            {
+                "exit_code": result.get("exit_code"),
+                "stdout": str((result.get("stdout") or {}).get("text") or "")[
+                    :MAX_OBSERVATION_CHARACTERS
+                ],
+                "stderr": str((result.get("stderr") or {}).get("text") or "")[
+                    :MAX_OBSERVATION_CHARACTERS
+                ],
+            }
+        )
+    elif action == APPLICATION_LAUNCH_CAPABILITY:
+        observation["target"] = result.get("target")
+    elif action == INPUT_CONTROL_CAPABILITY:
+        observation["performed"] = result.get("action")
+    return observation
+
+
+class AgentLoop:
+    """Drive observe/act iterations until the model reports completion."""
+
+    def __init__(
+        self,
+        *,
+        broker: Any,
+        generate: Callable[[list[dict[str, str]]], str],
+        capabilities: Sequence[str],
+        authority_mode: str = "ask_every_time",
+        max_iterations: int = MAX_ITERATIONS,
+        on_step: Callable[[dict[str, Any]], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
+        describe_screenshot: Callable[[str], str] | None = None,
+        task: TaskContext | None = None,
+    ) -> None:
+        self.broker = broker
+        self.generate = generate
+        self.describe_screenshot = describe_screenshot
+
+
+        self.task = task or TaskContext()
+        self.capabilities = list(capabilities)
+        self.authority_mode = (
+            "full_access" if authority_mode == "full_access" else "ask_every_time"
+        )
+        self.max_iterations = max(1, min(int(max_iterations), MAX_ITERATIONS))
+        self.on_step = on_step
+
+
+        self.should_stop = should_stop
+        self.steps: list[dict[str, Any]] = []
+
+
+        self.model_turns = 0
+
+        self._attempts: dict[str, int] = {}
+
+    def run(self, instruction: str) -> dict[str, Any]:
+        task = str(instruction or "").strip()
+        if not task or len(task) > MAX_INSTRUCTION_CHARACTERS:
+            raise ValueError(
+                f"An automation task must contain 1 to {MAX_INSTRUCTION_CHARACTERS} characters"
+            )
+        if not self.capabilities:
+            raise AgentTaskError(
+                "No computer-control capability has been granted, so there is "
+                "nothing this task can do."
+            )
+        transcript: list[dict[str, str]] = [
+            {"role": "system", "content": build_system_prompt(self.capabilities)},
+            {"role": "user", "content": task},
+        ]
+        parse_failures = 0
+
+        for iteration in range(1, self.max_iterations + 1):
+            self.task.current_step = iteration
+
+            if self._stopped():
+                return self._cancelled()
+            self.task.transition(PLANNING, step=iteration)
+            started = time.monotonic()
+            reply = self.generate(list(transcript))
+            self.task.note_model_call(time.monotonic() - started)
+            self.model_turns += 1
+
+            if self._stopped():
+                return self._cancelled()
+            transcript.append({"role": "assistant", "content": reply})
+            try:
+                action = parse_agent_action(reply, self.capabilities)
+            except ValueError as error:
+                parse_failures += 1
+                self.task.metrics.parse_failures += 1
+                if parse_failures >= MAX_PARSE_FAILURES:
+                    return self._finish(
+                        "failed",
+                        "The model did not produce a usable action after "
+                        f"{parse_failures} attempts.",
+                    )
+
+
+                transcript.append(
+                    {"role": "user", "content": json.dumps({"error": str(error)})}
+                )
+                continue
+            parse_failures = 0
+
+            if action["action"] == RESPOND_ACTION:
+                self._record(iteration, action, {"status": "completed"})
+                return self._finish("completed", str(action["answer"]))
+
+            if self.authority_mode != "full_access" and is_destructive(
+                action["action"], action["arguments"]
+            ):
+                self._record(
+                    iteration,
+                    action,
+                    {"status": "blocked", "reason": "destructive_requires_review"},
+                )
+                return self._finish(
+                    "needs_review",
+                    "This step would run a destructive command, so it needs your "
+                    "review before it can continue: "
+                    + json.dumps(action["arguments"]),
+                )
+
+
+            if self._stopped():
+                return self._cancelled()
+
+
+
+            route = resolve_execution(
+                action["action"], action["arguments"], self.capabilities
+            )
+            self.task.current_capability = route.capability
+            self.task.transition(EXECUTING, capability=route.capability)
+            self.task.note_tool_call(route.capability, route.tier_name)
+            if route.capability == SCREEN_CAPTURE_CAPABILITY:
+                self.task.note_screenshot()
+            try:
+                result = self.broker.invoke(
+                    {
+                        "capability": route.capability,
+                        "arguments": dict(route.arguments),
+                        "user_confirmed": True,
+                        "authority_mode": self.authority_mode,
+                    }
+                )
+                observation = summarise_observation(
+                    route.capability,
+                    result,
+                    describe_screenshot=self.describe_screenshot,
+                )
+            except Exception as error:
+
+
+                observation = {
+                    "action": route.capability,
+                    "status": "failed",
+                    "error": f"{type(error).__name__}: {error}"[
+                        :MAX_OBSERVATION_CHARACTERS
+                    ],
+                }
+                result = {"status": "failed"}
+
+            if self._stopped():
+                return self._cancelled()
+            self.task.transition(OBSERVING, capability=route.capability)
+            self._record(iteration, action, observation, route=route)
+
+
+
+            fingerprint = step_fingerprint(
+                route.capability, route.arguments, observation
+            )
+            self._attempts[fingerprint] = self._attempts.get(fingerprint, 0) + 1
+            if self._attempts[fingerprint] >= MAX_IDENTICAL_ATTEMPTS:
+                self.task.metrics.stagnation_breaks += 1
+                self.task.record_event(
+                    "stagnation",
+                    capability=route.capability,
+                    attempts=self._attempts[fingerprint],
+                )
+                remaining = [
+                    name
+                    for name in ordered_capabilities(self.capabilities)
+                    if name != route.capability
+                ]
+                if not remaining:
+                    return self._finish(
+                        "failed",
+                        f"{route.capability} produced the same result "
+                        f"{self._attempts[fingerprint]} times and no other "
+                        "capability is available.",
+                    )
+
+
+                self.task.metrics.escalations += 1
+                transcript.append(
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "error": (
+                                    f"{route.capability} has returned the same "
+                                    f"result {self._attempts[fingerprint]} times. "
+                                    "It is not making progress. Use a different "
+                                    "capability or respond explaining what is "
+                                    "blocking the task."
+                                ),
+                                "available": remaining,
+                            }
+                        ),
+                    }
+                )
+                continue
+
+            self._compact_screenshots(transcript)
+            transcript.append(
+                {"role": "user", "content": json.dumps(observation, sort_keys=True)}
+            )
+
+        return self._finish(
+            "exhausted",
+            "I reached the step limit for this task. Here is what I completed: "
+            + "; ".join(step["reason"] for step in self.steps if step.get("reason")),
+        )
+
+    @staticmethod
+    def _compact_screenshots(transcript: list[dict[str, str]]) -> None:
+        """Reduce older captures so only the newest view stays in full.
+
+        Every capture would otherwise accumulate, and a twenty-step task can
+        exhaust the window before it finishes.  Earlier descriptions are kept
+        as a one-line trace rather than dropped outright, because they are the
+        record of what the agent has already seen and tried.
+        """
+
+        for message in transcript:
+            if message["role"] != "user":
+                continue
+            if '"screenshot_path"' not in message["content"]:
+                continue
+            try:
+                payload = json.loads(message["content"])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict) or "screenshot_path" not in payload:
+                continue
+            payload["screenshot_path"] = "(superseded by a newer screenshot)"
+            previous = str(payload.get("visual_analysis") or "")
+            if len(previous) > STALE_ANALYSIS_CHARACTERS:
+                payload["visual_analysis"] = (
+                    previous[:STALE_ANALYSIS_CHARACTERS].rstrip() + "… (earlier view)"
+                )
+            message["content"] = json.dumps(payload, sort_keys=True)
+
+    def _stopped(self) -> bool:
+        """One cancellation check for every checkpoint in the loop.
+
+        Reads the in-memory token first so a stop already accepted costs
+        nothing, and folds in a caller-supplied predicate exactly once.
+        """
+
+        if self.task.stop_requested:
+            return True
+        if self.should_stop is not None and self.should_stop():
+            self.task.request_stop("user_requested")
+            return True
+        return False
+
+    def _cancelled(self) -> dict[str, Any]:
+        self.task.finish_stopped()
+        return self._finish("cancelled", "The task was stopped before it finished.")
+
+    def _record(
+        self,
+        iteration: int,
+        action: Mapping[str, Any],
+        observation: Mapping[str, Any],
+        *,
+        route: Any | None = None,
+    ) -> None:
+        step = {
+            "step": iteration,
+            "action": action["action"],
+            "reason": action.get("reason") or "",
+            "arguments": dict(
+                route.arguments if route is not None else action.get("arguments") or {}
+            ),
+            "status": observation.get("status"),
+            "observation": dict(observation),
+
+            "route": execution_route_record(route) if route is not None else None,
+        }
+        self.steps.append(step)
+        if self.on_step is not None:
+            self.on_step(dict(step))
+
+    def _finish(self, state: str, answer: str) -> dict[str, Any]:
+
+        if not self.task.finished:
+            self.task.finish(
+                {
+                    "completed": "completed",
+                    "cancelled": "stopped",
+                    "failed": "failed",
+                    "needs_review": "waiting",
+                    "exhausted": "failed",
+                }.get(state, "completed"),
+                failure=answer if state in {"failed", "exhausted"} else None,
+            )
+        return {
+            "schema": AGENT_SCHEMA,
+            "state": state,
+            "answer": answer,
+            "steps": list(self.steps),
+            "step_count": len(self.steps),
+            "authority_mode": self.authority_mode,
+            "capabilities": ordered_capabilities(self.capabilities),
+
+
+            "model_turns": self.model_turns,
+            "tiers_used": sorted(
+                {
+                    str((step.get("route") or {}).get("tier"))
+                    for step in self.steps
+                    if step.get("route")
+                }
+            ),
+            "task": self.task.snapshot(),
+            "metrics": self.task.metrics.to_dict(),
+        }

@@ -1,0 +1,108 @@
+[application]
+product_name = "Salty Steak"
+model_name = "Salty Steak"
+offline = true
+
+[paths]
+workspace = "workspace"
+database = "workspace/control/salty-potato.db"
+datasets = "workspace/datasets"
+prepared = "workspace/datasets/prepared"
+tokenizer = "workspace/tokenizer"
+versions = "workspace/versions"
+training = "workspace/training"
+evaluations = "workspace/evaluations"
+runtime = "workspace/runtime"
+conversations = "workspace/conversations"
+cache = "workspace/cache"
+logs = "workspace/logs"
+
+[model]
+model_type = "salty_potato"
+architecture_revision = 2
+parameter_count = 95177472
+vocab_size = 16384
+hidden_size = 768
+intermediate_size = 2304
+layers = 12
+attention_heads = 12
+key_value_heads = 4
+architectural_context_tokens = 8192
+rope_theta = 10000.0
+rms_norm_epsilon = 0.00001
+dropout = 0.0
+tie_word_embeddings = true
+initializer_range = 0.02
+
+[tokenizer]
+model = "workspace/tokenizer/tokenizer.model"
+metadata = "workspace/tokenizer/tokenizer.json"
+add_bos = true
+add_eos = true
+pad_to_sequence = true
+
+[datasets]
+supported_formats = ["txt", "jsonl", "json", "csv", "parquet"]
+training_split = 0.9
+validation_split = 0.1
+random_seed = 104729
+packing = true
+truncation = "right"
+bos = true
+eos = true
+
+[training]
+device = "cuda"
+precision = "bf16"
+sequence_length = 512
+micro_batch_size = 16
+gradient_accumulation = 1
+learning_rate = 0.0003
+scheduler = "cosine"
+warmup_steps = 20
+weight_decay = 0.1
+gradient_clip = 1.0
+validation_interval = 50
+recovery_interval = 50
+seed = 1337
+pinned_memory = true
+nonblocking_transfers = true
+
+[evaluation]
+batch_size = 32
+max_records = 0
+
+[versions]
+completed_retention = 2
+recovery_retention = 1
+
+[generation]
+conversation_token_budget = 6144
+reserved_output_tokens = 2048
+maximum_output_tokens = 2048
+temperature = 0.8
+top_p = 0.95
+top_k = 40
+repetition_penalty = 1.1
+seed = -1
+reasoning_mode = "instant"
+
+[operations]
+poll_initial_ms = 750
+poll_max_ms = 5000
+heartbeat_seconds = 5
+request_timeout_seconds = 15
+interpreter_bootstrap_timeout_seconds = 10
+worker_start_timeout_seconds = 30
+checkpoint_integrity_timeout_seconds = 180
+isolated_model_load_timeout_seconds = 900
+checkpoint_verification_timeout_seconds = 1080
+registration_timeout_seconds = 30
+
+[notifications]
+success_duration_seconds = 10
+information_duration_seconds = 10
+
+[server]
+host = "127.0.0.1"
+port = 8080

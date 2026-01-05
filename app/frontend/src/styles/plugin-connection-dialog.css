@@ -1,0 +1,76 @@
+.plugin-connect-layer {
+  position: fixed;
+  z-index: 190;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(8 8 8 / 72%);
+}
+
+.plugin-connect-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 48px));
+  color: var(--r18-text-soft, var(--ink-soft));
+  background: var(--r18-canvas, var(--canvas));
+  border: 1px solid var(--r18-line-strong, var(--line-strong));
+  border-radius: 10px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.plugin-connect-dialog > header {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 17px 14px 20px;
+  background: var(--r18-canvas, var(--canvas));
+  border-bottom: 1px solid var(--r18-line, var(--line));
+}
+.plugin-connect-dialog > header div { display: grid; gap: 2px; }
+.plugin-connect-dialog > header span { color: var(--r18-muted, var(--muted)); font-size: 10px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+.plugin-connect-dialog > header h2 { margin: 0; color: var(--r18-text, var(--ink)); font-size: 17px; font-weight: 650; }
+.plugin-connect-dialog > header button { display: grid; width: 30px; height: 30px; place-items: center; color: var(--r18-muted, var(--muted)); background: transparent; border: 0; border-radius: 5px; }
+.plugin-connect-dialog > header button:hover { color: var(--r18-text, var(--ink)); background: rgb(255 255 255 / 5%); }
+.plugin-connect-dialog > header svg { width: 15px; height: 15px; }
+
+.plugin-connect-dialog__body { padding: 20px; }
+.plugin-connect-dialog__intro { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; align-items: start; padding-bottom: 17px; border-bottom: 1px solid var(--r18-line, var(--line)); }
+.plugin-connect-dialog__intro > svg { width: 20px; height: 20px; margin: 1px 0 0 5px; color: var(--r18-accent, var(--accent)); }
+.plugin-connect-dialog__intro div { display: grid; gap: 3px; }
+.plugin-connect-dialog__intro strong { color: var(--r18-text, var(--ink)); font-size: 13px; }
+.plugin-connect-dialog__intro p { margin: 0; color: var(--r18-muted, var(--muted)); font-size: 11.5px; line-height: 1.5; }
+.plugin-connect-dialog form { display: grid; gap: 15px; padding-top: 18px; }
+.plugin-connect-dialog form > label { display: grid; gap: 6px; }
+.plugin-connect-dialog label > span { color: var(--r18-text-soft, var(--ink-soft)); font-size: 11.5px; font-weight: 580; }
+.plugin-connect-dialog label em { color: var(--r18-muted, var(--muted)); font-size: 10.5px; font-style: normal; font-weight: 400; }
+.plugin-connect-dialog input { width: 100%; height: 34px; padding: 0 10px; color: var(--r18-text, var(--ink)); background: rgb(0 0 0 / 18%); border: 1px solid var(--r18-line-strong, var(--line-strong)); border-radius: 5px; }
+.plugin-connect-dialog input:focus-visible { border-color: color-mix(in srgb, var(--r18-accent, var(--accent)) 55%, transparent); outline: 1px solid color-mix(in srgb, var(--r18-accent, var(--accent)) 30%, transparent); }
+.plugin-connect-dialog label small { color: var(--r18-muted, var(--muted)); font-size: 10.5px; line-height: 1.4; }
+.plugin-connect-dialog__tools { display: grid; gap: 7px; padding: 11px 0; border-top: 1px solid var(--r18-line, var(--line)); border-bottom: 1px solid var(--r18-line, var(--line)); }
+.plugin-connect-dialog__tools > span { color: var(--r18-muted, var(--muted)); font-size: 10.5px; }
+.plugin-connect-dialog__tools > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.plugin-connect-dialog__tools code { padding: 3px 6px; color: var(--r18-text-soft, var(--ink-soft)); background: var(--r18-surface, var(--surface)); border-radius: 4px; font-size: 10.5px; }
+.plugin-connect-dialog__assurance { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; color: var(--r18-muted, var(--muted)); font-size: 10.5px; line-height: 1.45; }
+.plugin-connect-dialog__assurance svg { width: 15px; height: 15px; color: var(--success); }
+.plugin-connect-dialog__error { margin: 0; color: var(--danger); font-size: 11.5px; line-height: 1.45; }
+.plugin-connect-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 4px; }
+.plugin-connect-dialog footer > div { display: flex; gap: 8px; }
+.plugin-connect-dialog footer button { min-height: 32px; padding: 5px 11px; color: var(--r18-text-soft, var(--ink-soft)); background: transparent; border: 1px solid var(--r18-line-strong, var(--line-strong)); border-radius: 5px; font-size: 11.5px; font-weight: 600; }
+.plugin-connect-dialog footer button:hover:not(:disabled) { color: var(--r18-text, var(--ink)); background: rgb(255 255 255 / 5%); }
+.plugin-connect-dialog footer .plugin-connect-dialog__primary { color: var(--accent-ink); background: var(--r18-accent, var(--accent)); border-color: transparent; }
+.plugin-connect-dialog footer .plugin-connect-dialog__disconnect { color: var(--danger); border-color: transparent; }
+.plugin-connect-dialog__connected { display: flex; align-items: center; gap: 7px; margin: 14px 0 0; color: var(--success); font-size: 11px; }
+.plugin-connect-dialog__connected svg { width: 14px; height: 14px; }
+.plugin-connect-dialog__configured { margin: 14px 0 0; color: var(--warning); font-size: 11px; line-height: 1.45; }
+
+@media (max-width: 560px) {
+  .plugin-connect-layer { padding: 0; }
+  .plugin-connect-dialog { width: 100%; max-height: 100%; border-right: 0; border-left: 0; border-radius: 0; }
+  .plugin-connect-dialog footer { align-items: stretch; flex-direction: column-reverse; }
+  .plugin-connect-dialog footer > div { justify-content: flex-end; }
+}

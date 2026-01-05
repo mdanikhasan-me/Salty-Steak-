@@ -1,0 +1,213 @@
+
+
+.agent-activity {
+  position: fixed;
+  z-index: 120;
+  right: 22px;
+  bottom: 22px;
+  display: flex;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 120px));
+  flex-direction: column;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 45px rgb(0 0 0 / 38%);
+  overflow: hidden;
+}
+
+.agent-activity__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-activity__header strong {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.agent-activity__header span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.agent-activity__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.agent-activity__stop:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+.agent-activity__stop svg {
+  width: 13px;
+  height: 13px;
+}
+
+.agent-activity__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 8px 16px 16px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.agent-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 11px;
+  padding: 10px 0 10px 2px;
+}
+
+
+
+.agent-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 34px;
+  bottom: -2px;
+  left: 13px;
+  width: 1px;
+  background: var(--line-strong);
+}
+
+.agent-step__marker {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  color: var(--muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+}
+
+.agent-step__marker svg {
+  width: 13px;
+  height: 13px;
+}
+
+.agent-step--done .agent-step__marker {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+.agent-step--active .agent-step__marker {
+  color: var(--accent-dark);
+  border-color: var(--accent);
+}
+
+.agent-step--failed .agent-step__marker {
+  color: var(--danger-dark);
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.agent-step--blocked .agent-step__marker {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+}
+
+.agent-step__body {
+  min-width: 0;
+}
+
+.agent-step__title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-step__title strong {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.agent-step__title small {
+  color: var(--muted-light);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.agent-step__body p {
+  margin: 3px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.agent-step__detail {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.agent-step__detail--failed {
+  color: var(--danger-dark);
+}
+
+.agent-step__output {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 150px;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes agent-step-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .agent-activity {
+    animation: salty-rise var(--motion-enter) var(--ease-enter) both;
+  }
+
+
+
+  .agent-step {
+    animation: agent-step-in var(--motion-enter) var(--ease-enter) both;
+    animation-delay: calc(var(--agent-step-index, 0) * 40ms);
+  }
+
+  .agent-step__marker {
+    transition:
+      color var(--motion-hover) ease,
+      border-color var(--motion-hover) ease;
+  }
+}
