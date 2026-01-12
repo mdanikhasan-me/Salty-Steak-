@@ -29,6 +29,13 @@ internal static class Program
 
     private static readonly ElementRegistry Registry = new();
 
+
+
+
+
+
+    private static int abandonedOperations;
+
     private static int Main()
     {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
@@ -117,9 +124,20 @@ internal static class Program
 
         if (!thread.Join(timeoutMilliseconds))
         {
-            throw new TimeoutException(
+
+
+
+
+
+
+
+
+
+            var abandoned = Interlocked.Increment(ref abandonedOperations);
+            throw new HungOperationException(
                 $"The UI Automation operation did not finish within {timeoutMilliseconds} ms. "
-                + "The target application may be busy or not responding.");
+                + "The target application may be busy or not responding.",
+                abandoned);
         }
 
         if (failure is not null)
@@ -132,7 +150,15 @@ internal static class Program
 
     private static JsonObject Dispatch(string command, JsonObject payload) => command switch
     {
-        "ping" => new JsonObject { ["ready"] = true, ["pid"] = Environment.ProcessId },
+        "ping" => new JsonObject
+        {
+            ["ready"] = true,
+            ["pid"] = Environment.ProcessId,
+            ["abandoned_operations"] = Volatile.Read(ref abandonedOperations),
+        },
+
+
+        "stall" => Stall(payload),
         "get_windows" => GetWindows(),
         "get_active_window" => GetActiveWindow(),
         "get_tree" => GetTree(payload),
@@ -151,6 +177,19 @@ internal static class Program
     };
 
 
+
+    private static JsonObject Stall(JsonObject payload)
+    {
+        if (Environment.GetEnvironmentVariable("SALTY_UIA_ALLOW_STALL") != "1")
+        {
+            throw new InvalidOperationException("The stall command is not enabled.");
+        }
+
+
+
+        Thread.Sleep(Clamp(payload["seconds"], 30, 1, 300) * 1000);
+        return new JsonObject { ["stalled"] = true };
+    }
 
     private static JsonObject GetWindows()
     {
@@ -811,24 +850,51 @@ internal static class Program
             ElementNotAvailableException => "stale_element",
             UnsupportedPatternException => "unsupported_pattern",
             AmbiguousMatchException => "ambiguous",
+            HungOperationException => "timeout",
             TimeoutException => "timeout",
             UnauthorizedAccessException => "access_denied",
             InvalidOperationException => "invalid_request",
             _ => "failed",
         };
 
+        var detail = new JsonObject
+        {
+            ["kind"] = kind,
+            ["type"] = error.GetType().Name,
+            ["message"] = error.Message,
+        };
+        if (error is HungOperationException hung)
+        {
+
+
+            detail["abandoned_operations"] = hung.AbandonedOperations;
+            detail["retire_host"] = true;
+        }
+
         return new JsonObject
         {
             ["id"] = id,
             ["ok"] = false,
-            ["error"] = new JsonObject
-            {
-                ["kind"] = kind,
-                ["type"] = error.GetType().Name,
-                ["message"] = error.Message,
-            },
+            ["error"] = detail,
         };
     }
+}
+
+
+
+
+
+
+
+internal sealed class HungOperationException : TimeoutException
+{
+    public HungOperationException(string message, int abandonedOperations)
+        : base(message)
+    {
+        AbandonedOperations = abandonedOperations;
+    }
+
+    public int AbandonedOperations { get; }
 }
 
 

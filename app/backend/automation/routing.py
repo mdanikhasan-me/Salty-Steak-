@@ -36,6 +36,7 @@ from .broker import (
     TERMINAL_CAPABILITY,
     WINDOW_CONTROL_CAPABILITY,
     UI_AUTOMATION_CAPABILITY,
+    BROWSER_CAPABILITY,
 )
 
 
@@ -81,6 +82,11 @@ CAPABILITY_TIERS = (
         APPLICATION_LAUNCH_CAPABILITY,
         TIER_NATIVE,
         "Open an application, link, or file through its registered handler.",
+    ),
+    CapabilityTier(
+        BROWSER_CAPABILITY,
+        TIER_API,
+        "Read and operate web pages structurally in a Salty-owned session.",
     ),
     CapabilityTier(
         TERMINAL_CAPABILITY,

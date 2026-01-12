@@ -25,6 +25,13 @@ from typing import Any, BinaryIO
 
 from ..database.control import Database, json_text, new_id, parse_json, utc_now
 from ..system.files import atomic_write_bytes, ensure_within, sha256_file
+from .browser_client import (
+    BROWSER_COMMANDS,
+    BROWSER_MUTATING_COMMANDS,
+    BrowserClient,
+    BrowserError,
+    find_browser_host,
+)
 from .uia_client import (
     UIA_COMMANDS,
     UIA_MUTATING_COMMANDS,
@@ -47,6 +54,7 @@ INPUT_CONTROL_CAPABILITY = "input.control"
 APPLICATION_LAUNCH_CAPABILITY = "application.launch"
 WINDOW_CONTROL_CAPABILITY = "window.control"
 UI_AUTOMATION_CAPABILITY = "ui.automation"
+BROWSER_CAPABILITY = "browser.control"
 CAPABILITIES = (
     TERMINAL_CAPABILITY,
     SCREEN_CAPTURE_CAPABILITY,
@@ -54,6 +62,7 @@ CAPABILITIES = (
     APPLICATION_LAUNCH_CAPABILITY,
     WINDOW_CONTROL_CAPABILITY,
     UI_AUTOMATION_CAPABILITY,
+    BROWSER_CAPABILITY,
 )
 CAPABILITY_DISPLAY_NAMES = {
     TERMINAL_CAPABILITY: "Terminal command",
@@ -62,6 +71,7 @@ CAPABILITY_DISPLAY_NAMES = {
     APPLICATION_LAUNCH_CAPABILITY: "Application and link launch",
     WINDOW_CONTROL_CAPABILITY: "Window listing and focus",
     UI_AUTOMATION_CAPABILITY: "Semantic control of application interfaces",
+    BROWSER_CAPABILITY: "Structured web page reading and interaction",
 }
 MAX_WINDOW_TITLE_CHARACTERS = 512
 MAX_ENUMERATED_WINDOWS = 400
@@ -100,6 +110,7 @@ class AutomationBroker:
         file_recycler: Callable[[Path], None] | None = None,
         temp_roots_provider: Callable[[], list[dict[str, Any]]] | None = None,
         uia_client: Any | None = None,
+        browser_client: Any | None = None,
     ) -> None:
         self.database = database
         self.project_root = Path(project_root).resolve(strict=True)
@@ -130,6 +141,17 @@ class AutomationBroker:
                     self._uia_client = UiAutomationClient(host)
                 except UiAutomationError:
                     self._uia_client = None
+        self._browser_client = browser_client
+        if self._browser_client is None and self.platform_name == "nt":
+            browser_host = find_browser_host(self.project_root)
+            if browser_host is not None:
+                try:
+                    self._browser_client = BrowserClient(
+                        browser_host,
+                        profile_directory=self.artifact_root / "browser-profile",
+                    )
+                except BrowserError:
+                    self._browser_client = None
         self._lock = threading.RLock()
         self._active: dict[str, tuple[str, subprocess.Popen[bytes] | None]] = {}
         self._revoked_invocations: set[str] = set()
@@ -150,6 +172,7 @@ class AutomationBroker:
             APPLICATION_LAUNCH_CAPABILITY: {"scope": "installed_applications_and_links"},
             WINDOW_CONTROL_CAPABILITY: {"scope": "visible_top_level_windows"},
             UI_AUTOMATION_CAPABILITY: {"scope": "accessible_application_controls"},
+            BROWSER_CAPABILITY: {"scope": "salty_owned_browser_session"},
         }
         with self.database.transaction() as connection:
             for capability in CAPABILITIES:
@@ -277,6 +300,7 @@ class AutomationBroker:
             APPLICATION_LAUNCH_CAPABILITY: {"scope": "installed_applications_and_links"},
             WINDOW_CONTROL_CAPABILITY: {"scope": "visible_top_level_windows"},
             UI_AUTOMATION_CAPABILITY: {"scope": "accessible_application_controls"},
+            BROWSER_CAPABILITY: {"scope": "salty_owned_browser_session"},
         }
         now = utc_now()
         request_record = {
@@ -418,6 +442,8 @@ class AutomationBroker:
                 result = self._invoke_window_control(audit_id, arguments)
             elif capability == UI_AUTOMATION_CAPABILITY:
                 result = self._invoke_ui_automation(audit_id, arguments)
+            elif capability == BROWSER_CAPABILITY:
+                result = self._invoke_browser(audit_id, arguments)
             else:
                 result = self._invoke_application_launch(audit_id, arguments)
             outcome = str(result["status"])
@@ -621,12 +647,12 @@ class AutomationBroker:
         return [self._public_audit(row) for row in rows]
 
     def close(self) -> None:
-        client = self._uia_client
-        if client is not None:
-            try:
-                client.close()
-            except Exception:
-                pass
+        for client in (self._uia_client, getattr(self, "_browser_client", None)):
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
         with self._lock:
             self._closed = True
             processes = [
@@ -1037,6 +1063,92 @@ class AutomationBroker:
             "post_action_delay_ms": delay_ms,
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
             **detail,
+        }
+
+    def _invoke_browser(
+        self,
+        audit_id: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Read and operate a web page structurally.
+
+        This runs in a browser session Salty Steak owns, with its own profile.
+        It never attaches to the browser the user is signed in to, and it only
+        opens http and https addresses.
+        """
+
+        self._only_fields(
+            arguments,
+            {
+                "command",
+                "url",
+                "element",
+                "role",
+                "name",
+                "text",
+                "href",
+                "selector",
+                "value",
+                "exact",
+                "editable",
+                "visible",
+                "enabled",
+                "limit",
+                "text_limit",
+            },
+        )
+        if self._browser_client is None:
+            raise RuntimeError(
+                "The browser host is not available in this build, so web pages "
+                "cannot be read structurally."
+            )
+        command = str(arguments.get("command") or "").strip().casefold()
+        if command not in BROWSER_COMMANDS:
+            raise ValueError(
+                "Browser command must be one of: " + ", ".join(sorted(BROWSER_COMMANDS))
+            )
+        payload = {
+            key: value
+            for key, value in arguments.items()
+            if key != "command" and value is not None
+        }
+
+        started = time.monotonic()
+        with self._lock:
+            if audit_id in self._revoked_invocations:
+                return {
+                    "schema": AUTOMATION_SCHEMA,
+                    "audit_record_id": audit_id,
+                    "capability": BROWSER_CAPABILITY,
+                    "status": "revoked",
+                    "command": command,
+                }
+
+        try:
+            result = self._browser_client.call(command, payload)
+        except BrowserError as error:
+            return {
+                "schema": AUTOMATION_SCHEMA,
+                "audit_record_id": audit_id,
+                "capability": BROWSER_CAPABILITY,
+                "status": "failed",
+                "command": command,
+                "failure_kind": error.kind,
+                "error": str(error),
+                "duration_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+
+        with self._lock:
+            revoked = audit_id in self._revoked_invocations
+        return {
+            "schema": AUTOMATION_SCHEMA,
+            "audit_record_id": audit_id,
+            "capability": BROWSER_CAPABILITY,
+            "status": "revoked" if revoked else "succeeded",
+            "command": command,
+            "mutating": command in BROWSER_MUTATING_COMMANDS,
+            "duration_ms": round((time.monotonic() - started) * 1000, 3),
+            **result,
         }
 
     def _invoke_ui_automation(

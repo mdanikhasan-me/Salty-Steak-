@@ -25,6 +25,7 @@ from ..automation.broker import (
     TERMINAL_CAPABILITY,
     WINDOW_CONTROL_CAPABILITY,
     UI_AUTOMATION_CAPABILITY,
+    BROWSER_CAPABILITY,
 )
 from ..automation.routing import (
     execution_route_record,
@@ -83,6 +84,18 @@ TOOL_DESCRIPTIONS = {
         'terminal.execute — Run a terminal command and capture its output.\n'
         '  Arguments: {"argv": ["executable", "arg1"], "timeout_seconds": 10}'
     ),
+    BROWSER_CAPABILITY: (
+        'browser.control — Read and operate web pages structurally in a browser '
+        'session Salty Steak owns. Use this for anything on the web: it reads '
+        'the page as elements rather than pixels.\n'
+        '  Arguments: {"command": "open_url"|"read_page"|"query"|"get_element"|'
+        '"click"|"set_value"|"select"|"submit"|"scroll"|"back"|"forward"|'
+        '"reload"|"get_page", ...}\n'
+        '  open_url takes "url". query finds elements by "role" (button, link, '
+        'textbox, checkbox), "name", "text", "href", or "editable": true, and '
+        'returns an "element" handle for each match. Pass that handle to click '
+        'or set_value. read_page gives a summary plus the visible controls.'
+    ),
     UI_AUTOMATION_CAPABILITY: (
         'ui.automation — Read and operate the controls inside an application '
         'through Windows accessibility: buttons, text boxes, lists and menus '
@@ -107,6 +120,13 @@ TOOL_DESCRIPTIONS = {
 }
 
 AGENT_RULES_BY_CAPABILITY_EXTRA = {
+    BROWSER_CAPABILITY: (
+        "- For anything on a website, use browser.control. Find elements with "
+        "query and act on the handle it returns; never look for a link in a "
+        "screenshot.\n"
+        "- If query reports ambiguous with several matches, refine it with more "
+        "of the name or surrounding text rather than picking one.\n"
+    ),
     UI_AUTOMATION_CAPABILITY: (
         "- To press a button or fill a field inside an application, find it "
         "with ui.automation find_control and act on the handle it returns. "

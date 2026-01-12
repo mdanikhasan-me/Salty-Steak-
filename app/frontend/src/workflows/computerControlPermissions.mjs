@@ -30,6 +30,13 @@ export const COMPUTER_CONTROL_CAPABILITIES = Object.freeze([
     invokeLabel: "Open now",
   }),
   Object.freeze({
+    id: "browser.control",
+    uiId: "browser_control",
+    name: "Web pages",
+    description: "Read and operate web pages in a browser session Salty Steak owns, separate from your own browser.",
+    invokeLabel: "Read page",
+  }),
+  Object.freeze({
     id: "ui.automation",
     uiId: "ui_automation",
     name: "Application controls",
@@ -310,6 +317,10 @@ export function automationResultSummary(result) {
   }
   if (result.capability === "application.launch") {
     return `Launch ${status}; ${String(result.target || "target")}; audit ${String(result.audit_record_id || "not reported")}.`;
+  }
+  if (result.capability === "browser.control") {
+    const detail = result.title || result.url || String(result.command || "command");
+    return `Browser ${status}; ${detail}; audit ${String(result.audit_record_id || "not reported")}.`;
   }
   if (result.capability === "ui.automation") {
     const detail = result.count !== undefined
