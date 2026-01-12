@@ -35,6 +35,7 @@ from .broker import (
     SCREEN_CAPTURE_CAPABILITY,
     TERMINAL_CAPABILITY,
     WINDOW_CONTROL_CAPABILITY,
+    UI_AUTOMATION_CAPABILITY,
 )
 
 
@@ -46,6 +47,7 @@ TIER_NATIVE = 10
 TIER_API = 20
 TIER_TERMINAL = 30
 TIER_WINDOW = 40
+TIER_UI_AUTOMATION = 45
 TIER_VISION = 50
 TIER_RAW_INPUT = 60
 
@@ -54,6 +56,7 @@ TIER_NAMES = {
     TIER_API: "api",
     TIER_TERMINAL: "terminal",
     TIER_WINDOW: "window",
+    TIER_UI_AUTOMATION: "ui_automation",
     TIER_VISION: "vision",
     TIER_RAW_INPUT: "raw_input",
 }
@@ -88,6 +91,11 @@ CAPABILITY_TIERS = (
         WINDOW_CONTROL_CAPABILITY,
         TIER_WINDOW,
         "Find, focus, and close windows by their real titles.",
+    ),
+    CapabilityTier(
+        UI_AUTOMATION_CAPABILITY,
+        TIER_UI_AUTOMATION,
+        "Read and operate the controls inside an application semantically.",
     ),
     CapabilityTier(
         SCREEN_CAPTURE_CAPABILITY,

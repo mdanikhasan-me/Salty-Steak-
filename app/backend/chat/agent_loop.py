@@ -24,6 +24,7 @@ from ..automation.broker import (
     SCREEN_CAPTURE_CAPABILITY,
     TERMINAL_CAPABILITY,
     WINDOW_CONTROL_CAPABILITY,
+    UI_AUTOMATION_CAPABILITY,
 )
 from ..automation.routing import (
     execution_route_record,
@@ -82,6 +83,20 @@ TOOL_DESCRIPTIONS = {
         'terminal.execute — Run a terminal command and capture its output.\n'
         '  Arguments: {"argv": ["executable", "arg1"], "timeout_seconds": 10}'
     ),
+    UI_AUTOMATION_CAPABILITY: (
+        'ui.automation — Read and operate the controls inside an application '
+        'through Windows accessibility: buttons, text boxes, lists and menus '
+        'as real controls rather than pixels. Prefer this over looking at the '
+        'screen.\n'
+        '  Arguments: {"command": "get_active_window"|"get_windows"|"get_tree"|'
+        '"find_control"|"get_text"|"get_properties"|"focus"|"invoke"|'
+        '"set_value"|"select"|"toggle"|"expand"|"collapse"|"scroll", ...}\n'
+        '  Scope a query with "process_id" (exact) or "window" (title text). '
+        'Search with "name", "control_type", "automation_id", or "pattern" '
+        '("Value" finds something you can type into, "Invoke" something you '
+        'can press). find_control returns an "element" handle; pass that '
+        'handle to act on it.'
+    ),
     WINDOW_CONTROL_CAPABILITY: (
         'window.control — List, focus, or close real windows by their titles. '
         'Windows already knows what is open, so use this instead of hunting for '
@@ -92,6 +107,14 @@ TOOL_DESCRIPTIONS = {
 }
 
 AGENT_RULES_BY_CAPABILITY_EXTRA = {
+    UI_AUTOMATION_CAPABILITY: (
+        "- To press a button or fill a field inside an application, find it "
+        "with ui.automation find_control and act on the handle it returns. "
+        "Only look at the screen if the control is genuinely not exposed.\n"
+        "- If ui.automation reports unsupported_pattern or the control is not "
+        "found, that route is exhausted for this element: try a different "
+        "control, or escalate to the screen.\n"
+    ),
     WINDOW_CONTROL_CAPABILITY: (
         "- To reach an application that is already open, use window.control "
         "focus. Do not screenshot the desktop looking for it.\n"

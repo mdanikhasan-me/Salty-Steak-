@@ -30,6 +30,13 @@ export const COMPUTER_CONTROL_CAPABILITIES = Object.freeze([
     invokeLabel: "Open now",
   }),
   Object.freeze({
+    id: "ui.automation",
+    uiId: "ui_automation",
+    name: "Application controls",
+    description: "Read and operate buttons, text boxes and menus inside apps through Windows accessibility.",
+    invokeLabel: "Inspect window",
+  }),
+  Object.freeze({
     id: "window.control",
     uiId: "window_control",
     name: "Windows and focus",
@@ -303,6 +310,12 @@ export function automationResultSummary(result) {
   }
   if (result.capability === "application.launch") {
     return `Launch ${status}; ${String(result.target || "target")}; audit ${String(result.audit_record_id || "not reported")}.`;
+  }
+  if (result.capability === "ui.automation") {
+    const detail = result.count !== undefined
+      ? `${result.count} matches`
+      : String(result.command || "command");
+    return `UI automation ${status}; ${detail}; audit ${String(result.audit_record_id || "not reported")}.`;
   }
   if (result.capability === "window.control") {
     const detail = result.action === "list"

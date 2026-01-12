@@ -25,6 +25,13 @@ from typing import Any, BinaryIO
 
 from ..database.control import Database, json_text, new_id, parse_json, utc_now
 from ..system.files import atomic_write_bytes, ensure_within, sha256_file
+from .uia_client import (
+    UIA_COMMANDS,
+    UIA_MUTATING_COMMANDS,
+    UiAutomationClient,
+    UiAutomationError,
+    find_uia_host,
+)
 from .filesystem import (
     clean_temp_root_contents,
     recycle_confirmed_file,
@@ -39,12 +46,14 @@ SCREEN_CAPTURE_CAPABILITY = "screen.capture"
 INPUT_CONTROL_CAPABILITY = "input.control"
 APPLICATION_LAUNCH_CAPABILITY = "application.launch"
 WINDOW_CONTROL_CAPABILITY = "window.control"
+UI_AUTOMATION_CAPABILITY = "ui.automation"
 CAPABILITIES = (
     TERMINAL_CAPABILITY,
     SCREEN_CAPTURE_CAPABILITY,
     INPUT_CONTROL_CAPABILITY,
     APPLICATION_LAUNCH_CAPABILITY,
     WINDOW_CONTROL_CAPABILITY,
+    UI_AUTOMATION_CAPABILITY,
 )
 CAPABILITY_DISPLAY_NAMES = {
     TERMINAL_CAPABILITY: "Terminal command",
@@ -52,6 +61,7 @@ CAPABILITY_DISPLAY_NAMES = {
     INPUT_CONTROL_CAPABILITY: "Mouse and keyboard control",
     APPLICATION_LAUNCH_CAPABILITY: "Application and link launch",
     WINDOW_CONTROL_CAPABILITY: "Window listing and focus",
+    UI_AUTOMATION_CAPABILITY: "Semantic control of application interfaces",
 }
 MAX_WINDOW_TITLE_CHARACTERS = 512
 MAX_ENUMERATED_WINDOWS = 400
@@ -89,6 +99,7 @@ class AutomationBroker:
         screen_capturer: Callable[[Path], dict[str, Any]] | None = None,
         file_recycler: Callable[[Path], None] | None = None,
         temp_roots_provider: Callable[[], list[dict[str, Any]]] | None = None,
+        uia_client: Any | None = None,
     ) -> None:
         self.database = database
         self.project_root = Path(project_root).resolve(strict=True)
@@ -109,6 +120,16 @@ class AutomationBroker:
         self._screen_capturer = screen_capturer or _capture_primary_screen_bmp
         self._file_recycler = file_recycler
         self._temp_roots_provider = temp_roots_provider or windows_temp_roots
+
+
+        self._uia_client = uia_client
+        if self._uia_client is None and self.platform_name == "nt":
+            host = find_uia_host(self.project_root)
+            if host is not None:
+                try:
+                    self._uia_client = UiAutomationClient(host)
+                except UiAutomationError:
+                    self._uia_client = None
         self._lock = threading.RLock()
         self._active: dict[str, tuple[str, subprocess.Popen[bytes] | None]] = {}
         self._revoked_invocations: set[str] = set()
@@ -128,6 +149,7 @@ class AutomationBroker:
             INPUT_CONTROL_CAPABILITY: {"scope": "primary_screen_and_focused_window"},
             APPLICATION_LAUNCH_CAPABILITY: {"scope": "installed_applications_and_links"},
             WINDOW_CONTROL_CAPABILITY: {"scope": "visible_top_level_windows"},
+            UI_AUTOMATION_CAPABILITY: {"scope": "accessible_application_controls"},
         }
         with self.database.transaction() as connection:
             for capability in CAPABILITIES:
@@ -254,6 +276,7 @@ class AutomationBroker:
             INPUT_CONTROL_CAPABILITY: {"scope": "primary_screen_and_focused_window"},
             APPLICATION_LAUNCH_CAPABILITY: {"scope": "installed_applications_and_links"},
             WINDOW_CONTROL_CAPABILITY: {"scope": "visible_top_level_windows"},
+            UI_AUTOMATION_CAPABILITY: {"scope": "accessible_application_controls"},
         }
         now = utc_now()
         request_record = {
@@ -393,6 +416,8 @@ class AutomationBroker:
                 result = self._invoke_input_control(audit_id, arguments)
             elif capability == WINDOW_CONTROL_CAPABILITY:
                 result = self._invoke_window_control(audit_id, arguments)
+            elif capability == UI_AUTOMATION_CAPABILITY:
+                result = self._invoke_ui_automation(audit_id, arguments)
             else:
                 result = self._invoke_application_launch(audit_id, arguments)
             outcome = str(result["status"])
@@ -596,6 +621,12 @@ class AutomationBroker:
         return [self._public_audit(row) for row in rows]
 
     def close(self) -> None:
+        client = self._uia_client
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
         with self._lock:
             self._closed = True
             processes = [
@@ -1006,6 +1037,101 @@ class AutomationBroker:
             "post_action_delay_ms": delay_ms,
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
             **detail,
+        }
+
+    def _invoke_ui_automation(
+        self,
+        audit_id: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Read and operate application controls through Windows accessibility.
+
+        This is the rung above vision: a named button can be found and pressed
+        as a control rather than located in an image and clicked at a
+        coordinate, which is both faster and far less likely to hit the wrong
+        thing.
+        """
+
+        self._only_fields(
+            arguments,
+            {
+                "command",
+                "window",
+                "process_id",
+                "window_handle",
+                "element",
+                "name",
+                "automation_id",
+                "control_type",
+                "class_name",
+                "pattern",
+                "exact",
+                "enabled_only",
+                "visible_only",
+                "limit",
+                "depth",
+                "max_nodes",
+                "value",
+                "amount",
+                "horizontal",
+            },
+        )
+        if self._uia_client is None:
+            raise RuntimeError(
+                "The UI Automation host is not available in this build, so "
+                "application controls cannot be read semantically."
+            )
+        command = str(arguments.get("command") or "").strip().casefold()
+        if command not in UIA_COMMANDS:
+            raise ValueError(
+                "UI Automation command must be one of: "
+                + ", ".join(sorted(UIA_COMMANDS))
+            )
+        payload = {
+            key: value
+            for key, value in arguments.items()
+            if key != "command" and value is not None
+        }
+
+        started = time.monotonic()
+        with self._lock:
+            if audit_id in self._revoked_invocations:
+                return {
+                    "schema": AUTOMATION_SCHEMA,
+                    "audit_record_id": audit_id,
+                    "capability": UI_AUTOMATION_CAPABILITY,
+                    "status": "revoked",
+                    "command": command,
+                }
+
+        try:
+            result = self._uia_client.call(command, payload)
+        except UiAutomationError as error:
+
+
+
+            return {
+                "schema": AUTOMATION_SCHEMA,
+                "audit_record_id": audit_id,
+                "capability": UI_AUTOMATION_CAPABILITY,
+                "status": "failed",
+                "command": command,
+                "failure_kind": error.kind,
+                "error": str(error),
+                "duration_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+
+        with self._lock:
+            revoked = audit_id in self._revoked_invocations
+        return {
+            "schema": AUTOMATION_SCHEMA,
+            "audit_record_id": audit_id,
+            "capability": UI_AUTOMATION_CAPABILITY,
+            "status": "revoked" if revoked else "succeeded",
+            "command": command,
+            "mutating": command in UIA_MUTATING_COMMANDS,
+            "duration_ms": round((time.monotonic() - started) * 1000, 3),
+            **result,
         }
 
     def _invoke_window_control(
