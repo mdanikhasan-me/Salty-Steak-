@@ -35,6 +35,7 @@ from ..runtime.salty_vision import (
     VisionPermissionLease,
 )
 from ..system.config import AppConfig
+from ..system.environment import HostEnvironmentRegistry, seed_world_state
 from ..tooling.web_search import WebSearchClient, should_search_web, web_results_prompt
 from ..versions.tokenizer import CHAT_TEMPLATE_VERSION
 from .actions import (
@@ -224,6 +225,10 @@ class ChatService:
             Path(image_artifact_root).resolve() if image_artifact_root else None
         )
         self.automation = automation
+
+
+
+        self.host_environment = HostEnvironmentRegistry()
         self.web_search = web_search or WebSearchClient()
         self.vision_broker = vision_broker
         self.vision_inputs = vision_inputs
@@ -1388,6 +1393,10 @@ class ChatService:
 
 
         task_context = TaskContext(goal=instruction)
+
+
+
+        seed_world_state(task_context, self.host_environment.get())
         bind_operation_stop(task_context, context.stop_requested)
 
         def publish(step: Mapping[str, Any]) -> None:
