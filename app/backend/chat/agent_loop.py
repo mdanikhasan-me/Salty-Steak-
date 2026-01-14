@@ -32,6 +32,13 @@ from ..automation.routing import (
     ordered_capabilities,
     resolve_execution,
 )
+from ..automation.credentials import redact
+from ..automation.policy import (
+    DENY,
+    REQUIRE_APPROVAL,
+    PolicyEngine,
+    await_approval,
+)
 from .actions import _looks_destructive
 from .task_runtime import (
     EXECUTING,
@@ -389,6 +396,8 @@ class AgentLoop:
         describe_screenshot: Callable[[str], str] | None = None,
         task: TaskContext | None = None,
         memory: Any = None,
+        approve: Callable[[Mapping[str, Any]], bool] | None = None,
+        policy: PolicyEngine | None = None,
     ) -> None:
         self.broker = broker
         self.generate = generate
@@ -401,6 +410,10 @@ class AgentLoop:
         self.authority_mode = (
             "full_access" if authority_mode == "full_access" else "ask_every_time"
         )
+
+
+        self.approve = approve
+        self.policy = policy or PolicyEngine(authority_mode=self.authority_mode)
         self.max_iterations = max(1, min(int(max_iterations), MAX_ITERATIONS))
         self.on_step = on_step
 
@@ -488,20 +501,33 @@ class AgentLoop:
                 self._record(iteration, action, {"status": "completed"})
                 return self._finish("completed", str(action["answer"]))
 
-            if self.authority_mode != "full_access" and is_destructive(
-                action["action"], action["arguments"]
-            ):
+
+
+
+
+            decision = self.policy.evaluate(action["action"], action["arguments"])
+            if decision.outcome == DENY:
                 self._record(
-                    iteration,
-                    action,
-                    {"status": "blocked", "reason": "destructive_requires_review"},
+                    iteration, action, {"status": "blocked", "reason": decision.reason}
                 )
-                return self._finish(
-                    "needs_review",
-                    "This step would run a destructive command, so it needs your "
-                    "review before it can continue: "
-                    + json.dumps(action["arguments"]),
+                return self._finish("needs_review", decision.reason)
+            if decision.outcome == REQUIRE_APPROVAL:
+                approved = (
+                    await_approval(decision, ask=self.approve, task=self.task)
+                    if self.approve is not None
+                    else False
                 )
+                if not approved:
+                    self._record(
+                        iteration,
+                        action,
+                        {"status": "blocked", "reason": decision.reason},
+                    )
+                    return self._finish(
+                        "needs_review",
+                        f"{decision.reason} It needs your review before it can "
+                        "continue: " + json.dumps(redact(action["arguments"])),
+                    )
 
 
             if self._stopped():
