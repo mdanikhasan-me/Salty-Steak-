@@ -306,6 +306,26 @@ internal sealed class BrowserSession
                 await Settle().ConfigureAwait(true);
                 return await Page().ConfigureAwait(true);
 
+            case "show_window":
+
+
+                window!.ShowInTaskbar = true;
+                window.Location = new Point(
+                    Math.Max(0, (Screen.PrimaryScreen!.WorkingArea.Width - window.Width) / 2),
+                    Math.Max(0, (Screen.PrimaryScreen.WorkingArea.Height - window.Height) / 2));
+                window.WindowState = FormWindowState.Normal;
+                window.Show();
+                window.Activate();
+                window.BringToFront();
+                return new JsonObject { ["visible"] = true };
+
+            case "hide_window":
+
+
+                window!.ShowInTaskbar = false;
+                window.Location = new Point(-32000, -32000);
+                return new JsonObject { ["visible"] = false };
+
             default:
                 throw new InvalidOperationException($"Unknown browser command: {command}");
         }

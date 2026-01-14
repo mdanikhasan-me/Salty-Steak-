@@ -52,6 +52,10 @@ BROWSER_MUTATING_COMMANDS = frozenset(
         "back",
         "forward",
         "reload",
+
+
+        "show_window",
+        "hide_window",
     }
 )
 
