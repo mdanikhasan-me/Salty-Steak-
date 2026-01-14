@@ -388,10 +388,12 @@ class AgentLoop:
         should_stop: Callable[[], bool] | None = None,
         describe_screenshot: Callable[[str], str] | None = None,
         task: TaskContext | None = None,
+        memory: Any = None,
     ) -> None:
         self.broker = broker
         self.generate = generate
         self.describe_screenshot = describe_screenshot
+        self.memory = memory
 
 
         self.task = task or TaskContext()
@@ -411,6 +413,20 @@ class AgentLoop:
 
         self._attempts: dict[str, int] = {}
 
+    def _recall(self, task: str) -> str:
+        """Remembered context for this task, or nothing at all.
+
+        Memory is an aid, never a dependency: a store that is missing or
+        failing must not stop a task the user asked for.
+        """
+
+        if self.memory is None:
+            return ""
+        try:
+            return self.memory.briefing(task)
+        except Exception:
+            return ""
+
     def run(self, instruction: str) -> dict[str, Any]:
         task = str(instruction or "").strip()
         if not task or len(task) > MAX_INSTRUCTION_CHARACTERS:
@@ -422,8 +438,15 @@ class AgentLoop:
                 "No computer-control capability has been granted, so there is "
                 "nothing this task can do."
             )
+        system_prompt = build_system_prompt(self.capabilities)
+
+
+
+        remembered = self._recall(task)
+        if remembered:
+            system_prompt = f"{system_prompt}\n\n{remembered}"
         transcript: list[dict[str, str]] = [
-            {"role": "system", "content": build_system_prompt(self.capabilities)},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": task},
         ]
         parse_failures = 0

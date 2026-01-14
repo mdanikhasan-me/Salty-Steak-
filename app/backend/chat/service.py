@@ -34,6 +34,7 @@ from ..runtime.salty_vision import (
     VisionInputPermission,
     VisionPermissionLease,
 )
+from ..memory import SemanticMemory
 from ..system.config import AppConfig
 from ..system.environment import HostEnvironmentRegistry, seed_world_state
 from ..tooling.web_search import WebSearchClient, should_search_web, web_results_prompt
@@ -229,6 +230,10 @@ class ChatService:
 
 
         self.host_environment = HostEnvironmentRegistry()
+
+
+
+        self.memory = SemanticMemory(self.database.path.parent / "salty-memory.db")
         self.web_search = web_search or WebSearchClient()
         self.vision_broker = vision_broker
         self.vision_inputs = vision_inputs
@@ -1430,6 +1435,7 @@ class ChatService:
             ),
             capabilities=capabilities,
             authority_mode=str(generation_settings["computer_authority_mode"]),
+            memory=self.memory,
             on_step=publish,
             should_stop=context.stop_requested,
 
