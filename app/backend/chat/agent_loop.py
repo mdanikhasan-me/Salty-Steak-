@@ -526,6 +526,9 @@ class AgentLoop:
             self._record(iteration, action, observation, route=route)
 
 
+            self.task.world_state.absorb(route.capability, result)
+
+
 
             fingerprint = step_fingerprint(
                 route.capability, route.arguments, observation
@@ -573,8 +576,14 @@ class AgentLoop:
                 continue
 
             self._compact_screenshots(transcript)
+            message = dict(observation)
+
+
+            known = self.task.world_state.briefing()
+            if known:
+                message["known_state"] = known
             transcript.append(
-                {"role": "user", "content": json.dumps(observation, sort_keys=True)}
+                {"role": "user", "content": json.dumps(message, sort_keys=True)}
             )
 
         return self._finish(

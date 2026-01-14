@@ -20,6 +20,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from ..automation.credentials import redact
+from .world_state import WorldState
+
 TASK_RUNTIME_SCHEMA = "salty-steak-task-runtime-v1"
 
 
@@ -227,7 +230,7 @@ class TaskContext:
         self.goal = str(goal)
         self.cancellation = CancellationToken()
         self.metrics = TaskMetrics()
-        self.world_state: dict[str, Any] = {}
+        self.world_state = WorldState()
         self.current_step: int = 0
         self.current_capability: str | None = None
         self.current_plan: list[dict[str, Any]] = []
@@ -312,13 +315,17 @@ class TaskContext:
 
 
     def record_event(self, kind: str, **detail: Any) -> TaskEvent:
+
+
+
+        safe_detail = redact({key: value for key, value in detail.items()})
         with self._lock:
             self._sequence += 1
             event = TaskEvent(
                 sequence=self._sequence,
                 at_seconds=self.elapsed_seconds,
                 kind=str(kind),
-                detail={key: value for key, value in detail.items()},
+                detail=safe_detail,
             )
             self._events.append(event)
 
@@ -377,6 +384,7 @@ class TaskContext:
             "stop_requested": self.cancellation.tripped,
             "failure": self.failure,
             "metrics": self.metrics.to_dict(),
+            "world_state": self.world_state.snapshot(),
         }
         if include_events:
             payload["events"] = [event.to_dict() for event in self.events]
@@ -409,7 +417,10 @@ def bind_operation_stop(context: TaskContext, stop_requested: Callable[[], bool]
     thread.start()
 
 
-def merge_world_state(context: TaskContext, updates: Mapping[str, Any]) -> None:
+def merge_world_state(
+    context: TaskContext, updates: Mapping[str, Any], *, source: str = "observation"
+) -> None:
     """Record structured machine state the task has already discovered."""
 
-    context.world_state.update(dict(updates))
+    for slot, value in dict(updates).items():
+        context.world_state.record(slot, redact(value), source=source)
