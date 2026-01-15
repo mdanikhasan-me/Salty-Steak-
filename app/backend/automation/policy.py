@@ -106,7 +106,17 @@ def classify(capability: str, arguments: Mapping[str, Any]) -> str:
     order.
     """
 
-    risk = CAPABILITY_RISK.get(capability, RISK_WRITE_LOCAL)
+    declared = str(arguments.get("declared_risk") or "")
+
+
+
+    if declared in RISK_ORDER and capability.startswith("connector."):
+
+
+
+        risk = declared
+    else:
+        risk = CAPABILITY_RISK.get(capability, RISK_WRITE_LOCAL)
     haystack = " ".join(
         str(value) for value in arguments.values() if isinstance(value, (str, int))
     ).casefold()
