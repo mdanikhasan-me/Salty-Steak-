@@ -35,6 +35,9 @@ BROWSER_READ_COMMANDS = frozenset(
         "query",
         "find_element",
         "get_element",
+
+        "list_tabs",
+        "get_active_tab",
     }
 )
 
@@ -56,6 +59,10 @@ BROWSER_MUTATING_COMMANDS = frozenset(
 
         "show_window",
         "hide_window",
+
+        "new_tab",
+        "switch_tab",
+        "close_tab",
     }
 )
 
