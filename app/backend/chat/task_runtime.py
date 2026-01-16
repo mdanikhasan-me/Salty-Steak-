@@ -234,6 +234,10 @@ class TaskContext:
         self.current_step: int = 0
         self.current_capability: str | None = None
         self.current_plan: list[dict[str, Any]] = []
+
+
+        self.waiting_for: str | None = None
+        self.waiting_detail: dict[str, Any] = {}
         self.failure: str | None = None
         self._state = QUEUED
         self._events: list[TaskEvent] = []
@@ -271,6 +275,14 @@ class TaskContext:
             if self._state == state:
                 return self._state
             previous, self._state = self._state, state
+            if state == WAITING:
+                self.waiting_for = str(detail.get("waiting_for") or "user_answer")
+                self.waiting_detail = redact(dict(detail))
+            else:
+
+
+                self.waiting_for = None
+                self.waiting_detail = {}
         self.record_event("state", previous=previous, state=state, **detail)
         self._notify()
         return state
@@ -385,6 +397,11 @@ class TaskContext:
             "failure": self.failure,
             "metrics": self.metrics.to_dict(),
             "world_state": self.world_state.snapshot(),
+
+
+            "plan": list(self.current_plan),
+            "waiting_for": self.waiting_for,
+            "waiting_detail": dict(self.waiting_detail),
         }
         if include_events:
             payload["events"] = [event.to_dict() for event in self.events]
