@@ -1680,6 +1680,15 @@ class ChatService:
             raise ValueError("The validated Steak Gen profile is 512x512 with 8 steps")
         if not 0 <= seed <= 0xFFFFFFFFFFFFFFFF:
             raise ValueError("Image seed must fit an unsigned 64-bit integer")
+
+
+        proposal["state"] = "running"
+        proposal["execution_allowed"] = True
+        details["host_action_proposal"] = proposal
+        self.database.execute(
+            "UPDATE messages SET technical_details_json = ? WHERE id = ?",
+            (json_text(details), checked_message_id),
+        )
         operation = self.operations.submit(
             "chat_image_generation",
             lambda context: self._generate_confirmed_image(
@@ -1715,13 +1724,8 @@ class ChatService:
                 None,
             ),
         )
-        proposal["state"] = "running"
-        proposal["operation_id"] = operation["id"]
-        proposal["execution_allowed"] = True
-        details["host_action_proposal"] = proposal
-        self.database.execute(
-            "UPDATE messages SET technical_details_json = ? WHERE id = ?",
-            (json_text(details), checked_message_id),
+        self._attach_host_action_operation(
+            checked_message_id, checked_proposal_id, operation["id"]
         )
         return operation
 
@@ -1842,6 +1846,17 @@ class ChatService:
             expected_modified = arguments.get("expected_modified_ns")
             if not path or not isinstance(expected_size, int) or not isinstance(expected_modified, int):
                 raise RuntimeError("The reviewed file snapshot is incomplete")
+
+
+
+
+            proposal["state"] = "running"
+            proposal["execution_allowed"] = True
+            details["host_action_proposal"] = proposal
+            self.database.execute(
+                "UPDATE messages SET technical_details_json = ? WHERE id = ?",
+                (json_text(details), assistant_message_id),
+            )
             operation = self.operations.submit(
                 "chat_host_action_execution",
                 lambda context: self._execute_file_trash_action(
@@ -1873,13 +1888,8 @@ class ChatService:
                     None,
                 ),
             )
-            proposal["state"] = "running"
-            proposal["operation_id"] = operation["id"]
-            proposal["execution_allowed"] = True
-            details["host_action_proposal"] = proposal
-            self.database.execute(
-                "UPDATE messages SET technical_details_json = ? WHERE id = ?",
-                (json_text(details), assistant_message_id),
+            self._attach_host_action_operation(
+                assistant_message_id, proposal_id, operation["id"]
             )
             return operation
 
@@ -2008,6 +2018,15 @@ class ChatService:
             roots = arguments.get("roots") if isinstance(arguments, Mapping) else None
             if not isinstance(roots, list) or not roots:
                 raise RuntimeError("The reviewed temporary-data roots are missing")
+
+
+            proposal["state"] = "running"
+            proposal["execution_allowed"] = True
+            details["host_action_proposal"] = proposal
+            self.database.execute(
+                "UPDATE messages SET technical_details_json = ? WHERE id = ?",
+                (json_text(details), assistant_message_id),
+            )
             operation = self.operations.submit(
                 "chat_host_action_execution",
                 lambda context: self._execute_temp_cleanup_action(
@@ -2037,13 +2056,8 @@ class ChatService:
                     None,
                 ),
             )
-            proposal["state"] = "running"
-            proposal["operation_id"] = operation["id"]
-            proposal["execution_allowed"] = True
-            details["host_action_proposal"] = proposal
-            self.database.execute(
-                "UPDATE messages SET technical_details_json = ? WHERE id = ?",
-                (json_text(details), assistant_message_id),
+            self._attach_host_action_operation(
+                assistant_message_id, proposal_id, operation["id"]
             )
             return operation
 
@@ -2131,6 +2145,37 @@ class ChatService:
                 f"{type(error).__name__}: {error}",
             )
             raise
+
+    def _attach_host_action_operation(
+        self,
+        assistant_message_id: str,
+        proposal_id: str,
+        operation_id: str,
+    ) -> None:
+        """Record which operation is carrying out a proposal.
+
+        Deliberately touches only the operation id.  The work runs on another
+        thread and can finish — or fail closed — before this returns, so
+        writing a state here would overwrite the real outcome with a stale
+        ``running``.
+        """
+
+        row = self.database.fetch_one(
+            "SELECT technical_details_json FROM messages WHERE id = ?",
+            (assistant_message_id,),
+        )
+        details = parse_json(row.get("technical_details_json") if row else None, {})
+        if not isinstance(details, dict):
+            return
+        proposal = details.get("host_action_proposal")
+        if not isinstance(proposal, dict) or str(proposal.get("id")) != proposal_id:
+            return
+        proposal["operation_id"] = operation_id
+        details["host_action_proposal"] = proposal
+        self.database.execute(
+            "UPDATE messages SET technical_details_json = ? WHERE id = ?",
+            (json_text(details), assistant_message_id),
+        )
 
     def _mark_host_action_proposal_state(
         self,
