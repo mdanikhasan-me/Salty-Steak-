@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 OPERATION_STATES = frozenset(
     {"queued", "running", "stop_requested", "completed", "interrupted", "failed"}
 )
@@ -319,6 +319,37 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS ix_messages_conversation
     ON messages(conversation_id, sequence);
+
+-- Image tasks, so a follow-up survives a restart.
+--
+-- Only the metadata needed to rebuild a brief lives here: the picture itself
+-- stays where the artifact system already puts it, and the brief is task
+-- state rather than durable knowledge about the user, so it never reaches
+-- semantic memory. Cascades with the conversation, because metadata for a
+-- conversation the user deleted is metadata nobody can ever act on.
+CREATE TABLE IF NOT EXISTS image_generation_jobs (
+    job_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    task_id TEXT,
+    parent_job_id TEXT REFERENCES image_generation_jobs(job_id) ON DELETE SET NULL,
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    status TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    image_type TEXT NOT NULL,
+    brand TEXT,
+    brief_json TEXT NOT NULL,
+    original_request TEXT NOT NULL,
+    user_feedback TEXT,
+    source_message_ids_json TEXT NOT NULL DEFAULT '[]',
+    artifact TEXT,
+    dimensions TEXT,
+    backend TEXT,
+    failure TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_image_jobs_conversation
+    ON image_generation_jobs(conversation_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS chat_artifacts (
     id TEXT PRIMARY KEY,

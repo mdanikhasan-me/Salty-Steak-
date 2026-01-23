@@ -34,6 +34,7 @@ from ..runtime.salty_vision import (
     VisionInputPermission,
     VisionPermissionLease,
 )
+from ..imaging.store import ImageJobStore
 from ..memory import SemanticMemory
 from ..system.config import AppConfig
 from ..system.environment import HostEnvironmentRegistry, seed_world_state
@@ -41,7 +42,10 @@ from ..tooling.web_search import WebSearchClient, should_search_web, web_results
 from ..versions.tokenizer import CHAT_TEMPLATE_VERSION
 from .actions import (
     FILE_TRASH_ACTION,
+    HOST_ACTION_SCHEMA,
+    IMAGE_ACTION,
     TEMP_CLEANUP_ACTION,
+    _image_runtime_reason,
     TEMP_CLEANUP_CONFIRMATION,
     build_file_trash_proposal,
     build_temp_cleanup_proposal,
@@ -234,6 +238,9 @@ class ChatService:
 
 
         self.memory = SemanticMemory(self.database.path.parent / "salty-memory.db")
+
+
+        self.image_store = ImageJobStore(self.database)
         self.web_search = web_search or WebSearchClient()
         self.vision_broker = vision_broker
         self.vision_inputs = vision_inputs
@@ -3077,6 +3084,131 @@ class ChatService:
             previous_response_id=previous_response_id,
         )
 
+    def _image_generation_available(self) -> bool:
+        """Whether the local image runtime could actually run right now.
+
+        Activation evidence rather than residency: the diffusion stack is a
+        cold one-shot worker, so requiring it to be loaded would wrongly report
+        a validated runtime as unavailable.
+        """
+
+        runtime = self.image_generation_model
+        return bool(
+            runtime
+            and runtime.get("activation_allowed") is True
+            and runtime.get("external_service_required") is False
+        )
+
+    def _turn_instruction(self, conversation_id: str) -> str:
+        """The routing line added to a turn, sized to what is really reachable."""
+
+        from .dispatch import build_turn_instruction
+
+        has_previous = False
+        if self.image_store is not None:
+            try:
+                has_previous = (
+                    self.image_store.latest_for_conversation(conversation_id) is not None
+                )
+            except Exception:
+                has_previous = False
+        return build_turn_instruction(
+            image_available=self._image_generation_available(),
+            has_previous_image=has_previous,
+            capabilities=self.granted_automation_capabilities(),
+        )
+
+    def _dispatch_turn(
+        self,
+        *,
+        reply_text: str,
+        request: str,
+        history: list[dict[str, str]],
+        conversation_id: str,
+        message_id: str,
+    ):
+        """Route one model reply. Returns None when it was simply an answer."""
+
+        from .dispatch import TurnDispatcher, read_decision
+        from .orchestrator import RESPOND, conversation_request
+
+        decision = read_decision(reply_text)
+        if decision is None or decision.get("action") == RESPOND:
+            return None
+
+        from ..imaging import ImageOrchestrator
+
+        images = ImageOrchestrator(
+            generate=self._render_image,
+            backend="steak-gen-1-scaledfp8",
+        )
+        dispatcher = TurnDispatcher(images=images, image_store=self.image_store)
+        return dispatcher.dispatch(
+            decision,
+            reply_text=reply_text,
+
+
+
+
+            request=conversation_request(history) or request,
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+
+    def _image_proposal_from_turn(self, turn) -> dict[str, Any] | None:
+        """Turn a prepared image job into the reviewable proposal shape.
+
+        The render brief becomes the prompt. Everything downstream — review,
+        confirmation, generation, artifact persistence, cancellation — is the
+        path that already existed and is already proven.
+        """
+
+        from .orchestrator import GENERATE_IMAGE, REVISE_IMAGE
+
+        if turn.kind not in {GENERATE_IMAGE, REVISE_IMAGE}:
+            return None
+        job = turn.details.get("image_job")
+        rendered = str(turn.details.get("render_brief") or "")
+        if not job or not rendered:
+            return None
+
+        ready = self._image_generation_available()
+        return {
+            "schema": HOST_ACTION_SCHEMA,
+            "id": new_id(),
+            "kind": IMAGE_ACTION,
+            "title": "Create an image",
+            "summary": str(job.get("subject") or "")[:4_000],
+            "arguments": {"prompt": rendered[:4_000]},
+            "state": "pending_review" if ready else "blocked_runtime_unavailable",
+            "requires_confirmation": True,
+            "execution_allowed": False,
+            "runtime_reason": None if ready else _image_runtime_reason(
+                self.image_generation_model
+            ),
+
+            "image_job_id": job.get("job_id"),
+            "image_revision": job.get("revision"),
+            "image_parent_job_id": job.get("parent_job_id"),
+            "planner_output_sha256": hashlib.sha256(
+                rendered.encode("utf-8")
+            ).hexdigest(),
+            "planner_output_bytes": len(rendered.encode("utf-8")),
+        }
+
+    def _render_image(self, brief, job):
+        """Placeholder generator for the orchestrator's own bookkeeping.
+
+        Chat never calls this: an image request becomes a reviewable proposal
+        and the confirmed path does the rendering, so the runtime hand-off,
+        artifact persistence and cancellation all stay in the one place that
+        already handles them.
+        """
+
+        raise RuntimeError(
+            "Image rendering runs through the confirmed image action, not here."
+        )
+
     def _generate_turn(
         self,
         *,
@@ -3122,13 +3254,26 @@ class ChatService:
             ),
             "",
         )
+
+
+
+
+
         action_intent = detect_host_action_intent(search_query)
+        if action_intent == IMAGE_ACTION:
+            action_intent = None
         relationship["host_action"] = {
             "intent": action_intent,
             "state": "planning" if action_intent else "not_requested",
             "execution_requested": False,
             "execution_performed": False,
         }
+        orchestration = self._turn_instruction(conversation_id)
+        if orchestration:
+            insertion = 0
+            while insertion < len(history) and history[insertion].get("role") == "system":
+                insertion += 1
+            history.insert(insertion, {"role": "system", "content": orchestration})
         if action_intent:
 
 
@@ -3365,6 +3510,34 @@ class ChatService:
                 }
             )
         assistant_content = response.text
+
+
+
+        turn = self._dispatch_turn(
+            reply_text=response.text,
+            request=search_query,
+            history=history,
+            conversation_id=conversation_id,
+            message_id=user_message_id,
+        )
+        if turn is not None:
+            assistant_content = turn.content or response.text
+            details["orchestration"] = turn.to_dict()
+            proposal = self._image_proposal_from_turn(turn)
+            if proposal is not None:
+
+
+
+
+                details["host_action_proposal"] = proposal
+                relationship["host_action"] = {
+                    "intent": IMAGE_ACTION,
+                    "state": proposal["state"],
+                    "proposal_id": proposal["id"],
+                    "execution_requested": False,
+                    "execution_performed": False,
+                }
+                action_intent = None
         action_result = normalise_host_action_response(
             intent=action_intent,
             user_text=search_query,
