@@ -156,6 +156,13 @@ class TaskMetrics:
 
     model_calls: int = 0
     model_seconds: float = 0.0
+
+
+
+    planning_model_calls: int = 0
+    image_model_calls: int = 0
+    image_generation_seconds: float = 0.0
+    image_revisions: int = 0
     vision_calls: int = 0
     vision_seconds: float = 0.0
     screenshots: int = 0

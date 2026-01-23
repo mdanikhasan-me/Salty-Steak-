@@ -126,6 +126,7 @@ class Executor:
         *,
         broker: Any = None,
         connectors: Any = None,
+        images: Any = None,
         task: Any = None,
         policy: PolicyEngine | None = None,
         approve: Callable[[Mapping[str, Any]], bool] | None = None,
@@ -134,6 +135,7 @@ class Executor:
     ) -> None:
         self.broker = broker
         self.connectors = connectors
+        self.images = images
         self.task = task
         self.policy = policy or PolicyEngine(authority_mode=authority_mode)
         self.approve = approve
@@ -292,6 +294,22 @@ class Executor:
         return arguments
 
     def _perform(self, node: PlanNode, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        if node.capability == "image.generate":
+
+
+
+            if self.images is None:
+                from ..connectors.contract import ConnectorError
+
+                raise ConnectorError(
+                    "Image generation is not configured.", kind="backend_unavailable"
+                )
+            job = self.images.prepare(
+                {"brief": arguments.get("brief") or arguments},
+                original_request=str(arguments.get("request") or node.objective),
+            )
+            return self.images.result_for_model(self.images.run(job))
+
         if node.connector:
             result = self.connectors.invoke(
                 node.connector,

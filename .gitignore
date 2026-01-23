@@ -17,8 +17,11 @@ __pycache__/
 # --------------------------------------------------------------- build output
 dist/
 build/
-/app/desktop/native/bin/
-/app/desktop/native/obj/
+# Every .NET helper, not only the first one. These are regenerable from source
+# by `dotnet build`, and versioning them made an ordinary rebuild dirty the
+# working tree with binaries nobody reviews.
+app/desktop/**/bin/
+app/desktop/**/obj/
 app/frontend/dist/assets/*.map
 /Salty Potato AI.exe
 /Salty Steak.exe
