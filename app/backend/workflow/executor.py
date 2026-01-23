@@ -256,6 +256,29 @@ class Executor:
         )
 
     @staticmethod
+    def _observed_count(observed: Any) -> int:
+        """How many records a read actually found.
+
+        The total, not the page. A paged read returns at most one page, so
+        counting ``items`` would report 100 for a search that matched 140 and
+        fail a verification that was in fact satisfied.
+        """
+
+        if isinstance(observed, Mapping):
+            total = observed.get("total_estimate")
+            if isinstance(total, int):
+                return total
+            items = observed.get("items")
+            if isinstance(items, (list, tuple)):
+                return len(items)
+            count = observed.get("count")
+            if isinstance(count, int):
+                return count
+        if isinstance(observed, (list, tuple)):
+            return len(observed)
+        return 0
+
+    @staticmethod
     def _compare(
         observed: Any, expectation: Any, specification: Mapping[str, Any]
     ) -> bool:
@@ -270,12 +293,11 @@ class Executor:
             if "contains" in expectation:
                 return str(expectation["contains"]) in text
             if "count" in expectation:
-                items = observed.get("items") if isinstance(observed, Mapping) else None
-                actual = len(items) if items is not None else observed
-                return actual == expectation["count"]
+                return Executor._observed_count(observed) == expectation["count"]
             if "at_least" in expectation:
-                items = observed.get("items") if isinstance(observed, Mapping) else []
-                return len(items or []) >= int(expectation["at_least"])
+                return Executor._observed_count(observed) >= int(
+                    expectation["at_least"]
+                )
             return all(
                 str(value) in text for value in expectation.values()
             )

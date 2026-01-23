@@ -3118,6 +3118,38 @@ class ChatService:
             capabilities=self.granted_automation_capabilities(),
         )
 
+    def _live_runners(self, *, images, generation_settings, context, task):
+        """Build the runners for a decided turn, on the one inference path."""
+
+        from .runners import LiveRunners
+
+        def generate(messages: list[dict[str, str]]) -> str:
+            return self._agent_generate(
+                messages, context=context, generation_settings=generation_settings
+            )
+
+        def search(query: str):
+            try:
+                return self.web_search.search(query, limit=6)
+            except Exception:
+                return []
+
+        return LiveRunners(
+            broker=self.automation,
+            images=images,
+            generate=generate,
+            task=task,
+            capabilities=self.granted_automation_capabilities(),
+            authority_mode=str(generation_settings["computer_authority_mode"]),
+            search=search,
+            read=self._read_source,
+        )
+
+    def _read_source(self, url: str) -> dict[str, Any]:
+        """Fetch one source's structured text for the research ledger."""
+
+        raise RuntimeError("Structured page reading is not enabled in this build.")
+
     def _dispatch_turn(
         self,
         *,
@@ -3126,6 +3158,8 @@ class ChatService:
         history: list[dict[str, str]],
         conversation_id: str,
         message_id: str,
+        generation_settings: Mapping[str, Any],
+        context: OperationContext,
     ):
         """Route one model reply. Returns None when it was simply an answer."""
 
@@ -3136,13 +3170,32 @@ class ChatService:
         if decision is None or decision.get("action") == RESPOND:
             return None
 
+
+
+        task = TaskContext(goal=request[:200])
+        bind_operation_stop(task, context.stop_requested)
+
         from ..imaging import ImageOrchestrator
+        from .runners import LiveRunners
 
         images = ImageOrchestrator(
             generate=self._render_image,
             backend="steak-gen-1-scaledfp8",
         )
-        dispatcher = TurnDispatcher(images=images, image_store=self.image_store)
+        runners = self._live_runners(
+            images=images,
+            generation_settings=generation_settings,
+            context=context,
+            task=task,
+        )
+        dispatcher = TurnDispatcher(
+            images=images,
+            image_store=self.image_store,
+            run_agent=runners.run_action,
+            run_workflow=runners.run_plan,
+            run_research=runners.run_research,
+            task=task,
+        )
         return dispatcher.dispatch(
             decision,
             reply_text=reply_text,
@@ -3519,6 +3572,8 @@ class ChatService:
             history=history,
             conversation_id=conversation_id,
             message_id=user_message_id,
+            generation_settings=generation,
+            context=context,
         )
         if turn is not None:
             assistant_content = turn.content or response.text

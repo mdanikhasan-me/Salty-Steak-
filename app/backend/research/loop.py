@@ -85,9 +85,13 @@ class ResearchLoop:
     def run(self, initial_query: str | None = None) -> dict[str, Any]:
         query = initial_query or self.ledger.question
 
+
+        ended = ""
+
         while True:
             stop, reason = self.ledger.should_stop()
             if stop:
+                ended = reason
                 break
             if self._stopped():
                 return {**self.ledger.report(), "stop_reason": "cancelled"}
@@ -95,6 +99,7 @@ class ResearchLoop:
             if not self.ledger.record_query(query):
 
 
+                ended = "query_repeated"
                 break
             self._event("research_query", query=query)
 
@@ -125,18 +130,24 @@ class ResearchLoop:
                 self._event("research_source", **summary, url=url)
 
             if opened == 0:
+                ended = "no_further_sources"
                 break
 
             stop, reason = self.ledger.should_stop()
             if stop:
+                ended = reason
                 break
 
             nxt = self.follow_up(self.ledger) if self.follow_up else None
             if not nxt:
+                ended = "evidence_sufficient"
                 break
             query = nxt
 
-        return self.ledger.report()
+        report = self.ledger.report()
+        if ended:
+            report["stop_reason"] = ended
+        return report
 
     def _stopped(self) -> bool:
         return bool(self.task is not None and self.task.stop_requested)

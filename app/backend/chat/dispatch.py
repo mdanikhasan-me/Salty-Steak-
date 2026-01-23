@@ -144,12 +144,14 @@ class TurnDispatcher:
         image_store: Any = None,
         run_agent: Callable[..., Mapping[str, Any]] | None = None,
         run_workflow: Callable[..., Mapping[str, Any]] | None = None,
+        run_research: Callable[..., Mapping[str, Any]] | None = None,
         task: Any = None,
     ) -> None:
         self.images = images
         self.image_store = image_store
         self.run_agent = run_agent
         self.run_workflow = run_workflow
+        self.run_research = run_research
         self.task = task
 
     def dispatch(
@@ -182,7 +184,11 @@ class TurnDispatcher:
             )
 
         if action in {SINGLE_ACTION, PLAN, RESEARCH}:
-            runner = self.run_workflow if action in {PLAN, RESEARCH} else self.run_agent
+            runner = {
+                SINGLE_ACTION: self.run_agent,
+                PLAN: self.run_workflow,
+                RESEARCH: self.run_research,
+            }[action]
             if runner is None:
 
 
