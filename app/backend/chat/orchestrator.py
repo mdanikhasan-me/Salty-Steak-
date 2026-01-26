@@ -37,6 +37,22 @@ JOB_TYPES = (RESPOND, SINGLE_ACTION, PLAN, GENERATE_IMAGE, REVISE_IMAGE, RESEARC
 
 
 
+
+CAPABILITY_ACTIONS = frozenset(
+    {
+        "application.launch",
+        "browser.control",
+        "terminal.execute",
+        "screen.capture",
+        "input.control",
+        "window.control",
+        "ui.automation",
+        "image.generate",
+    }
+)
+
+
+
 JOB_TYPE_MANIFEST = {
     RESPOND: "answer or explain something; no tools needed",
     SINGLE_ACTION: "carry out one computer or service action",
@@ -158,13 +174,32 @@ def parse_decision(reply: str) -> dict[str, Any]:
         "workflow": PLAN,
     }
     action = aliases.get(action, action)
+
+    decision = dict(parsed)
+    if action not in JOB_TYPES and action in CAPABILITY_ACTIONS:
+
+
+
+
+
+        decision.setdefault("capability", action)
+        action = SINGLE_ACTION
+
     if action not in JOB_TYPES:
         raise OrchestrationError(
             f"{parsed.get('action')!r} is not one of: {', '.join(JOB_TYPES)}"
         )
 
-    decision = dict(parsed)
     decision["action"] = action
+
+
+    if action == SINGLE_ACTION:
+        arguments = dict(decision.get("arguments") or {})
+        for key in ("app", "application", "target", "url", "name"):
+            if key in decision and key not in arguments:
+                arguments.setdefault("target", decision[key])
+        if arguments:
+            decision["arguments"] = arguments
     return decision
 
 
