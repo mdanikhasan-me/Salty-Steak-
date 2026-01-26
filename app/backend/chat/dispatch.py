@@ -38,21 +38,22 @@ DISPATCH_SCHEMA = "salty-steak-turn-dispatch-v1"
 
 
 
+
+
+
+
+
 DECISION_INSTRUCTION = """\
-Answer the user normally.
-
-Only if the request needs more than an answer, reply with ONE JSON object \
-instead of prose:
+Answer normally. If the request needs more than an answer, reply with ONE JSON \
+object instead:
 {jobs}
-
-For generate_image include a brief: {{"action":"generate_image","reason":"...",\
-"brief":{{"subject":"...","image_type":"logo|icon|illustration|photograph|\
-diagram|poster|other","goal":"...","brand":"...","style":"...","colour":"...",\
-"background":"...","deliverables":["..."],"negative_constraints":["..."]}}}}
-
-Judge by what the user wants, not by the words they used. A request for a logo, \
-icon, poster or illustration is an image request even if it never says "image".\
+Judge by intent, not wording: a logo, icon or poster request is an image request.\
 """
+
+IMAGE_SHAPE = (
+    '\ngenerate_image adds: "brief":{"subject","image_type","brand","style",'
+    '"deliverables":[],"negative_constraints":[]}'
+)
 
 
 def build_turn_instruction(
@@ -76,15 +77,14 @@ def build_turn_instruction(
     if not offered:
         return ""
 
-    jobs = "\n".join(f'  {{"action":"{name}"}} — {JOB_TYPE_MANIFEST[name]}' for name in offered)
+    jobs = "\n".join(f'  "{name}" — {JOB_TYPE_MANIFEST[name]}' for name in offered)
     text = DECISION_INSTRUCTION.format(jobs=jobs)
-    if not image_available:
-
-        text = text.split("\nFor generate_image")[0]
+    if image_available:
+        text += IMAGE_SHAPE
     if capabilities:
-        text += "\n\nActions available: " + ", ".join(capabilities)
+        text += "\nActions: " + ", ".join(capabilities)
     if connectors:
-        text += "\nServices connected: " + ", ".join(connectors)
+        text += "\nServices: " + ", ".join(connectors)
     return text
 
 

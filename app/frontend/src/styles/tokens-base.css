@@ -48,9 +48,49 @@
   --drawer-line: var(--line);
   --drawer-active: var(--surface);
   --display-font: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  --mono-font: "Cascadia Code", "Consolas", ui-monospace, monospace;
+
+
+
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --space-7: 24px;
+  --space-8: 32px;
+  --space-9: 40px;
+
+
+
+  --text-xs: 11px;
+  --text-xs-leading: 1.45;
+  --text-sm: 12px;
+  --text-sm-leading: 1.5;
+  --text-base: 13px;
+  --text-base-leading: 1.6;
+  --text-body: 14px;
+  --text-body-leading: 1.65;
+  --text-lg: 16px;
+  --text-lg-leading: 1.45;
+  --text-xl: 20px;
+  --text-xl-leading: 1.3;
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
+
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+
+
+
+  --elevation-1: 0 1px 2px rgb(0 0 0 / 24%);
+  --elevation-2: 0 4px 12px rgb(0 0 0 / 28%);
+  --elevation-3: 0 12px 32px rgb(0 0 0 / 34%);
 
 
 
