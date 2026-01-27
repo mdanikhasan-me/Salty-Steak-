@@ -3121,10 +3121,10 @@ class ChatService:
         services: list[str] = []
         if self.connectors is not None:
             try:
-                services = [
-                    item["connector"]
-                    for item in self.connectors.catalogue(configured_only=True)
-                ]
+
+
+
+                services = self.connectors.orchestration_hints()
             except Exception:
                 services = []
         return build_turn_instruction(

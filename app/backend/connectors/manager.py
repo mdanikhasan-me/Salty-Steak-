@@ -110,6 +110,27 @@ class ConnectorManager:
             entries.append(described)
         return entries
 
+    def orchestration_hints(self) -> list[str]:
+        """One compact line per configured service, for the routing prompt.
+
+        Naming a service without saying what it does tells the model a mailbox
+        exists but not that it can search or label one, so it reaches for the
+        browser instead. Operations are listed bare, destructive ones marked,
+        and the real schema stays in the connector where it belongs.
+        """
+
+        lines: list[str] = []
+        for connector in sorted(
+            self._connectors.values(), key=lambda item: item.descriptor.connector_id
+        ):
+            if connector.authentication_state() != AUTH_AVAILABLE:
+                continue
+            names = []
+            for spec in connector.operations():
+                names.append(f"{spec.name}*" if spec.risk == "destructive" else spec.name)
+            lines.append(f"{connector.descriptor.connector_id}: {', '.join(names)}")
+        return lines
+
     def manifest(self) -> dict[str, Any]:
         catalogue = self.catalogue()
         return {

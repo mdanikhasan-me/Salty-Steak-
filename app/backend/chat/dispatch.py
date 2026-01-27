@@ -59,11 +59,16 @@ IMAGE_SHAPE = (
 
 
 
+
+
+
+
 PLAN_SHAPE = (
-    '\nplan adds: "nodes":[{"node","connector"|"capability","operation",'
-    '"arguments",​"depends_on":[]}] — use plan whenever more than one step is '
-    "needed, action only for a single step."
-).replace("​", "")
+    '\nplan example: {"action":"plan","nodes":[{"node":"find","connector":'
+    '"mail.local","operation":"search","arguments":{}},{"node":"tag","connector":'
+    '"mail.local","operation":"apply_label","arguments":{},"depends_on":["find"]}]}'
+    "\nUse plan for anything needing more than one step; action is a single step."
+)
 
 
 def build_turn_instruction(
