@@ -241,6 +241,9 @@ class ChatService:
 
 
         self.image_store = ImageJobStore(self.database)
+
+
+        self.connectors = None
         self.web_search = web_search or WebSearchClient()
         self.vision_broker = vision_broker
         self.vision_inputs = vision_inputs
@@ -3112,10 +3115,23 @@ class ChatService:
                 )
             except Exception:
                 has_previous = False
+
+
+
+        services: list[str] = []
+        if self.connectors is not None:
+            try:
+                services = [
+                    item["connector"]
+                    for item in self.connectors.catalogue(configured_only=True)
+                ]
+            except Exception:
+                services = []
         return build_turn_instruction(
             image_available=self._image_generation_available(),
             has_previous_image=has_previous,
             capabilities=self.granted_automation_capabilities(),
+            connectors=services,
         )
 
     def _live_runners(self, *, images, generation_settings, context, task):
@@ -3136,6 +3152,7 @@ class ChatService:
 
         return LiveRunners(
             broker=self.automation,
+            connectors=self.connectors,
             images=images,
             generate=generate,
             task=task,

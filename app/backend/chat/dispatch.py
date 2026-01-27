@@ -56,6 +56,16 @@ IMAGE_SHAPE = (
 )
 
 
+
+
+
+PLAN_SHAPE = (
+    '\nplan adds: "nodes":[{"node","connector"|"capability","operation",'
+    '"arguments",​"depends_on":[]}] — use plan whenever more than one step is '
+    "needed, action only for a single step."
+).replace("​", "")
+
+
 def build_turn_instruction(
     *,
     image_available: bool,
@@ -79,6 +89,8 @@ def build_turn_instruction(
 
     jobs = "\n".join(f'  "{name}" — {JOB_TYPE_MANIFEST[name]}' for name in offered)
     text = DECISION_INSTRUCTION.format(jobs=jobs)
+    if PLAN in offered:
+        text += PLAN_SHAPE
     if image_available:
         text += IMAGE_SHAPE
     if capabilities:

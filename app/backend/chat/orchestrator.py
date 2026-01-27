@@ -160,6 +160,33 @@ def parse_decision(reply: str) -> dict[str, Any]:
     if not isinstance(parsed, Mapping):
         raise OrchestrationError("The reply was not a single JSON object.")
 
+    parsed = dict(parsed)
+    nested = parsed.get("action")
+    if isinstance(nested, Mapping):
+
+
+
+
+
+        inner = dict(nested)
+        for key in ("type", "name", "action", "capability", "tool"):
+            if isinstance(inner.get(key), str):
+                parsed["action"] = inner.pop(key)
+                break
+        else:
+            parsed["action"] = ""
+        for key in ("details", "target", "app", "application", "url", "query"):
+            if key in inner and key not in parsed:
+                parsed[key] = inner[key]
+
+        remaining = {
+            key: value
+            for key, value in inner.items()
+            if key not in {"reason", "why"}
+        }
+        if remaining and "arguments" not in parsed:
+            parsed["arguments"] = remaining
+
     action = str(parsed.get("action") or "").strip().casefold()
 
     aliases = {
@@ -195,9 +222,10 @@ def parse_decision(reply: str) -> dict[str, Any]:
 
     if action == SINGLE_ACTION:
         arguments = dict(decision.get("arguments") or {})
-        for key in ("app", "application", "target", "url", "name"):
-            if key in decision and key not in arguments:
-                arguments.setdefault("target", decision[key])
+        for key in ("target", "app", "application", "url", "details", "name"):
+            if isinstance(decision.get(key), str) and "target" not in arguments:
+                arguments["target"] = decision[key]
+                break
         if arguments:
             decision["arguments"] = arguments
     return decision
