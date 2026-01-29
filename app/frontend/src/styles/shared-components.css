@@ -684,6 +684,41 @@
   overflow: auto;
 }
 
+
+.capability-consent-list {
+  display: grid;
+  margin: 16px 0;
+  padding: 0;
+  gap: 12px;
+  list-style: none;
+}
+
+.capability-consent-list li {
+  display: grid;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft, rgba(0, 0, 0, 0.12));
+  border-radius: 10px;
+  gap: 3px;
+  background: var(--surface-muted, rgba(0, 0, 0, 0.03));
+}
+
+.capability-consent-list strong {
+  font-size: 0.9rem;
+}
+
+.capability-consent-list span {
+  color: var(--text-muted, inherit);
+  font-size: 0.82rem;
+}
+
+.capability-consent-list em {
+  color: var(--text-muted, inherit);
+  font-size: 0.76rem;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .notification-region {
   position: fixed;
   z-index: 100;

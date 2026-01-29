@@ -123,6 +123,10 @@ class LiveRunners:
         approve: Callable[[Mapping[str, Any]], bool] | None = None,
         search: Callable[[str], Sequence[Mapping[str, Any]]] | None = None,
         read: Callable[[str], Mapping[str, Any]] | None = None,
+        memory: Any = None,
+        on_step: Callable[[Mapping[str, Any]], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
+        describe_screenshot: Callable[[str], str] | None = None,
     ) -> None:
         self.broker = broker
         self.connectors = connectors
@@ -134,6 +138,13 @@ class LiveRunners:
         self.approve = approve
         self.search = search
         self.read = read
+
+
+
+        self.memory = memory
+        self.on_step = on_step
+        self.should_stop = should_stop
+        self.describe_screenshot = describe_screenshot
 
 
 
@@ -185,6 +196,10 @@ class LiveRunners:
             authority_mode=self.authority_mode,
             approve=self.approve,
             task=self.task,
+            memory=self.memory,
+            on_step=self.on_step,
+            should_stop=self.should_stop,
+            describe_screenshot=self.describe_screenshot,
             max_iterations=8,
         ).run(request)
         return {

@@ -215,11 +215,24 @@ class AutomationBroker:
                 capability,
                 grant["constraints"],
             )
+
+
+
+            helper_missing = (
+                capability == UI_AUTOMATION_CAPABILITY and self._uia_client is None
+            ) or (capability == BROWSER_CAPABILITY and self._browser_client is None)
             capabilities.append(
                 {
                     **grant,
                     "display_name": CAPABILITY_DISPLAY_NAMES[capability],
                     "platform_supported": supported,
+                    "runtime_available": bool(supported and not helper_missing),
+                    "runtime_unavailable_reason": (
+                        "The helper host for this capability is not part of this "
+                        "build."
+                        if helper_missing
+                        else None
+                    ),
                     "constraint_valid": constraint_valid,
                     "constraint_error": constraint_error,
                     "effective_enabled": bool(

@@ -77,11 +77,17 @@ def build_turn_instruction(
     has_previous_image: bool,
     capabilities: Sequence[str] = (),
     connectors: Sequence[str] = (),
+    agent_mode: bool = False,
 ) -> str:
     """The system line that lets one generation both answer and route.
 
     Only what is genuinely reachable is offered. Advertising a capability that
     is switched off invites the model to plan around a door it cannot open.
+
+    ``agent_mode`` does not change which brain decides — the same generation
+    still routes the turn. It changes the standing instruction: the user has
+    asked for the work to be done, so describing how to do it by hand is the
+    wrong answer when a capability could do it.
     """
 
     offered = [SINGLE_ACTION, PLAN, RESEARCH] if capabilities else []
@@ -102,6 +108,12 @@ def build_turn_instruction(
         text += "\nActions: " + ", ".join(capabilities)
     if connectors:
         text += "\nServices: " + ", ".join(connectors)
+    if agent_mode and capabilities:
+        text += (
+            "\nAgent mode is on: the user asked you to do this on their computer. "
+            "If an action above can do it, return the JSON object and do it. Do "
+            "not reply with instructions for doing it by hand."
+        )
     return text
 
 

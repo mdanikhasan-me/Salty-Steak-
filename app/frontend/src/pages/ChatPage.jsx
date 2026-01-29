@@ -83,7 +83,12 @@ import {
   validateAttachment,
   validateVisionAttachment,
 } from "../workflows/chatAttachments.mjs";
-import { createComputerControlAdapter } from "../workflows/computerControlPermissions.mjs";
+import {
+  createComputerControlAdapter,
+  fullAccessCapabilities,
+  fullAccessGrantRequest,
+  normaliseAutomationStatus,
+} from "../workflows/computerControlPermissions.mjs";
 
 const SELECTED_CONVERSATION_KEY = "salty-potato:selected-conversation";
 const GENERATION_SETTINGS_KEY = "salty-steak:generation-settings-v2";
@@ -197,6 +202,10 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const activeGenerationRef = useRef(null);
   const [agentMode, setAgentMode] = useState(false);
   const [dismissedAgentTask, setDismissedAgentTask] = useState("");
+
+
+  const [fullAccessRequest, setFullAccessRequest] = useState(null);
+  const [grantingFullAccess, setGrantingFullAccess] = useState(false);
 
 
   const agentModeRef = useRef(false);
@@ -502,6 +511,78 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     };
   }, [composerMenu]);
 
+
+
+
+
+
+  const chooseAuthorityMode = useCallback(async (modeId) => {
+    if (modeId !== "full_access") {
+      setGenerationSettings((current) => ({
+        ...current,
+        computer_authority_mode: modeId,
+      }));
+      return;
+    }
+    let status;
+    try {
+      status = normaliseAutomationStatus(await AUTOMATION_ADAPTER.getStatus());
+    } catch (error) {
+      notify({ message: errorMessage(error), kind: "error" });
+      return;
+    }
+    const capabilities = fullAccessCapabilities(status);
+    const missing = capabilities.filter((item) => !item.alreadyGranted);
+    if (!missing.length) {
+      setGenerationSettings((current) => ({
+        ...current,
+        computer_authority_mode: "full_access",
+      }));
+      notify({
+        message: capabilities.length
+          ? `Full access is on. ${capabilities.length} capabilities are already enabled.`
+          : "Full access is on, but this build has no computer capabilities available.",
+        kind: capabilities.length ? "success" : "warning",
+      });
+      return;
+    }
+    setFullAccessRequest({ capabilities, missing, status });
+  }, [notify, setGenerationSettings]);
+
+  const confirmFullAccess = useCallback(async () => {
+    const pending = fullAccessRequest;
+    if (!pending) return;
+    const request = fullAccessGrantRequest(pending.status);
+    if (!request) {
+      setFullAccessRequest(null);
+      notify({
+        message: "This build has no computer capabilities to enable.",
+        kind: "warning",
+      });
+      return;
+    }
+    setGrantingFullAccess(true);
+    try {
+      const granted = normaliseAutomationStatus(
+        await AUTOMATION_ADAPTER.grant(request),
+      );
+      const enabled = granted.capabilities.filter((item) => item.effectiveEnabled);
+      setGenerationSettings((current) => ({
+        ...current,
+        computer_authority_mode: "full_access",
+      }));
+      setFullAccessRequest(null);
+      notify({
+        message: `Full access is on. ${enabled.length} of ${request.capabilities.length} capabilities are enabled.`,
+        kind: enabled.length === request.capabilities.length ? "success" : "warning",
+      });
+    } catch (error) {
+      notify({ message: errorMessage(error), kind: "error" });
+    } finally {
+      setGrantingFullAccess(false);
+    }
+  }, [fullAccessRequest, notify, setGenerationSettings]);
+
   const sendExactMessage = useCallback(
     async (content, requestedConversationId = selectedIdRef.current) => {
       if (!content || !content.trim()) return;
@@ -542,25 +623,21 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               ],
             }));
           }
-          const requestSettings = generationSettingsForRequest(
-            generationSettings,
-            DEFAULT_GENERATION_SETTINGS,
+
+
+          const requestSettings = {
+            ...generationSettingsForRequest(
+              generationSettings,
+              DEFAULT_GENERATION_SETTINGS,
+            ),
+            agent_mode: Boolean(agentModeRef.current),
+          };
+          const submitted = await api.sendMessage(
+            conversationId,
+            content,
+            api.makeRequestKey(),
+            requestSettings,
           );
-
-
-          const submitted = agentModeRef.current
-            ? await api.startAgentTask(
-              conversationId,
-              content,
-              api.makeRequestKey(),
-              requestSettings,
-            )
-            : await api.sendMessage(
-              conversationId,
-              content,
-              api.makeRequestKey(),
-              requestSettings,
-            );
           activeGenerationRef.current = submitted;
           return submitted;
         });

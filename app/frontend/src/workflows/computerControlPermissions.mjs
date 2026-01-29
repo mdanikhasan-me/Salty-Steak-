@@ -153,6 +153,27 @@ export function grantRequest(capability, workingDirectoryRoot) {
   return Object.freeze(request);
 }
 
+export function fullAccessCapabilities(status) {
+
+
+  return (status?.capabilities || [])
+    .filter((item) => item.available)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      alreadyGranted: Boolean(item.effectiveEnabled),
+    }));
+}
+
+export function fullAccessGrantRequest(status) {
+  const capabilities = fullAccessCapabilities(status).map((item) => item.id);
+  if (!capabilities.length) return null;
+
+
+  return Object.freeze({ capabilities, user_confirmed: true });
+}
+
 export function revokeRequest(capability) {
   return Object.freeze({ capabilities: [capabilityDefinition(capability).id] });
 }
@@ -354,10 +375,13 @@ function normaliseCapability(value, definition) {
   const platformSupported = value.platform_supported === true;
   const constraintValid = value.constraint_valid === true;
   const granted = value.granted === true;
+
+
+  const runtimeAvailable = value.runtime_available !== false;
   const effectiveEnabled = Boolean(
     value.effective_enabled === true && granted && platformSupported && constraintValid,
   );
-  const available = platformSupported && constraintValid;
+  const available = platformSupported && constraintValid && runtimeAvailable;
   let stateLabel = "Not granted";
   let stateTone = "quiet";
   let actionLabel = "Review access";
@@ -367,6 +391,14 @@ function normaliseCapability(value, definition) {
     stateTone = "unavailable";
     actionLabel = "Unavailable";
     detail = "The Windows automation broker is unavailable on this platform.";
+  } else if (!runtimeAvailable) {
+    stateLabel = "Unavailable";
+    stateTone = "unavailable";
+    actionLabel = "Unavailable";
+    detail = String(
+      value.runtime_unavailable_reason
+        || "The helper this capability needs is not part of this build.",
+    );
   } else if (!constraintValid) {
     stateLabel = "Needs attention";
     stateTone = "error";

@@ -54,7 +54,7 @@ from .actions import (
     host_action_planning_prompt,
     normalise_host_action_response,
 )
-from .agent_loop import VISION_OUTPUT_TOKENS, VISION_PROMPT, AgentLoop
+from .agent_loop import VISION_OUTPUT_TOKENS, VISION_PROMPT
 from .task_runtime import TaskContext, bind_operation_stop
 from .vision_inputs import VisionInputClaim, VisionInputStore
 
@@ -674,6 +674,10 @@ class ChatService:
             "system_prompt": prompt,
             "stop_sequences": stops,
             "computer_authority_mode": computer_authority_mode,
+
+
+
+            "agent_mode": bool(supplied.get("agent_mode", False)),
         }
 
     def list_conversations(self) -> list[dict[str, Any]]:
@@ -1235,35 +1239,28 @@ class ChatService:
         instruction: str,
         generation_settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Run a multi-step computer-control task for one conversation."""
+        """Start a computer-control turn.
+
+        Retained as an entrypoint, but no longer a second brain. Agent mode is
+        a property of the turn: the request goes down the same orchestration
+        every other message uses, and the same generation decides whether to
+        answer, act, plan or research. The agent loop still runs beneath that
+        decision as the executor, which is where it belongs.
+        """
 
         exact = str(instruction)
         if not exact.strip():
             raise ValueError("An automation task cannot be empty")
         if self.automation is None:
             raise RuntimeError("Local computer automation is unavailable in this build")
-        checked_settings = self._normalise_generation_settings(generation_settings)
-        capabilities = self.granted_automation_capabilities()
-        if not capabilities:
+        if not self.granted_automation_capabilities():
             raise PermissionError(
                 "Grant at least one computer-control capability before starting an "
                 "automation task"
             )
-        with self._generation_lock:
-            self.get_conversation(conversation_id)
-            self._cancel_active_generation(reason="superseded_by_new_request")
-            return self._submit_generation(
-                conversation_id,
-                lambda context, cancellation_token: self._run_agent_task(
-                    conversation_id=conversation_id,
-                    instruction=exact,
-                    capabilities=capabilities,
-                    context=context,
-                    cancellation_token=cancellation_token,
-                    generation_settings=checked_settings,
-                ),
-                generation_settings=checked_settings,
-            )
+        settings = dict(generation_settings or {})
+        settings["agent_mode"] = True
+        return self.start_message(conversation_id, exact, settings)
 
     def _agent_generate(
         self,
@@ -1342,182 +1339,6 @@ class ChatService:
                 maximum_output_tokens=VISION_OUTPUT_TOKENS,
             )
         return str(result.text).strip()
-
-    def _run_agent_task(
-        self,
-        *,
-        conversation_id: str,
-        instruction: str,
-        capabilities: list[str],
-        context: OperationContext,
-        cancellation_token: str,
-        generation_settings: dict[str, Any],
-    ) -> dict[str, Any]:
-        conversation = self.get_conversation(conversation_id)
-        target = self._selected_target()
-        next_sequence = len(conversation["messages"])
-        user_id = new_id()
-        now = utc_now()
-        relationship = {
-            "conversation_id": conversation_id,
-            "user_message_id": user_id,
-            "generation_id": context.operation_id,
-            "active_version_id": target["id"],
-            "active_target_kind": target["kind"],
-            "runtime_profile_id": target["profile_id"],
-            "source_sha256": target["source_sha256"],
-            "template_version": CHAT_TEMPLATE_VERSION,
-            "cancellation_token": cancellation_token,
-            "cancellation_state": "active",
-            "agent_task": {
-                "state": "running",
-                "step": 0,
-                "capabilities": list(capabilities),
-                "authority_mode": generation_settings["computer_authority_mode"],
-            },
-        }
-        with self.database.transaction() as connection:
-            connection.execute(
-                """
-                INSERT INTO messages(
-                    id, conversation_id, role, content, sequence,
-                    target_kind, target_id, runtime_profile_id, source_sha256,
-                    technical_details_json, created_at
-                ) VALUES (?, ?, 'user', ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    conversation_id,
-                    instruction,
-                    next_sequence,
-                    target["kind"],
-                    target["id"],
-                    target["profile_id"],
-                    target["source_sha256"],
-                    json_text(relationship),
-                    now,
-                ),
-            )
-            if conversation["title"] == "New chat":
-                title = instruction.strip().replace("\n", " ")[:60] or "New chat"
-                connection.execute(
-                    "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
-                    (title, now, conversation_id),
-                )
-
-
-
-        task_context = TaskContext(goal=instruction)
-
-
-
-        seed_world_state(task_context, self.host_environment.get())
-        bind_operation_stop(task_context, context.stop_requested)
-
-        def publish(step: Mapping[str, Any]) -> None:
-            snapshot = task_context.snapshot()
-            context.update(
-                phase=f"{snapshot['state_label']}: {step['action']}",
-                details={
-                    **relationship,
-                    "agent_task": {
-                        **relationship["agent_task"],
-                        **snapshot,
-                        "step": step["step"],
-                        "action": step["action"],
-                        "reason": step.get("reason") or "",
-                        "status": step.get("status"),
-                        "route": step.get("route"),
-                    },
-                },
-            )
-
-        context.update(
-            phase="Queued",
-            details={**relationship, "agent_task": {**relationship["agent_task"], **task_context.snapshot()}},
-        )
-        loop = AgentLoop(
-            broker=self.automation,
-            generate=lambda messages: self._agent_generate(
-                messages,
-                context=context,
-                generation_settings=generation_settings,
-            ),
-            capabilities=capabilities,
-            authority_mode=str(generation_settings["computer_authority_mode"]),
-            memory=self.memory,
-            on_step=publish,
-            should_stop=context.stop_requested,
-
-
-
-            describe_screenshot=(
-                (
-                    lambda path: self._describe_screenshot(
-                        path, conversation_id=conversation_id
-                    )
-                )
-                if requires_sight(capabilities)
-                else None
-            ),
-            task=task_context,
-        )
-        outcome = loop.run(instruction)
-
-        assistant_id = new_id()
-        finished = utc_now()
-        details = {
-            **relationship,
-            "cancellation_state": "not_requested",
-            "generation_state": (
-                "cancelled" if outcome["state"] == "cancelled" else "completed"
-            ),
-            "finish_reason": f"agent_{outcome['state']}",
-            "agent_task": {
-                **outcome["task"],
-                "step_count": outcome["step_count"],
-                "steps": outcome["steps"],
-                "capabilities": outcome["capabilities"],
-                "authority_mode": outcome["authority_mode"],
-                "model_turns": outcome["model_turns"],
-                "tiers_used": outcome["tiers_used"],
-                "metrics": outcome["metrics"],
-            },
-        }
-        with self.database.transaction() as connection:
-            connection.execute(
-                """
-                INSERT INTO messages(
-                    id, conversation_id, role, content, sequence,
-                    target_kind, target_id, runtime_profile_id, source_sha256,
-                    technical_details_json, created_at
-                ) VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    assistant_id,
-                    conversation_id,
-                    str(outcome["answer"]),
-                    next_sequence + 1,
-                    target["kind"],
-                    target["id"],
-                    target["profile_id"],
-                    target["source_sha256"],
-                    json_text(details),
-                    finished,
-                ),
-            )
-            connection.execute(
-                "UPDATE conversations SET updated_at = ? WHERE id = ?",
-                (finished, conversation_id),
-            )
-        result = {
-            **relationship,
-            "assistant_message_id": assistant_id,
-            "finish_reason": f"agent_{outcome['state']}",
-            "agent_task": details["agent_task"],
-        }
-        context.update(phase="Saving response", details=result)
-        return result
 
     def start_retry(
         self,
@@ -3102,7 +2923,9 @@ class ChatService:
             and runtime.get("external_service_required") is False
         )
 
-    def _turn_instruction(self, conversation_id: str) -> str:
+    def _turn_instruction(
+        self, conversation_id: str, *, agent_mode: bool = False
+    ) -> str:
         """The routing line added to a turn, sized to what is really reachable."""
 
         from .dispatch import build_turn_instruction
@@ -3132,12 +2955,17 @@ class ChatService:
             has_previous_image=has_previous,
             capabilities=self.granted_automation_capabilities(),
             connectors=services,
+            agent_mode=agent_mode,
         )
 
-    def _live_runners(self, *, images, generation_settings, context, task):
+    def _live_runners(
+        self, *, images, generation_settings, context, task, conversation_id=None
+    ):
         """Build the runners for a decided turn, on the one inference path."""
 
         from .runners import LiveRunners
+
+        capabilities = self.granted_automation_capabilities()
 
         def generate(messages: list[dict[str, str]]) -> str:
             return self._agent_generate(
@@ -3150,16 +2978,48 @@ class ChatService:
             except Exception:
                 return []
 
+        def publish(step: Mapping[str, Any]) -> None:
+            snapshot = task.snapshot()
+            context.update(
+                phase=f"{snapshot['state_label']}: {step['action']}",
+                details={
+                    "conversation_id": conversation_id,
+                    "agent_task": {
+                        **snapshot,
+                        "step": step["step"],
+                        "action": step["action"],
+                        "reason": step.get("reason") or "",
+                        "status": step.get("status"),
+                        "route": step.get("route"),
+                    },
+                },
+            )
+
         return LiveRunners(
             broker=self.automation,
             connectors=self.connectors,
             images=images,
             generate=generate,
             task=task,
-            capabilities=self.granted_automation_capabilities(),
+            capabilities=capabilities,
             authority_mode=str(generation_settings["computer_authority_mode"]),
             search=search,
             read=self._read_source,
+            memory=self.memory,
+            on_step=publish,
+            should_stop=context.stop_requested,
+
+
+
+            describe_screenshot=(
+                (
+                    lambda path: self._describe_screenshot(
+                        path, conversation_id=str(conversation_id or "")
+                    )
+                )
+                if conversation_id and requires_sight(capabilities)
+                else None
+            ),
         )
 
     def _read_source(self, url: str) -> dict[str, Any]:
@@ -3190,6 +3050,10 @@ class ChatService:
 
 
         task = TaskContext(goal=request[:200])
+
+
+
+        seed_world_state(task, self.host_environment.get())
         bind_operation_stop(task, context.stop_requested)
 
         from ..imaging import ImageOrchestrator
@@ -3204,6 +3068,7 @@ class ChatService:
             generation_settings=generation_settings,
             context=context,
             task=task,
+            conversation_id=conversation_id,
         )
         dispatcher = TurnDispatcher(
             images=images,
@@ -3338,7 +3203,9 @@ class ChatService:
             "execution_requested": False,
             "execution_performed": False,
         }
-        orchestration = self._turn_instruction(conversation_id)
+        agent_mode = bool(generation_settings.get("agent_mode"))
+        relationship["agent_mode"] = agent_mode
+        orchestration = self._turn_instruction(conversation_id, agent_mode=agent_mode)
         if orchestration:
             insertion = 0
             while insertion < len(history) and history[insertion].get("role") == "system":
