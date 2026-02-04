@@ -167,14 +167,29 @@ class LiveRunners:
             route = resolve_execution(capability, arguments, self.capabilities)
             if self.task is not None:
                 self.task.note_tool_call(route.capability, route.tier_name)
-            result = self.broker.invoke(
-                {
+            try:
+                result = self.broker.invoke(
+                    {
+                        "capability": route.capability,
+                        "arguments": dict(route.arguments),
+                        "user_confirmed": True,
+                        "authority_mode": self.authority_mode,
+                    }
+                )
+            except (PermissionError, TimeoutError, OSError, RuntimeError, ValueError) as error:
+
+
+
+
+                return {
+                    "answer": (
+                        f"I could not carry that out: {error}"
+                    ),
                     "capability": route.capability,
-                    "arguments": dict(route.arguments),
-                    "user_confirmed": True,
-                    "authority_mode": self.authority_mode,
+                    "tier": route.tier_name,
+                    "status": "failed",
+                    "error": {"type": type(error).__name__, "message": str(error)},
                 }
-            )
             if self.task is not None and getattr(self.task, "world_state", None):
                 self.task.world_state.absorb(route.capability, result or {})
             return {

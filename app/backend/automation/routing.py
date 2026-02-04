@@ -212,6 +212,73 @@ KNOWN_APPLICATIONS = {
 _URL_PREFIXES = ("http://", "https://")
 
 
+
+
+
+
+
+
+
+ARGUMENT_ALIASES: dict[str, dict[str, str]] = {
+    APPLICATION_LAUNCH_CAPABILITY: {
+        "app": "target",
+        "app_name": "target",
+        "application": "target",
+        "application_name": "target",
+        "link": "target",
+        "name": "target",
+        "path": "target",
+        "program": "target",
+        "site": "target",
+        "url": "target",
+        "website": "target",
+    },
+    WINDOW_CONTROL_CAPABILITY: {
+        "name": "title",
+        "window": "title",
+        "window_title": "title",
+    },
+    BROWSER_CAPABILITY: {
+        "address": "url",
+        "link": "url",
+        "page": "url",
+    },
+    INPUT_CONTROL_CAPABILITY: {
+        "content": "text",
+        "keys": "combo",
+        "value": "text",
+    },
+}
+
+
+def apply_argument_aliases(
+    capability: str,
+    arguments: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Rename the arguments a model produced onto the broker's own field names.
+
+    An alias never overwrites the real field: if the model supplied both, the
+    correctly named one wins and the alias is dropped, because guessing which
+    of two conflicting values was meant is exactly the kind of invention this
+    layer must not do.
+    """
+
+    aliases = ARGUMENT_ALIASES.get(capability)
+    if not aliases:
+        return dict(arguments), []
+    resolved: dict[str, Any] = {}
+    notes: list[str] = []
+    for key, value in arguments.items():
+        canonical = aliases.get(key, key)
+        if canonical != key:
+            if canonical in arguments or canonical in resolved:
+                notes.append(f"ignored {key!r}; {canonical!r} was already given")
+                continue
+            notes.append(f"read {key!r} as {canonical!r}")
+        resolved[canonical] = value
+    return resolved, notes
+
+
 def _normalise(value: str) -> str:
     return " ".join(str(value or "").strip().casefold().split())
 
@@ -254,9 +321,8 @@ def resolve_execution(
     activity panel all describe the same execution.
     """
 
-    resolved = dict(arguments)
+    resolved, notes = apply_argument_aliases(capability, arguments)
     resolution = "verbatim"
-    notes: list[str] = []
 
     if capability == APPLICATION_LAUNCH_CAPABILITY:
         target = resolved.get("target")

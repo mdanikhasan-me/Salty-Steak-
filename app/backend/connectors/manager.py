@@ -115,8 +115,14 @@ class ConnectorManager:
 
         Naming a service without saying what it does tells the model a mailbox
         exists but not that it can search or label one, so it reaches for the
-        browser instead. Operations are listed bare, destructive ones marked,
-        and the real schema stays in the connector where it belongs.
+        browser instead. Destructive operations are marked, and the real schema
+        stays in the connector where it belongs.
+
+        Required arguments are named because leaving them out is not a style
+        difference: a plan that calls apply_label without a label is rejected
+        by validation after the model has already spent a generation on it. The
+        argument names alone are a few tokens per operation and they are the
+        difference between a plan that runs and a plan that cannot.
         """
 
         lines: list[str] = []
@@ -127,7 +133,12 @@ class ConnectorManager:
                 continue
             names = []
             for spec in connector.operations():
-                names.append(f"{spec.name}*" if spec.risk == "destructive" else spec.name)
+                name = spec.name
+                if spec.required:
+                    name += "(" + ",".join(spec.required) + ")"
+                if spec.risk == "destructive":
+                    name += "*"
+                names.append(name)
             lines.append(f"{connector.descriptor.connector_id}: {', '.join(names)}")
         return lines
 

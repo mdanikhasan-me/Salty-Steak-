@@ -2959,7 +2959,14 @@ class ChatService:
         )
 
     def _live_runners(
-        self, *, images, generation_settings, context, task, conversation_id=None
+        self,
+        *,
+        images,
+        generation_settings,
+        context,
+        task,
+        conversation_id=None,
+        provenance=None,
     ):
         """Build the runners for a decided turn, on the one inference path."""
 
@@ -2983,6 +2990,7 @@ class ChatService:
             context.update(
                 phase=f"{snapshot['state_label']}: {step['action']}",
                 details={
+                    **dict(provenance or {}),
                     "conversation_id": conversation_id,
                     "agent_task": {
                         **snapshot,
@@ -3037,6 +3045,7 @@ class ChatService:
         message_id: str,
         generation_settings: Mapping[str, Any],
         context: OperationContext,
+        provenance: Mapping[str, Any] | None = None,
     ):
         """Route one model reply. Returns None when it was simply an answer."""
 
@@ -3069,6 +3078,7 @@ class ChatService:
             context=context,
             task=task,
             conversation_id=conversation_id,
+            provenance=provenance,
         )
         dispatcher = TurnDispatcher(
             images=images,
@@ -3458,6 +3468,7 @@ class ChatService:
             message_id=user_message_id,
             generation_settings=generation,
             context=context,
+            provenance=relationship,
         )
         if turn is not None:
             assistant_content = turn.content or response.text
