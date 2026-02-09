@@ -107,6 +107,41 @@ def replan_packet(plan: Plan, outcome: Any, *, world: Mapping[str, Any] | None =
     )
 
 
+def _describe_effect(route: Any, result: Mapping[str, Any]) -> str:
+    """Say what actually happened when the model gave no reason of its own.
+
+    "Done." is true and useless: it does not tell the user which application
+    opened, which window moved, or where a screenshot went, so there is nothing
+    to check the claim against. The broker already reports each of those, so
+    the sentence is built from the result rather than from the request.
+    """
+
+    capability = str(getattr(route, "capability", "") or "")
+    if capability == "application.launch":
+        target = str(result.get("target") or "").strip()
+        return f"I opened {target}." if target else "I opened that for you."
+    if capability == "window.control":
+        window = result.get("window") or {}
+        title = str(window.get("title") or "").strip()
+        action = str(result.get("action") or "").strip()
+        if action == "list":
+            return f"There are {int(result.get('window_count') or 0)} open windows."
+        if title:
+            return f"I brought {title} to the front." if action == "focus" else f"I closed {title}."
+    if capability == "screen.capture":
+        artifact = result.get("artifact") or {}
+        path = str(artifact.get("path") or "").strip()
+        if path:
+            return f"I captured the screen to {path}."
+    if capability == "terminal.execute":
+        return f"The command finished with exit code {result.get('exit_code')}."
+    if capability == "input.control":
+        action = str(result.get("action") or "").strip()
+        if action:
+            return f"I sent {action.replace('_', ' ')} to the focused window."
+    return "Done."
+
+
 class LiveRunners:
     """Carry out an action, a plan, or research on behalf of a chat turn."""
 
@@ -193,7 +228,10 @@ class LiveRunners:
             if self.task is not None and getattr(self.task, "world_state", None):
                 self.task.world_state.absorb(route.capability, result or {})
             return {
-                "answer": str(decision.get("reason") or "Done."),
+                "answer": (
+                    str(decision.get("reason") or "").strip()
+                    or _describe_effect(route, result or {})
+                ),
                 "capability": route.capability,
                 "tier": route.tier_name,
                 "status": (result or {}).get("status", "succeeded"),
