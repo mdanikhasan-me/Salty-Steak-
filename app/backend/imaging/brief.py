@@ -201,11 +201,18 @@ class RenderBrief:
         }
 
     def render(self) -> str:
-        """The text handed to the image model.
+        """The positive text handed to the image model.
 
         Structured rather than conversational: the model gets the task, not a
-        transcript. Negative constraints are last and explicit, because that is
-        the part a long prompt most easily loses.
+        transcript.
+
+        Prohibitions are deliberately absent. A diffusion model has no negation
+        in its positive conditioning — every token in this text is something to
+        draw towards. Writing "DO NOT INCLUDE: text" into it does not remove
+        text from the picture; it asks for it, and the first live render put the
+        words DO NOT INCLUDE across the middle of the image. What the user ruled
+        out belongs in ``render_negative``, which goes to the negative
+        conditioning where it can actually subtract.
         """
 
         lines: list[str] = []
@@ -236,11 +243,22 @@ class RenderBrief:
             lines.append("MAY INCLUDE: " + "; ".join(self.optional_elements))
         if self.revision_note:
             lines.append(f"THIS REVISION CHANGES: {self.revision_note}")
-        if self.negative_constraints:
-            lines.append("DO NOT INCLUDE:")
-            lines.extend(f"  - {item}" for item in self.negative_constraints)
         text = "\n".join(lines)
         return text[:MAX_BRIEF_CHARACTERS]
+
+    def render_negative(self) -> str:
+        """What the image model should steer away from.
+
+        Kept separate from ``render`` so it reaches negative conditioning
+        instead of being drawn. A backend without negative conditioning simply
+        ignores it, which is honest: the constraint was never going to be
+        honoured there, and putting it in the positive prompt made it worse
+        rather than merely ineffective.
+        """
+
+        if not self.negative_constraints:
+            return ""
+        return ", ".join(self.negative_constraints)[:MAX_BRIEF_CHARACTERS]
 
 
 

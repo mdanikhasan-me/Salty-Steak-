@@ -1490,6 +1490,9 @@ class ChatService:
         prompt = str((proposal.get("arguments") or {}).get("prompt") or "").strip()
         if not prompt or len(prompt) > 4_000:
             raise RuntimeError("The persisted image prompt is invalid")
+        negative_prompt = str(
+            (proposal.get("arguments") or {}).get("negative_prompt") or ""
+        ).strip()[:4_000]
         if (
             self.image_generation_runtime is None
             or not self.image_generation_model
@@ -1528,6 +1531,7 @@ class ChatService:
                 assistant_message_id=checked_message_id,
                 proposal_id=checked_proposal_id,
                 prompt=prompt,
+                negative_prompt=negative_prompt,
                 width=width,
                 height=height,
                 steps=steps,
@@ -2047,6 +2051,7 @@ class ChatService:
         steps: int,
         seed: int,
         context: OperationContext,
+        negative_prompt: str = "",
     ) -> dict[str, Any]:
         runtime = self.image_generation_runtime
         artifact_root = self.image_artifact_root
@@ -2098,6 +2103,7 @@ class ChatService:
                     result = runtime.generate(
                         SteakGenRequest(
                             prompt=prompt,
+                            negative_prompt=negative_prompt,
                             output_path=str(staging),
                             width=width,
                             height=height,
@@ -3234,7 +3240,12 @@ class ChatService:
             "kind": IMAGE_ACTION,
             "title": "Create an image",
             "summary": str(job.get("subject") or "")[:4_000],
-            "arguments": {"prompt": rendered[:4_000]},
+            "arguments": {
+                "prompt": rendered[:4_000],
+
+
+                "negative_prompt": str(turn.details.get("render_negative") or "")[:4_000],
+            },
             "state": "pending_review" if ready else "blocked_runtime_unavailable",
             "requires_confirmation": True,
             "execution_allowed": False,

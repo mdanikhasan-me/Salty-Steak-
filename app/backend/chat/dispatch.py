@@ -303,6 +303,7 @@ class TurnDispatcher:
             details={
                 "image_job": job.to_dict(),
                 "render_brief": job.brief.render(),
+                "render_negative": job.brief.render_negative(),
                 "job_id": job.job_id,
                 "revision": job.revision,
                 "parent_job_id": job.parent_job_id,
