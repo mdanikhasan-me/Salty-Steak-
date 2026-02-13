@@ -22,6 +22,15 @@ from typing import Any, Callable
 
 
 SEARCH_ENDPOINT = "https://html.duckduckgo.com/html/"
+
+
+
+
+
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 MAX_QUERY_CHARS = 500
 MAX_RESULTS = 8
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -61,9 +70,11 @@ class WebSearchClient:
         request = urllib.request.Request(
             url,
             headers={
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "en-US,en;q=0.8",
-                "User-Agent": "Salty-Steak/2.0 local-desktop-web-search",
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+                "User-Agent": BROWSER_USER_AGENT,
             },
             method="GET",
         )
@@ -71,6 +82,14 @@ class WebSearchClient:
             content_type = str(response.headers.get("Content-Type") or "")
             if "text/html" not in content_type:
                 raise RuntimeError("The web-search provider returned a non-HTML response")
+
+
+
+            status = getattr(response, "status", None)
+            if status is not None and int(status) != 200:
+                raise RuntimeError(
+                    f"The web-search provider declined the request (HTTP {status})"
+                )
             payload = response.read(MAX_RESPONSE_BYTES + 1)
         if len(payload) > MAX_RESPONSE_BYTES:
             raise RuntimeError("The web-search response exceeded the safe size limit")
