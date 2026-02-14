@@ -235,17 +235,25 @@ ARGUMENT_ALIASES: dict[str, dict[str, str]] = {
     },
     WINDOW_CONTROL_CAPABILITY: {
         "name": "title",
+
+
+
+        "operation": "action",
+        "target": "title",
         "window": "title",
         "window_title": "title",
     },
     BROWSER_CAPABILITY: {
         "address": "url",
         "link": "url",
+        "operation": "command",
         "page": "url",
+        "target": "url",
     },
     INPUT_CONTROL_CAPABILITY: {
         "content": "text",
         "keys": "combo",
+        "operation": "action",
         "value": "text",
     },
 }

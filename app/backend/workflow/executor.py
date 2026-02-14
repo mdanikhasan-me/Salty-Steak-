@@ -357,10 +357,18 @@ class Executor:
                     decision.reason, reason="user_approval", node_id=node.node_id
                 )
 
+
+
+
+
+
+        from ..automation.routing import resolve_execution
+
+        route = resolve_execution(node.capability, arguments, [node.capability])
         result = self.broker.invoke(
             {
-                "capability": node.capability,
-                "arguments": dict(arguments),
+                "capability": route.capability,
+                "arguments": dict(route.arguments),
                 "user_confirmed": True,
                 "authority_mode": self.authority_mode,
             }
