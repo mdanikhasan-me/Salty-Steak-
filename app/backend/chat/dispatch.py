@@ -71,6 +71,15 @@ PLAN_SHAPE = (
 )
 
 
+
+
+
+PLAN_CAPABILITY_SHAPE = (
+    '\nAn action step names a capability instead: {"node":"open","capability":'
+    '"application.launch","arguments":{"target":"notepad"}}'
+)
+
+
 def build_turn_instruction(
     *,
     image_available: bool,
@@ -102,6 +111,8 @@ def build_turn_instruction(
     text = DECISION_INSTRUCTION.format(jobs=jobs)
     if PLAN in offered:
         text += PLAN_SHAPE
+        if capabilities:
+            text += PLAN_CAPABILITY_SHAPE
     if image_available:
         text += IMAGE_SHAPE
     if capabilities:

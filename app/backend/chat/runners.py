@@ -35,6 +35,47 @@ class PlanRejected(ValueError):
     """Raised when a model-produced plan cannot be trusted to run."""
 
 
+def _nodes_in_the_right_slots(
+    payload: Mapping[str, Any],
+    capabilities: Sequence[str],
+) -> Mapping[str, Any]:
+    """Put a granted capability the model wrote as a connector back in its slot.
+
+    Asked to open Notepad, focus its window and capture the screen, the live
+    model produced exactly the right three steps and wrote each one as
+    ``"connector": "application.launch"``. The plan was rejected whole for
+    naming a service that is not connected, which was true and useless: it had
+    named a capability that *is* granted, in the wrong field, because the one
+    worked example in the routing instruction is a connector node.
+
+    A name that is a granted capability can only mean the capability — the two
+    namespaces do not overlap — so it is moved rather than refused. Anything
+    unrecognised is left exactly where the model put it and still fails
+    validation.
+    """
+
+    granted = set(capabilities)
+    nodes = payload.get("nodes")
+    if not granted or not isinstance(nodes, list):
+        return payload
+    moved: list[Any] = []
+    for entry in nodes:
+        if (
+            isinstance(entry, Mapping)
+            and not entry.get("capability")
+            and str(entry.get("connector") or "") in granted
+        ):
+            corrected = dict(entry)
+            corrected["capability"] = corrected.pop("connector")
+
+
+            corrected.pop("operation", None)
+            moved.append(corrected)
+        else:
+            moved.append(entry)
+    return {**payload, "nodes": moved}
+
+
 def validate_plan(
     payload: Mapping[str, Any],
     *,
@@ -52,7 +93,9 @@ def validate_plan(
     """
 
     try:
-        plan = build_plan(payload, goal=goal)
+        plan = build_plan(
+            _nodes_in_the_right_slots(payload, capabilities), goal=goal
+        )
     except PlanError as error:
         raise PlanRejected(str(error)) from error
 
