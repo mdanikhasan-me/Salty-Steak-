@@ -341,6 +341,15 @@ class LiveRunners:
             executor=executor,
             task=self.task,
             replan=self._replan if self.generate is not None else None,
+
+
+
+            validate=lambda payload, plan_goal: validate_plan(
+                payload,
+                goal=plan_goal,
+                capabilities=self.capabilities,
+                connectors=connectors,
+            ),
         )
         result = engine.run(plan)
         return {

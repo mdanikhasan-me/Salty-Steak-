@@ -111,12 +111,16 @@ class WorkflowEngine:
         executor: Executor,
         task: TaskContext,
         replan: Callable[[Plan, NodeOutcome], Mapping[str, Any] | None] | None = None,
+        validate: Callable[[Mapping[str, Any], str], Plan] | None = None,
         checkpoint_path: str | Path | None = None,
         max_replans: int = MAX_REPLANS,
     ) -> None:
         self.executor = executor
         self.task = task
         self.replan = replan
+
+
+        self.validate = validate
         self.checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
         self.max_replans = max(0, int(max_replans))
         self.replans = 0
@@ -264,9 +268,18 @@ class WorkflowEngine:
         if not revised:
             return self._finish(plan, outcomes)
 
+
+
+
+
+
         try:
-            replacement = build_plan(revised, goal=plan.goal)
-        except PlanError as error:
+            replacement = (
+                self.validate(revised, plan.goal)
+                if self.validate is not None
+                else build_plan(revised, goal=plan.goal)
+            )
+        except (PlanError, ValueError) as error:
             self.task.record_event("replan_rejected", error=str(error)[:200])
             return self._finish(plan, outcomes)
 
