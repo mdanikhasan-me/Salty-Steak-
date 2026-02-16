@@ -641,8 +641,18 @@ internal sealed class MainWindow : Form
         Name = "SaltyPotatoMainWindow";
         AccessibleName = "Salty Steak";
         StartPosition = FormStartPosition.CenterScreen;
+
+
+
+
+
+
+        AutoScaleDimensions = new SizeF(96f, 96f);
+        AutoScaleMode = AutoScaleMode.Dpi;
         ClientSize = new Size(1360, 860);
-        MinimumSize = new Size(1024, 700);
+
+
+        MinimumSize = new Size(960, 640);
         BackColor = Color.FromArgb(29, 29, 28);
 
         var iconPath = Path.Combine(
