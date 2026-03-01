@@ -1690,7 +1690,14 @@ class AutomationBroker:
     def _only_fields(request: Mapping[str, Any], allowed: set[str]) -> None:
         unknown = sorted(str(key) for key in request if key not in allowed)
         if unknown:
-            raise ValueError(f"Unknown automation fields: {unknown}")
+
+
+
+
+            raise ValueError(
+                f"Unknown automation fields: {unknown}. "
+                f"This capability accepts: {sorted(allowed)}"
+            )
 
     def _require_open(self) -> None:
         if self._closed:

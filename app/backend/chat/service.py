@@ -3216,6 +3216,111 @@ class ChatService:
             message_id=message_id,
         )
 
+    @staticmethod
+    def _capture_path_in(turn) -> str | None:
+        """The newest screen-capture artifact a finished turn produced."""
+
+        details = dict(getattr(turn, "details", {}) or {})
+        found: list[str] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, Mapping):
+                artifact = value.get("artifact")
+                if isinstance(artifact, Mapping) and artifact.get("path"):
+                    found.append(str(artifact["path"]))
+                for item in value.values():
+                    collect(item)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+
+        collect(details)
+        return found[-1] if found else None
+
+    def _publish_capture(
+        self,
+        turn,
+        *,
+        conversation_id: str,
+        operation_id: str,
+    ) -> dict[str, Any] | None:
+        """Make a screen capture viewable in the transcript.
+
+        The broker writes an uncompressed BMP into its own artifact root, which
+        the interface cannot load and the user cannot reach. Answering "show me
+        the screen" with a file path is not showing anyone anything, so the
+        capture is converted once and registered as a chat artifact through the
+        same table and the same viewer a generated image uses.
+        """
+
+        source = self._capture_path_in(turn)
+        if not source:
+            return None
+        image_path = Path(source)
+        if not image_path.is_file():
+            return None
+        try:
+            from PIL import Image
+        except Exception:
+            return None
+
+        artifact_root = self.image_artifact_root
+        if artifact_root is None:
+            return None
+        artifact_id = new_id()
+        relative = f"{conversation_id}/{artifact_id}.png"
+        destination = artifact_root / conversation_id / f"{artifact_id}.png"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with Image.open(image_path) as opened:
+                converted = opened.convert("RGB")
+                width, height = converted.size
+                converted.save(destination, format="PNG", optimize=True)
+        except Exception:
+            return None
+
+        payload = destination.read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO chat_artifacts(
+                    id, conversation_id, message_id, operation_id, proposal_id,
+                    kind, relative_path, media_type, size_bytes, sha256,
+                    width, height, provenance_json, created_at
+                ) VALUES (?, ?, NULL, ?, NULL, 'image', ?, 'image/png', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact_id,
+                    conversation_id,
+                    operation_id,
+                    relative,
+                    len(payload),
+                    digest,
+                    width,
+                    height,
+                    json_text(
+                        {
+                            "schema": "salty-steak-capture-provenance-v1",
+                            "source": "screen.capture",
+                            "source_path": str(image_path),
+                        }
+                    ),
+                    utc_now(),
+                ),
+            )
+        return {
+            "schema": "salty-steak-generated-image-v1",
+            "id": artifact_id,
+            "sha256": digest,
+            "media_type": "image/png",
+            "size_bytes": len(payload),
+            "width": width,
+            "height": height,
+            "prompt": "Screen capture",
+            "model_name": "Screen capture",
+        }
+
     def _image_proposal_from_turn(self, turn) -> dict[str, Any] | None:
         """Turn a prepared image job into the reviewable proposal shape.
 
@@ -3594,6 +3699,17 @@ class ChatService:
         if turn is not None:
             assistant_content = turn.content or response.text
             details["orchestration"] = turn.to_dict()
+
+
+
+            shown = self._publish_capture(
+                turn,
+                conversation_id=conversation_id,
+                operation_id=context.operation_id,
+            )
+            if shown is not None:
+                details["generated_image"] = shown
+                assistant_content = turn.content or "Here is the screen."
             proposal = self._image_proposal_from_turn(turn)
             if proposal is not None:
 

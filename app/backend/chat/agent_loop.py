@@ -95,9 +95,13 @@ TOOL_DESCRIPTIONS = {
         'browser.control — Read and operate web pages structurally in a browser '
         'session Salty Steak owns. Use this for anything on the web: it reads '
         'the page as elements rather than pixels.\n'
+        '  This session is OFF-SCREEN: the user cannot see it. Call '
+        '"show_window" to bring it onto their monitor whenever the point of the '
+        'task is for them to watch or use the page, and whenever they ask to '
+        'see something. Playing a video they cannot see is not playing it.\n'
         '  Arguments: {"command": "open_url"|"read_page"|"query"|"get_element"|'
         '"click"|"set_value"|"select"|"submit"|"scroll"|"back"|"forward"|'
-        '"reload"|"get_page", ...}\n'
+        '"reload"|"get_page"|"show_window"|"hide_window", ...}\n'
         '  open_url takes "url". query finds elements by "role" (button, link, '
         'textbox, checkbox), "name", "text", "href", or "editable": true, and '
         'returns an "element" handle for each match. Pass that handle to click '
@@ -133,6 +137,9 @@ AGENT_RULES_BY_CAPABILITY_EXTRA = {
         "screenshot.\n"
         "- If query reports ambiguous with several matches, refine it with more "
         "of the name or surrounding text rather than picking one.\n"
+        "- The browser session is off-screen. If the user asked to watch, play, "
+        "read or see anything, call show_window so it is actually in front of "
+        "them, and say that you have done so.\n"
     ),
     UI_AUTOMATION_CAPABILITY: (
         "- To press a button or fill a field inside an application, find it "
@@ -635,11 +642,27 @@ class AgentLoop:
                 {"role": "user", "content": json.dumps(message, sort_keys=True)}
             )
 
-        return self._finish(
-            "exhausted",
-            "I reached the step limit for this task. Here is what I completed: "
-            + "; ".join(step["reason"] for step in self.steps if step.get("reason")),
-        )
+
+
+
+
+
+        done = [
+            str(step.get("reason") or step.get("action") or "")
+            for step in self.steps
+            if step.get("status") == "succeeded" and step.get("action") != "respond"
+        ]
+        if done:
+            summary = (
+                "I ran out of steps before finishing this, so treat it as "
+                "incomplete. What did run: " + "; ".join(done)
+            )
+        else:
+            summary = (
+                "I ran out of steps before finishing this, and nothing I tried "
+                "succeeded."
+            )
+        return self._finish("exhausted", summary)
 
     @staticmethod
     def _compact_screenshots(transcript: list[dict[str, str]]) -> None:
