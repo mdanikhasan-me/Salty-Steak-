@@ -94,6 +94,78 @@ MAX_LAUNCH_WAIT_MS = 10_000
 MAX_TARGET_CHARACTERS = 2_048
 
 
+
+
+
+
+
+
+CAPABILITY_FIELDS: dict[str, frozenset[str]] = {
+    TERMINAL_CAPABILITY: frozenset(
+        {"argv", "working_directory", "timeout_seconds"}
+    ),
+    SCREEN_CAPTURE_CAPABILITY: frozenset({"screen"}),
+    INPUT_CONTROL_CAPABILITY: frozenset(
+        {
+            "action",
+            "x",
+            "y",
+            "button",
+            "double",
+            "clicks",
+            "key",
+            "text",
+            "combo",
+            "post_action_delay_ms",
+        }
+    ),
+    APPLICATION_LAUNCH_CAPABILITY: frozenset({"target", "arguments", "wait_ms"}),
+    WINDOW_CONTROL_CAPABILITY: frozenset({"action", "title", "handle"}),
+    BROWSER_CAPABILITY: frozenset(
+        {
+            "command",
+            "url",
+            "element",
+            "role",
+            "name",
+            "text",
+            "href",
+            "selector",
+            "value",
+            "exact",
+            "editable",
+            "visible",
+            "enabled",
+            "limit",
+            "text_limit",
+        }
+    ),
+    UI_AUTOMATION_CAPABILITY: frozenset(
+        {
+            "command",
+            "window",
+            "process_id",
+            "window_handle",
+            "element",
+            "name",
+            "automation_id",
+            "control_type",
+            "class_name",
+            "pattern",
+            "exact",
+            "enabled_only",
+            "visible_only",
+            "limit",
+            "depth",
+            "max_nodes",
+            "value",
+            "amount",
+            "horizontal",
+        }
+    ),
+}
+
+
 class AutomationBroker:
     """Persist explicit grants and execute only the two local capabilities."""
 
@@ -683,7 +755,7 @@ class AutomationBroker:
         constraints: Mapping[str, Any],
         authority_mode: str = "ask_every_time",
     ) -> dict[str, Any]:
-        self._only_fields(arguments, {"argv", "working_directory", "timeout_seconds"})
+        self._only_fields(arguments, CAPABILITY_FIELDS[TERMINAL_CAPABILITY])
         argv = self._argv(arguments.get("argv"))
         allowed_root = self._project_directory(constraints["working_directory_root"])
 
@@ -854,7 +926,7 @@ class AutomationBroker:
         audit_id: str,
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
-        self._only_fields(arguments, {"screen"})
+        self._only_fields(arguments, CAPABILITY_FIELDS[SCREEN_CAPTURE_CAPABILITY])
         screen = arguments.get("screen", "primary")
         if screen != "primary":
             raise ValueError("Screen capture supports only screen='primary'")
@@ -922,21 +994,7 @@ class AutomationBroker:
     ) -> dict[str, Any]:
         """Inject one reviewed mouse or keyboard action into the local session."""
 
-        self._only_fields(
-            arguments,
-            {
-                "action",
-                "x",
-                "y",
-                "button",
-                "double",
-                "clicks",
-                "key",
-                "text",
-                "combo",
-                "post_action_delay_ms",
-            },
-        )
+        self._only_fields(arguments, CAPABILITY_FIELDS[INPUT_CONTROL_CAPABILITY])
         action = str(arguments.get("action") or "").strip().casefold()
         delay_ms = self._input_delay(arguments.get("post_action_delay_ms"))
         started = time.monotonic()
@@ -1090,26 +1148,7 @@ class AutomationBroker:
         opens http and https addresses.
         """
 
-        self._only_fields(
-            arguments,
-            {
-                "command",
-                "url",
-                "element",
-                "role",
-                "name",
-                "text",
-                "href",
-                "selector",
-                "value",
-                "exact",
-                "editable",
-                "visible",
-                "enabled",
-                "limit",
-                "text_limit",
-            },
-        )
+        self._only_fields(arguments, CAPABILITY_FIELDS[BROWSER_CAPABILITY])
         if self._browser_client is None:
             raise RuntimeError(
                 "The browser host is not available in this build, so web pages "
@@ -1177,30 +1216,7 @@ class AutomationBroker:
         thing.
         """
 
-        self._only_fields(
-            arguments,
-            {
-                "command",
-                "window",
-                "process_id",
-                "window_handle",
-                "element",
-                "name",
-                "automation_id",
-                "control_type",
-                "class_name",
-                "pattern",
-                "exact",
-                "enabled_only",
-                "visible_only",
-                "limit",
-                "depth",
-                "max_nodes",
-                "value",
-                "amount",
-                "horizontal",
-            },
-        )
+        self._only_fields(arguments, CAPABILITY_FIELDS[UI_AUTOMATION_CAPABILITY])
         if self._uia_client is None:
             raise RuntimeError(
                 "The UI Automation host is not available in this build, so "
@@ -1272,7 +1288,7 @@ class AutomationBroker:
         look.
         """
 
-        self._only_fields(arguments, {"action", "title", "handle"})
+        self._only_fields(arguments, CAPABILITY_FIELDS[WINDOW_CONTROL_CAPABILITY])
         action = str(arguments.get("action") or "list").strip().casefold()
         if action not in {"list", "focus", "close"}:
             raise ValueError("Window action must be list, focus, or close")
@@ -1347,7 +1363,7 @@ class AutomationBroker:
     ) -> dict[str, Any]:
         """Open an installed application, a link, or a file with its handler."""
 
-        self._only_fields(arguments, {"target", "arguments", "wait_ms"})
+        self._only_fields(arguments, CAPABILITY_FIELDS[APPLICATION_LAUNCH_CAPABILITY])
         target, resolution = _resolve_launch_target(arguments.get("target"))
         launch_arguments = arguments.get("arguments")
         if launch_arguments is not None:

@@ -235,6 +235,10 @@ class LiveRunners:
         anything to verify beyond the call's own result.
         """
 
+        from ..automation.invocation import (
+            CapabilityCallFailed,
+            invoke_capability,
+        )
         from ..automation.routing import resolve_execution
         from .agent_loop import AgentLoop
 
@@ -246,15 +250,15 @@ class LiveRunners:
             if self.task is not None:
                 self.task.note_tool_call(route.capability, route.tier_name)
             try:
-                result = self.broker.invoke(
-                    {
-                        "capability": route.capability,
-                        "arguments": dict(route.arguments),
-                        "user_confirmed": True,
-                        "authority_mode": self.authority_mode,
-                    }
+                result = invoke_capability(
+                    self.broker,
+                    capability,
+                    arguments,
+                    authority_mode=self.authority_mode,
+                    granted=self.capabilities,
+                    repair=self._repair_arguments,
                 )
-            except (PermissionError, TimeoutError, OSError, RuntimeError, ValueError) as error:
+            except CapabilityCallFailed as error:
 
 
 
@@ -359,6 +363,40 @@ class LiveRunners:
             "replans": result.replans,
             "waiting_for": result.waiting_for,
         }
+
+    def _repair_arguments(self, brief: str) -> Mapping[str, Any] | None:
+        """One correction, from the model, given the capability's real contract.
+
+        The brief is machine-readable on purpose: what was rejected, why, and
+        the exact field names the capability accepts. A model that is told only
+        "unknown field" can do nothing but guess again.
+        """
+
+        if self.generate is None:
+            return None
+        reply = self.generate(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "That tool call was rejected. Reply with one JSON "
+                        "object holding only the corrected arguments — no "
+                        "prose, no capability name, no explanation."
+                    ),
+                },
+                {"role": "user", "content": brief},
+            ]
+        )
+        from .actions import _whole_json_object
+
+        parsed = _whole_json_object(strip_reasoning(str(reply)))
+        if not isinstance(parsed, Mapping):
+            return None
+
+        inner = parsed.get("arguments")
+        if isinstance(inner, Mapping):
+            return inner
+        return parsed
 
     def _replan(self, plan: Plan, outcome: Any) -> Mapping[str, Any] | None:
         """Ask Base Steak — the same model, not a planner — to repair a plan."""

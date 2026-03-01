@@ -153,6 +153,32 @@ class TurnOutcome:
         }
 
 
+def looks_like_a_decision_attempt(reply: str) -> bool:
+    """True when a reply was trying to be a decision object and failed.
+
+    A 9B model writes structurally invalid JSON sometimes — a missing brace
+    part-way through a plan is the one seen live. `read_decision` correctly
+    refuses to parse it, and the raw braces were then shown to the user as the
+    assistant's answer. Recognising the attempt is what lets the turn ask for
+    one correction instead of printing machine output at a person.
+    """
+
+    text = strip_reasoning(str(reply or "")).strip()
+    if not text.startswith("{"):
+        return False
+    if read_decision(reply) is not None:
+        return False
+    return '"action"' in text or '"nodes"' in text or '"capability"' in text
+
+
+DECISION_REPAIR_INSTRUCTION = (
+    "Your previous reply was meant to be one JSON object but it does not "
+    "parse. Send the corrected object and nothing else — no prose, no code "
+    "fence. If you did not mean to return an object, answer the user in plain "
+    "words instead."
+)
+
+
 def read_decision(reply: str) -> dict[str, Any] | None:
     """Find a routing decision in a reply, or conclude there isn't one.
 
@@ -167,6 +193,8 @@ def read_decision(reply: str) -> dict[str, Any] | None:
     try:
         decision = parse_decision(reply)
     except OrchestrationError:
+        return None
+    if not isinstance(decision, Mapping):
         return None
     if decision.get("action") == RESPOND and not decision.get("answer"):
 

@@ -230,6 +230,9 @@ class ChatService:
         self.image_artifact_root = (
             Path(image_artifact_root).resolve() if image_artifact_root else None
         )
+
+
+        self._pending_capture: dict[str, Any] | None = None
         self.automation = automation
 
 
@@ -3165,10 +3168,44 @@ class ChatService:
     ):
         """Route one model reply. Returns None when it was simply an answer."""
 
-        from .dispatch import TurnDispatcher, read_decision
+        from .dispatch import (
+            DECISION_REPAIR_INSTRUCTION,
+            TurnDispatcher,
+            looks_like_a_decision_attempt,
+            read_decision,
+        )
         from .orchestrator import RESPOND, conversation_request
 
         decision = read_decision(reply_text)
+        if decision is None and looks_like_a_decision_attempt(reply_text):
+
+
+
+            try:
+                corrected = self._agent_generate(
+                    [
+                        {"role": "system", "content": DECISION_REPAIR_INSTRUCTION},
+                        {"role": "user", "content": str(reply_text)[:4_000]},
+                    ],
+                    context=context,
+                    generation_settings=generation_settings,
+                )
+            except Exception:
+                corrected = ""
+            decision = read_decision(corrected)
+            if decision is None:
+
+                from .dispatch import TurnOutcome
+
+                return TurnOutcome(
+                    "respond",
+                    content=(
+                        "I started planning that and my own plan came out "
+                        "malformed, so I stopped rather than run something I "
+                        "could not read. Ask me again and I will retry."
+                    ),
+                    details={"decision_unparsable": True},
+                )
         if decision is None or decision.get("action") == RESPOND:
             return None
 
@@ -3237,12 +3274,52 @@ class ChatService:
         collect(details)
         return found[-1] if found else None
 
+    def _register_pending_capture(self, connection) -> None:
+        """Write the capture's artifact row beside the message that owns it."""
+
+        pending = getattr(self, "_pending_capture", None)
+        if not pending:
+            return
+        self._pending_capture = None
+        connection.execute(
+            """
+            INSERT INTO chat_artifacts(
+                id, conversation_id, message_id, operation_id, proposal_id,
+                kind, relative_path, media_type, size_bytes, sha256,
+                width, height, provenance_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, 'image', ?, 'image/png', ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pending["artifact_id"],
+                pending["conversation_id"],
+                pending["message_id"],
+                pending["operation_id"],
+
+
+                f"capture-{pending['artifact_id']}",
+                pending["relative"],
+                pending["size_bytes"],
+                pending["sha256"],
+                pending["width"],
+                pending["height"],
+                json_text(
+                    {
+                        "schema": "salty-steak-capture-provenance-v1",
+                        "source": "screen.capture",
+                        "source_path": pending["source_path"],
+                    }
+                ),
+                utc_now(),
+            ),
+        )
+
     def _publish_capture(
         self,
         turn,
         *,
         conversation_id: str,
         operation_id: str,
+        message_id: str,
     ) -> dict[str, Any] | None:
         """Make a screen capture viewable in the transcript.
 
@@ -3281,34 +3358,21 @@ class ChatService:
 
         payload = destination.read_bytes()
         digest = hashlib.sha256(payload).hexdigest()
-        with self.database.transaction() as connection:
-            connection.execute(
-                """
-                INSERT INTO chat_artifacts(
-                    id, conversation_id, message_id, operation_id, proposal_id,
-                    kind, relative_path, media_type, size_bytes, sha256,
-                    width, height, provenance_json, created_at
-                ) VALUES (?, ?, NULL, ?, NULL, 'image', ?, 'image/png', ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    artifact_id,
-                    conversation_id,
-                    operation_id,
-                    relative,
-                    len(payload),
-                    digest,
-                    width,
-                    height,
-                    json_text(
-                        {
-                            "schema": "salty-steak-capture-provenance-v1",
-                            "source": "screen.capture",
-                            "source_path": str(image_path),
-                        }
-                    ),
-                    utc_now(),
-                ),
-            )
+
+
+
+        self._pending_capture = {
+            "artifact_id": artifact_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "operation_id": operation_id,
+            "relative": relative,
+            "size_bytes": len(payload),
+            "sha256": digest,
+            "width": width,
+            "height": height,
+            "source_path": str(image_path),
+        }
         return {
             "schema": "salty-steak-generated-image-v1",
             "id": artifact_id,
@@ -3686,6 +3750,9 @@ class ChatService:
 
 
 
+
+
+        assistant_id = new_id()
         turn = self._dispatch_turn(
             reply_text=response.text,
             request=search_query,
@@ -3706,6 +3773,7 @@ class ChatService:
                 turn,
                 conversation_id=conversation_id,
                 operation_id=context.operation_id,
+                message_id=assistant_id,
             )
             if shown is not None:
                 details["generated_image"] = shown
@@ -3743,7 +3811,6 @@ class ChatService:
                 "execution_requested": False,
                 "execution_performed": False,
             }
-        assistant_id = new_id()
         finished = utc_now()
         with self.database.transaction() as connection:
             if active_target_kind == "model_bundle":
@@ -3836,6 +3903,7 @@ class ChatService:
                     finished,
                 ),
             )
+            self._register_pending_capture(connection)
             if previous_response_id:
                 previous = connection.execute(
                     "SELECT technical_details_json FROM messages WHERE id = ?",
