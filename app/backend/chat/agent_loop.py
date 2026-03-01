@@ -296,6 +296,52 @@ def parse_agent_action(text: str, allowed: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def effect_key(capability: str, arguments: Mapping[str, Any]) -> str | None:
+    """What a call would *achieve*, independent of which rung achieves it.
+
+    Exact-fingerprint stagnation only catches a call repeated verbatim. The
+    live failure was subtler and worse: `application.launch` to youtube.com,
+    then `browser.control open_url` to youtube.com, then `application.launch`
+    again — three different calls, one effect, already true after the first.
+
+    Normalising the effect is deliberately narrow. It maps a destination to the
+    place it reaches, not a request to an intent; the model still decides what
+    it wants and why. A call whose effect cannot be stated plainly returns None
+    and is never suppressed.
+    """
+
+    def host_of(value: object) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        lowered = text.casefold()
+        if lowered.startswith(("http://", "https://")):
+            from urllib.parse import urlsplit
+
+            host = (urlsplit(lowered).hostname or "").removeprefix("www.")
+            path = urlsplit(lowered).path.rstrip("/")
+            return f"visit:{host}{path}" if host else None
+        return None
+
+    if capability == "application.launch":
+        target = arguments.get("target")
+        return host_of(target) or (
+            f"launch:{str(target).strip().casefold()}" if target else None
+        )
+    if capability == "browser.control":
+        command = str(arguments.get("command") or "").casefold()
+        if command in {"open_url", "navigate"}:
+            return host_of(arguments.get("url"))
+        if command == "show_window":
+            return "browser:visible"
+    if capability == "window.control":
+        action = str(arguments.get("action") or "").casefold()
+        title = str(arguments.get("title") or "").strip().casefold()
+        if action == "focus" and title:
+            return f"focus:{title}"
+    return None
+
+
 def step_fingerprint(
     capability: str,
     arguments: Mapping[str, Any],
@@ -433,6 +479,8 @@ class AgentLoop:
 
         self._attempts: dict[str, int] = {}
 
+        self._effects: set[str] = set()
+
     def _recall(self, task: str) -> str:
         """Remembered context for this task, or nothing at all.
 
@@ -511,6 +559,36 @@ class AgentLoop:
 
 
 
+            achieved = effect_key(action["action"], action["arguments"])
+            if achieved is not None and achieved in self._effects:
+                self.task.metrics.stagnation_breaks += 1
+                self.task.record_event("already_satisfied", effect=achieved)
+                self._record(
+                    iteration,
+                    action,
+                    {"status": "already_satisfied", "effect": achieved},
+                )
+                transcript.append(
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "status": "already_satisfied",
+                                "effect": achieved,
+                                "note": (
+                                    "This is already true from an earlier step. "
+                                    "Do something that moves the task forward, "
+                                    "or respond if the goal is met."
+                                ),
+                            }
+                        ),
+                    }
+                )
+                continue
+
+
+
+
 
             decision = self.policy.evaluate(action["action"], action["arguments"])
             if decision.outcome == DENY:
@@ -585,6 +663,13 @@ class AgentLoop:
             self.task.world_state.absorb(route.capability, result)
 
 
+
+
+
+            if str(observation.get("status") or "") == "succeeded":
+                landed = effect_key(route.capability, route.arguments)
+                if landed is not None:
+                    self._effects.add(landed)
 
             fingerprint = step_fingerprint(
                 route.capability, route.arguments, observation

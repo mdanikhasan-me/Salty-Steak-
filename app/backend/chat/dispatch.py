@@ -120,10 +120,21 @@ def build_turn_instruction(
     if connectors:
         text += "\nServices: " + ", ".join(connectors)
     if agent_mode and capabilities:
+
+
+
+
+
         text += (
             "\nAgent mode is on: the user asked you to do this on their computer. "
             "If an action above can do it, return the JSON object and do it. Do "
             "not reply with instructions for doing it by hand."
+            "\nTwo exceptions, and only these. If you cannot tell *what* the "
+            "request refers to, answer asking which thing they mean — never act "
+            "on a guess. If the request would delete, overwrite or send "
+            "something, answer describing exactly what you would do and wait to "
+            "be told to go ahead. If no action above can achieve the goal, say "
+            "so plainly instead of trying the nearest one."
         )
     return text
 
@@ -173,9 +184,11 @@ def looks_like_a_decision_attempt(reply: str) -> bool:
 
 DECISION_REPAIR_INSTRUCTION = (
     "Your previous reply was meant to be one JSON object but it does not "
-    "parse. Send the corrected object and nothing else — no prose, no code "
-    "fence. If you did not mean to return an object, answer the user in plain "
-    "words instead."
+    "parse — check that every brace and bracket is closed. Send the corrected "
+    "object and nothing else: no prose, no code fence. A plan looks like "
+    '{"action":"plan","nodes":[{"node":"a","capability":"...","arguments":{}}]}. '
+    "If you did not mean to return an object, answer the user in plain words "
+    "instead."
 )
 
 
