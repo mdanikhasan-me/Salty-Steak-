@@ -205,6 +205,8 @@ class LiveRunners:
         on_step: Callable[[Mapping[str, Any]], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
         describe_screenshot: Callable[[str], str] | None = None,
+        continue_until_satisfied: bool = False,
+        follow_through_steps: int = 10,
     ) -> None:
         self.broker = broker
         self.connectors = connectors
@@ -223,6 +225,13 @@ class LiveRunners:
         self.on_step = on_step
         self.should_stop = should_stop
         self.describe_screenshot = describe_screenshot
+
+
+
+        self.continue_until_satisfied = continue_until_satisfied
+
+
+        self.follow_through_steps = max(1, int(follow_through_steps))
 
 
 
@@ -274,6 +283,16 @@ class LiveRunners:
                 }
             if self.task is not None and getattr(self.task, "world_state", None):
                 self.task.world_state.absorb(route.capability, result or {})
+
+
+
+
+
+
+
+            if self.continue_until_satisfied and self.generate is not None:
+                return self._continue_from(decision, route, result or {}, request)
+
             return {
                 "answer": (
                     str(decision.get("reason") or "").strip()
@@ -362,6 +381,60 @@ class LiveRunners:
             "plan": result.plan.to_dict(),
             "replans": result.replans,
             "waiting_for": result.waiting_for,
+        }
+
+    def _continue_from(
+        self,
+        decision: Mapping[str, Any],
+        route: Any,
+        result: Mapping[str, Any],
+        request: str,
+    ) -> dict[str, Any]:
+        """Carry on from a completed first action until the goal is satisfied.
+
+        The agent loop is the thing that already knows how to observe, decide
+        and stop; this only gives it a running start so the work the decision
+        layer already did is not repeated. The loop ends the moment the model
+        responds, so a genuinely one-step goal costs one extra generation
+        rather than a whole re-plan.
+        """
+
+        from .agent_loop import AgentLoop
+
+        opening = {
+            "completed_step": {
+                "action": route.capability,
+                "arguments": dict(route.arguments),
+                "observation": dict(result),
+            },
+            "goal": request,
+            "note": (
+                "This already ran. If the goal is now satisfied, respond. "
+                "Otherwise continue from here."
+            ),
+        }
+        outcome = AgentLoop(
+            broker=self.broker,
+            generate=self.generate,
+            capabilities=self.capabilities,
+            authority_mode=self.authority_mode,
+            approve=self.approve,
+            task=self.task,
+            memory=self.memory,
+            on_step=self.on_step,
+            should_stop=self.should_stop,
+            describe_screenshot=self.describe_screenshot,
+            max_iterations=self.follow_through_steps,
+        ).run(request, opening=json.dumps(opening, default=str))
+        steps = list(outcome.get("steps") or [])
+        return {
+            "answer": str(outcome.get("answer") or "")
+            or _describe_effect(route, result),
+            "capability": route.capability,
+            "tier": route.tier_name,
+            "status": outcome.get("state") or "succeeded",
+            "result": dict(result),
+            "steps": steps,
         }
 
     def _repair_arguments(self, brief: str) -> Mapping[str, Any] | None:

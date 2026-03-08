@@ -495,7 +495,7 @@ class AgentLoop:
         except Exception:
             return ""
 
-    def run(self, instruction: str) -> dict[str, Any]:
+    def run(self, instruction: str, *, opening: str = "") -> dict[str, Any]:
         task = str(instruction or "").strip()
         if not task or len(task) > MAX_INSTRUCTION_CHARACTERS:
             raise ValueError(
@@ -517,6 +517,10 @@ class AgentLoop:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": task},
         ]
+        if opening:
+
+
+            transcript.append({"role": "user", "content": opening})
         parse_failures = 0
 
         for iteration in range(1, self.max_iterations + 1):
@@ -629,13 +633,19 @@ class AgentLoop:
             if route.capability == SCREEN_CAPTURE_CAPABILITY:
                 self.task.note_screenshot()
             try:
-                result = self.broker.invoke(
-                    {
-                        "capability": route.capability,
-                        "arguments": dict(route.arguments),
-                        "user_confirmed": True,
-                        "authority_mode": self.authority_mode,
-                    }
+
+
+
+
+                from ..automation.invocation import invoke_capability
+
+                result = invoke_capability(
+                    self.broker,
+                    route.capability,
+                    route.arguments,
+                    authority_mode=self.authority_mode,
+                    granted=self.capabilities,
+                    repair=self._repair_arguments,
                 )
                 observation = summarise_observation(
                     route.capability,
@@ -645,12 +655,13 @@ class AgentLoop:
             except Exception as error:
 
 
+
+
+                kind = getattr(error, "kind", None) or type(error).__name__
                 observation = {
                     "action": route.capability,
                     "status": "failed",
-                    "error": f"{type(error).__name__}: {error}"[
-                        :MAX_OBSERVATION_CHARACTERS
-                    ],
+                    "error": f"{kind}: {error}"[:MAX_OBSERVATION_CHARACTERS],
                 }
                 result = {"status": "failed"}
 
@@ -791,6 +802,31 @@ class AgentLoop:
             self.task.request_stop("user_requested")
             return True
         return False
+
+    def _repair_arguments(self, brief: str) -> Mapping[str, Any] | None:
+        """One correction, from the model, given the capability's contract."""
+
+        reply = self.generate(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "That tool call was rejected. Reply with one JSON "
+                        "object holding only the corrected arguments - no "
+                        "prose, no capability name, no explanation."
+                    ),
+                },
+                {"role": "user", "content": brief},
+            ]
+        )
+        from .actions import _whole_json_object
+        from .orchestrator import strip_reasoning
+
+        parsed = _whole_json_object(strip_reasoning(str(reply)))
+        if not isinstance(parsed, Mapping):
+            return None
+        inner = parsed.get("arguments")
+        return inner if isinstance(inner, Mapping) else parsed
 
     def _cancelled(self) -> dict[str, Any]:
         self.task.finish_stopped()

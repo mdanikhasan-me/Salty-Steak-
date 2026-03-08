@@ -3023,6 +3023,10 @@ class ChatService:
             authority_mode=str(generation_settings["computer_authority_mode"]),
             search=search,
             read=self._read_source,
+
+
+
+            continue_until_satisfied=bool(generation_settings.get("agent_mode")),
             memory=self.memory,
             on_step=publish,
             should_stop=context.stop_requested,

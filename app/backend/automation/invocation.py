@@ -35,16 +35,39 @@ from typing import Any
 from .broker import CAPABILITY_FIELDS
 from .routing import resolve_execution
 
-SCHEMA_ERROR_MARKER = "Unknown automation fields"
+
+
+
+
+
+SCHEMA_ERROR_MARKERS = ("Unknown automation fields", "must be one of")
 
 
 class CapabilityCallFailed(RuntimeError):
-    """A capability call that did not succeed, carrying why for the model."""
+    """A capability call that did not succeed, carrying why for the model.
 
-    def __init__(self, message: str, *, capability: str, repairable: bool) -> None:
+    The original exception's own class name is kept, because "this was refused
+    for permission" and "this was refused for a bad argument" call for
+    different next moves and the model can only tell them apart if the
+    observation still says which happened.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        capability: str,
+        repairable: bool,
+        original_type: str = "",
+    ) -> None:
         super().__init__(message)
         self.capability = capability
         self.repairable = repairable
+        self.original_type = original_type or type(self).__name__
+
+    @property
+    def kind(self) -> str:
+        return self.original_type
 
 
 def capability_contract(capability: str) -> dict[str, Any]:
@@ -57,7 +80,10 @@ def capability_contract(capability: str) -> dict[str, Any]:
 
 
 def _is_schema_complaint(error: BaseException) -> bool:
-    return isinstance(error, ValueError) and SCHEMA_ERROR_MARKER in str(error)
+    if not isinstance(error, ValueError):
+        return False
+    message = str(error)
+    return any(marker in message for marker in SCHEMA_ERROR_MARKERS)
 
 
 def invoke_capability(
@@ -100,6 +126,7 @@ def invoke_capability(
                 str(error),
                 capability=route.capability,
                 repairable=_is_schema_complaint(error),
+                original_type=type(error).__name__,
             ) from error
 
         brief = json.dumps(
@@ -114,7 +141,10 @@ def invoke_capability(
         corrected = repair(brief)
         if not isinstance(corrected, Mapping) or not corrected:
             raise CapabilityCallFailed(
-                str(error), capability=route.capability, repairable=True
+                str(error),
+                capability=route.capability,
+                repairable=True,
+                original_type=type(error).__name__,
             ) from error
 
         second = resolve_execution(route.capability, corrected, allowed)
@@ -130,7 +160,10 @@ def invoke_capability(
 
 
             raise CapabilityCallFailed(
-                str(second_error), capability=route.capability, repairable=False
+                str(second_error),
+                capability=route.capability,
+                repairable=False,
+                original_type=type(second_error).__name__,
             ) from second_error
         if on_route is not None:
             on_route(second)

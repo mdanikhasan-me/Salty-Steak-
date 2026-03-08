@@ -313,6 +313,14 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     }
   }, [globalActiveGeneration, operations, selectedId]);
 
+
+
+
+  useEffect(() => {
+    const timer = window.requestAnimationFrame(() => textareaRef.current?.focus());
+    return () => window.cancelAnimationFrame(timer);
+  }, []);
+
   const resizeComposer = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
