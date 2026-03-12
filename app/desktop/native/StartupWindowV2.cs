@@ -316,11 +316,21 @@ internal sealed class StartupWindowV2 : Form
             };
             main.FormClosed += (_, _) => RequestMainWindowExit();
             main.HandleDestroyed += (_, _) => RequestMainWindowExit();
+
+
+
+
+
+
+            TopMost = false;
             main.Show(this);
 
 
 
             main.Owner = null;
+
+
+            ClearTopMost(main);
         }
         catch (Exception error)
         {
@@ -417,6 +427,40 @@ internal sealed class StartupWindowV2 : Form
     private static string NormalizeStage(string value) => value
         .Replace("\u00E2\u20AC\u00A6", "\u2026", StringComparison.Ordinal)
         .Replace("...", "\u2026", StringComparison.Ordinal);
+
+    private const int HwndNoTopMost = -2;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoActivate = 0x0010;
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(
+        IntPtr window,
+        IntPtr insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags
+    );
+
+    private static void ClearTopMost(Form window)
+    {
+        if (window is null || !window.IsHandleCreated)
+        {
+            return;
+        }
+        window.TopMost = false;
+        _ = SetWindowPos(
+            window.Handle,
+            new IntPtr(HwndNoTopMost),
+            0,
+            0,
+            0,
+            0,
+            SwpNoMove | SwpNoSize | SwpNoActivate
+        );
+    }
 
     private void OnInterfaceReady()
     {
