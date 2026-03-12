@@ -170,9 +170,10 @@ export function ChatMessage({
               Older conversation content was omitted to stay within this version’s token limit.
             </p>
           ) : null}
-          {assistant ? <ResponseMetadata details={details} duration={duration} /> : null}
           {assistant && detailsOpen ? <TechnicalDetails details={details || {}} /> : null}
         </div>
+        <div className="message__footer">
+          {assistant ? <ResponseMetadata details={details} duration={duration} /> : <span />}
         <div
           className="message__tools"
           aria-label={assistant ? "Assistant message actions" : "User message actions"}
@@ -209,6 +210,7 @@ export function ChatMessage({
             </button>
           )}
           {copied ? <span className="message__copied" role="status">Copied</span> : null}
+        </div>
         </div>
       </div>
     </article>

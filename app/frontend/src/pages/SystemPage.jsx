@@ -36,6 +36,7 @@ export function SystemPage() {
   const [about, setAbout] = useState(null);
   const [storage, setStorage] = useState(null);
   const [currentVersion, setCurrentVersion] = useState(null);
+  const [selectedModelName, setSelectedModelName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [copied, setCopied] = useState(false);
@@ -46,6 +47,11 @@ export function SystemPage() {
       .then(([aboutPayload, versionPayload, chatStatus]) => {
         if (cancelled) return;
         setAbout(aboutPayload);
+
+
+
+
+        setSelectedModelName(String(chatStatus?.active_version_label || ""));
         const activeId =
           chatStatus?.active_saved_version_id ||
           chatStatus?.saved_version_id ||
@@ -161,7 +167,12 @@ export function SystemPage() {
         <SystemOverviewRow
           icon={Database}
           title="Model runtime"
-          description={currentVersion?.friendly_name || model.display_name || "No local model selected"}
+          description={
+            currentVersion?.friendly_name ||
+            selectedModelName ||
+            model.display_name ||
+            "No local model selected"
+          }
           value={runtimeState.loaded ? `${runtime.device || "Loaded"}${runtime.precision ? ` · ${runtime.precision}` : ""}` : "Idle"}
         />
         <SystemOverviewRow
