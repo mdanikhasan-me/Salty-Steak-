@@ -306,6 +306,20 @@ class LiveRunners:
 
 
 
+
+        if not self.capabilities:
+            return {
+                "answer": (
+                    "Using your computer is Agent work, and Agent mode is off "
+                    "for this message. Turn on Agent in the composer and ask "
+                    "again, and I will do it."
+                ),
+                "status": "declined",
+                "requires_agent_mode": True,
+            }
+
+
+
         if self.generate is None or self.broker is None:
             return {"answer": "That action is not available.", "status": "declined"}
         outcome = AgentLoop(

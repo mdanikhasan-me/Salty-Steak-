@@ -2963,7 +2963,12 @@ class ChatService:
         return build_turn_instruction(
             image_available=self._image_generation_available(),
             has_previous_image=has_previous,
-            capabilities=self.granted_automation_capabilities(),
+
+
+
+            capabilities=(
+                self.granted_automation_capabilities() if agent_mode else []
+            ),
             connectors=services,
             agent_mode=agent_mode,
         )
@@ -2982,7 +2987,12 @@ class ChatService:
 
         from .runners import LiveRunners
 
-        capabilities = self.granted_automation_capabilities()
+
+
+        agent_mode = bool(generation_settings.get("agent_mode"))
+        capabilities = (
+            self.granted_automation_capabilities() if agent_mode else []
+        )
 
         def generate(messages: list[dict[str, str]]) -> str:
             return self._agent_generate(
@@ -3500,6 +3510,14 @@ class ChatService:
 
         action_intent = detect_host_action_intent(search_query)
         if action_intent == IMAGE_ACTION:
+            action_intent = None
+
+
+
+
+        if action_intent is not None and not bool(
+            generation_settings.get("agent_mode")
+        ):
             action_intent = None
         relationship["host_action"] = {
             "intent": action_intent,

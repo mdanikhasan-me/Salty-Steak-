@@ -99,7 +99,13 @@ def build_turn_instruction(
     wrong answer when a capability could do it.
     """
 
-    offered = [SINGLE_ACTION, PLAN, RESEARCH] if capabilities else []
+
+
+
+
+
+    offered = [SINGLE_ACTION, PLAN] if capabilities else []
+    offered.append(RESEARCH)
     if image_available:
         offered.append(GENERATE_IMAGE)
         if has_previous_image:
