@@ -102,12 +102,11 @@
 .message--user .message__avatar,
 .message--user .message__header { display: none; }
 
+
+
+
 .message--user .message__body {
-  max-width: min(100%, 720px);
-  padding: 10px 14px;
   color: var(--ink);
-  background: #292c31;
-  border-radius: 17px 17px 5px 17px;
 }
 
 .message--pending .message__body { opacity: .68; }

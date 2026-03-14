@@ -25,10 +25,6 @@
 
 .cooking-activity { background: var(--rail); }
 
-.message--user .message__body {
-  background: var(--surface-soft);
-}
-
 .rich-code {
   background: var(--chrome);
   border-color: var(--line);

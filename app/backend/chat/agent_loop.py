@@ -480,6 +480,7 @@ class AgentLoop:
         self._attempts: dict[str, int] = {}
 
         self._effects: set[str] = set()
+        self._step_started = time.monotonic()
 
     def _recall(self, task: str) -> str:
         """Remembered context for this task, or nothing at all.
@@ -628,6 +629,7 @@ class AgentLoop:
                 action["action"], action["arguments"], self.capabilities
             )
             self.task.current_capability = route.capability
+            self._step_started = time.monotonic()
             self.task.transition(EXECUTING, capability=route.capability)
             self.task.note_tool_call(route.capability, route.tier_name)
             if route.capability == SCREEN_CAPTURE_CAPABILITY:
@@ -851,6 +853,10 @@ class AgentLoop:
             "observation": dict(observation),
 
             "route": execution_route_record(route) if route is not None else None,
+
+
+            "duration_ms": round((time.monotonic() - self._step_started) * 1000, 1),
+            "started_at": self._step_started,
         }
         self.steps.append(step)
         if self.on_step is not None:

@@ -911,7 +911,12 @@ class ChatService:
         with self._generation_lock:
             self.get_conversation(conversation_id)
             self._cancel_active_generation(reason="superseded_by_new_request")
-            if extract_file_trash_target(exact):
+
+
+
+
+            agent_mode = bool(checked_settings.get("agent_mode"))
+            if agent_mode and extract_file_trash_target(exact):
                 return self.operations.submit(
                     "chat_host_action",
                     lambda context: self._prepare_file_trash_action(
@@ -936,7 +941,7 @@ class ChatService:
                         None,
                     ),
                 )
-            if detect_host_action_intent(exact) == TEMP_CLEANUP_ACTION:
+            if agent_mode and detect_host_action_intent(exact) == TEMP_CLEANUP_ACTION:
                 return self.operations.submit(
                     "chat_host_action",
                     lambda context: self._prepare_temp_cleanup_action(
@@ -3005,13 +3010,33 @@ class ChatService:
             except Exception:
                 return []
 
+
+
+
+
+        timeline: list[dict[str, Any]] = []
+
         def publish(step: Mapping[str, Any]) -> None:
             snapshot = task.snapshot()
+            timeline.append(
+                {
+                    "step": step.get("step"),
+                    "action": step.get("action"),
+                    "reason": step.get("reason") or "",
+                    "status": step.get("status"),
+                    "arguments": dict(step.get("arguments") or {}),
+                    "observation": dict(step.get("observation") or {}),
+                    "route": step.get("route"),
+                    "duration_ms": step.get("duration_ms"),
+                }
+            )
+            del timeline[:-40]
             context.update(
                 phase=f"{snapshot['state_label']}: {step['action']}",
                 details={
                     **dict(provenance or {}),
                     "conversation_id": conversation_id,
+                    "agent_events": list(timeline),
                     "agent_task": {
                         **snapshot,
                         "step": step["step"],
