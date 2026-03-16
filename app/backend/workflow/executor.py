@@ -132,6 +132,8 @@ class Executor:
         approve: Callable[[Mapping[str, Any]], bool] | None = None,
         authority_mode: str = "ask_every_time",
         on_node: Callable[[NodeOutcome], None] | None = None,
+        granted: Any = (),
+        repair: Callable[[str], Mapping[str, Any] | None] | None = None,
     ) -> None:
         self.broker = broker
         self.connectors = connectors
@@ -141,6 +143,8 @@ class Executor:
         self.approve = approve
         self.authority_mode = authority_mode
         self.on_node = on_node
+        self.granted = list(granted)
+        self.repair = repair
 
 
 
@@ -362,16 +366,17 @@ class Executor:
 
 
 
-        from ..automation.routing import resolve_execution
 
-        route = resolve_execution(node.capability, arguments, [node.capability])
-        result = self.broker.invoke(
-            {
-                "capability": route.capability,
-                "arguments": dict(route.arguments),
-                "user_confirmed": True,
-                "authority_mode": self.authority_mode,
-            }
+
+        from ..automation.invocation import invoke_capability
+
+        result = invoke_capability(
+            self.broker,
+            node.capability,
+            arguments,
+            authority_mode=self.authority_mode,
+            granted=self.granted or [node.capability],
+            repair=self.repair,
         )
         if isinstance(result, Mapping) and result.get("status") not in {
             None,

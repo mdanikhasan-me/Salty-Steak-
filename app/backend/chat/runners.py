@@ -38,6 +38,7 @@ class PlanRejected(ValueError):
 def _nodes_in_the_right_slots(
     payload: Mapping[str, Any],
     capabilities: Sequence[str],
+    connectors: Sequence[str] = (),
 ) -> Mapping[str, Any]:
     """Put a granted capability the model wrote as a connector back in its slot.
 
@@ -55,24 +56,65 @@ def _nodes_in_the_right_slots(
     """
 
     granted = set(capabilities)
+    configured = set(connectors)
     nodes = payload.get("nodes")
     if not granted or not isinstance(nodes, list):
         return payload
+
+
+
+
+    CANDIDATE_FIELDS = ("connector", "node", "id", "name", "tool", "action", "target")
+
     moved: list[Any] = []
     for entry in nodes:
-        if (
-            isinstance(entry, Mapping)
-            and not entry.get("capability")
-            and str(entry.get("connector") or "") in granted
-        ):
-            corrected = dict(entry)
+        if not isinstance(entry, Mapping):
+            moved.append(entry)
+            continue
+
+
+
+
+
+        if str(entry.get("capability") or "") in granted:
+            moved.append(entry)
+            continue
+
+        corrected = dict(entry)
+        corrected.pop("capability", None)
+
+
+        if str(corrected.get("connector") or "") in granted:
             corrected["capability"] = corrected.pop("connector")
-
-
             corrected.pop("operation", None)
             moved.append(corrected)
-        else:
-            moved.append(entry)
+            continue
+
+
+
+
+
+
+
+
+
+        if str(corrected.get("connector") or "") not in configured:
+            found = next(
+                (
+                    str(corrected[field])
+                    for field in CANDIDATE_FIELDS
+                    if str(corrected.get(field) or "") in granted
+                ),
+                "",
+            )
+            if found:
+                corrected["capability"] = found
+                corrected.pop("connector", None)
+                corrected.pop("operation", None)
+                moved.append(corrected)
+                continue
+
+        moved.append(entry)
     return {**payload, "nodes": moved}
 
 
@@ -94,7 +136,7 @@ def validate_plan(
 
     try:
         plan = build_plan(
-            _nodes_in_the_right_slots(payload, capabilities), goal=goal
+            _nodes_in_the_right_slots(payload, capabilities, connectors), goal=goal
         )
     except PlanError as error:
         raise PlanRejected(str(error)) from error
@@ -373,6 +415,8 @@ class LiveRunners:
             task=self.task,
             approve=self.approve,
             authority_mode=self.authority_mode,
+            granted=self.capabilities,
+            repair=self._repair_arguments if self.generate is not None else None,
         )
         engine = WorkflowEngine(
             executor=executor,

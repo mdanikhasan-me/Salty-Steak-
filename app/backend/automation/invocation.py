@@ -86,6 +86,50 @@ def _is_schema_complaint(error: BaseException) -> bool:
     return any(marker in message for marker in SCHEMA_ERROR_MARKERS)
 
 
+
+
+
+
+
+ESSENTIAL_FIELD = {
+    "browser.control": "command",
+    "ui.automation": "command",
+    "terminal.execute": "argv",
+    "application.launch": "target",
+    "window.control": "action",
+    "input.control": "action",
+    "screen.capture": None,
+}
+
+
+def prune_unsupported(
+    capability: str,
+    arguments: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Drop schema-unknown fields, but only when the call is unambiguous.
+
+    Deterministic and narrow on purpose. This never removes a field the
+    capability declares, never rewrites a value, and never runs at all when the
+    capability's essential field is missing — a call that is not fully specified
+    is a question for the model, not something to tidy up and execute.
+    """
+
+    accepted = CAPABILITY_FIELDS.get(capability)
+    if not accepted:
+        return dict(arguments), []
+    essential = ESSENTIAL_FIELD.get(capability, "")
+    if essential and not str(arguments.get(essential) or "").strip():
+        return dict(arguments), []
+    kept: dict[str, Any] = {}
+    dropped: list[str] = []
+    for key, value in arguments.items():
+        if key in accepted:
+            kept[key] = value
+        else:
+            dropped.append(str(key))
+    return kept, sorted(dropped)
+
+
 def invoke_capability(
     broker: Any,
     capability: str,
@@ -104,7 +148,13 @@ def invoke_capability(
     """
 
     allowed = list(granted) or [capability]
+
+
+
     route = resolve_execution(capability, arguments, allowed)
+    pruned, dropped = prune_unsupported(route.capability, route.arguments)
+    if dropped:
+        route = resolve_execution(route.capability, pruned, allowed)
     if on_route is not None:
         on_route(route)
 

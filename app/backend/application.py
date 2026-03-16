@@ -314,6 +314,8 @@ class Application:
 
             project_root=self.paths.workspace.parent,
             artifact_root=self.paths.workspace / "automation",
+
+            package_root=self.config.project_root,
         )
         self.chat = ChatService(
             database=self.database,

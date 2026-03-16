@@ -198,6 +198,37 @@ DECISION_REPAIR_INSTRUCTION = (
 )
 
 
+def _plan_without_its_envelope(text: str) -> dict[str, Any] | None:
+    """A bare list of plan nodes, put back inside the object it belongs in.
+
+    Asked to open Notepad, focus it and capture the screen, the live model
+    produced exactly the right three nodes as a top-level JSON array and left
+    off the ``{"action":"plan", ...}`` wrapper. That array is valid JSON but
+    not an object, so nothing recognised it as a decision and the raw brackets
+    were printed to the user as the assistant's answer.
+
+    A list of node-shaped mappings can only have been a plan — ordinary prose
+    is not a JSON array — so it is restored rather than shown. Anything else
+    is left alone and still reads as an answer.
+    """
+
+    stripped = str(text or "").strip()
+    if not stripped.startswith("["):
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    for entry in parsed:
+        if not isinstance(entry, Mapping):
+            return None
+        if not any(key in entry for key in ("node", "capability", "connector", "id")):
+            return None
+    return {"action": "plan", "nodes": [dict(entry) for entry in parsed]}
+
+
 def read_decision(reply: str) -> dict[str, Any] | None:
     """Find a routing decision in a reply, or conclude there isn't one.
 
@@ -207,6 +238,9 @@ def read_decision(reply: str) -> dict[str, Any] | None:
     """
 
     text = strip_reasoning(reply)
+    bare = _plan_without_its_envelope(text)
+    if bare is not None:
+        return bare
     if not text.startswith("{") and "```" not in str(reply or ""):
         return None
     try:

@@ -175,6 +175,7 @@ class AutomationBroker:
         *,
         project_root: str | Path,
         artifact_root: str | Path,
+        package_root: str | Path | None = None,
         max_timeout_seconds: float = MAX_TIMEOUT_SECONDS,
         max_output_bytes: int = DEFAULT_OUTPUT_BYTES,
         platform_name: str | None = None,
@@ -189,6 +190,13 @@ class AutomationBroker:
         if not self.project_root.is_dir():
             raise ValueError("Automation project root must be a directory")
         self.artifact_root = Path(artifact_root).resolve()
+
+
+
+
+
+
+        self.package_root = Path(package_root or project_root).resolve()
         self.max_timeout_seconds = float(max_timeout_seconds)
         if not 0.05 <= self.max_timeout_seconds <= MAX_TIMEOUT_SECONDS:
             raise ValueError(
@@ -207,7 +215,7 @@ class AutomationBroker:
 
         self._uia_client = uia_client
         if self._uia_client is None and self.platform_name == "nt":
-            host = find_uia_host(self.project_root)
+            host = find_uia_host(self.package_root)
             if host is not None:
                 try:
                     self._uia_client = UiAutomationClient(host)
@@ -215,7 +223,7 @@ class AutomationBroker:
                     self._uia_client = None
         self._browser_client = browser_client
         if self._browser_client is None and self.platform_name == "nt":
-            browser_host = find_browser_host(self.project_root)
+            browser_host = find_browser_host(self.package_root)
             if browser_host is not None:
                 try:
                     self._browser_client = BrowserClient(
