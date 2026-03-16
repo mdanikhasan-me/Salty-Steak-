@@ -216,19 +216,31 @@ export function DatasetDetail({
             <span className="step-number">2</span>
             <div>
               <h3>Prepare for training</h3>
-              <p>Tokenise, split, save, and verify a selectable prepared dataset.</p>
+              <p>
+                {validated && !dataset.source_changed
+                  ? "Tokenise, split, save, and verify a selectable prepared dataset."
+                  : dataset.source_changed
+                    ? "The source file changed since it was validated. Validate it again before preparing."
+                    : "Validate the dataset first; preparation runs on a checked source."}
+              </p>
             </div>
           </div>
-          {validated && !dataset.source_changed ? (
-            <Button
-              variant="primary"
-              icon={Database}
-              disabled={validationActive || preparationActive}
-              onClick={onPrepare}
-            >
-              Prepare for training
-            </Button>
-          ) : null}
+          {
+
+                                                                           }
+          <Button
+            variant="primary"
+            icon={Database}
+            disabled={
+              !validated
+              || Boolean(dataset.source_changed)
+              || validationActive
+              || preparationActive
+            }
+            onClick={onPrepare}
+          >
+            Prepare for training
+          </Button>
         </div>
         {preparationOperation ? (
           <OperationProgress

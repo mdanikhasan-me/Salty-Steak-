@@ -106,5 +106,12 @@ function datasetState(dataset) {
   if (isLegacy(dataset)) return { value: "blocked", label: "Legacy artifact blocked" };
   if (dataset.training_ready) return { value: "ready", label: "Ready for training" };
   if (dataset.object_kind === "raw_source") return { value: "information", label: "Raw source" };
-  return { value: dataset.validation_status, label: undefined };
+
+
+
+
+  if (dataset.validation_status === "valid") {
+    return { value: "needs_preparation", label: "Ready to prepare" };
+  }
+  return { value: "needs_validation", label: "Needs validation" };
 }

@@ -167,7 +167,20 @@ export function VersionsPageR11({ onNavigate }) {
                     }}
                   >
                     <span className="version-manager__name">{friendlyName(version)}</span>
-                    <span className="version-manager__meta">{version.model_role_label || "Language"} · {formatDate(version.saved_at || version.created_at)}</span>
+                    {
+
+
+                                                                                 }
+                    <span className="version-manager__meta">
+                      {[
+                        version.model_role_label || "Language",
+                        version.saved_at || version.created_at
+                          ? formatDate(version.saved_at || version.created_at)
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
                     <Status value={active ? "active" : statusValue(version)} label={active ? "Current Chat" : friendlyStatus(version)} size="small" />
                   </button>
                 );
