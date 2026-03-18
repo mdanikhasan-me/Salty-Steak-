@@ -78,8 +78,11 @@ _PLUGIN_CAPABILITIES = (
         "local_only",
         "planned",
         "ask_every_time",
-        "Run a reviewed command in an explicitly selected working directory.",
-        "The sandboxed command broker has not been installed yet.",
+
+
+        "Run a reviewed command with its working directory confined to the "
+        "project, after you allow it.",
+        "The command broker is not part of this build.",
     ),
     PluginCapability(
         "screen_capture",
@@ -636,8 +639,11 @@ class PluginRegistry:
         self,
         *,
         vision_status: Mapping[str, Any] | None = None,
+        automation_status: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         plugins = [asdict(item) for item in _PLUGIN_CAPABILITIES]
+        if automation_status is not None:
+            _apply_automation_state(plugins, automation_status)
         if vision_status is not None:
             for plugin in plugins:
                 if plugin["id"] != "images":
@@ -659,6 +665,49 @@ class PluginRegistry:
             "capabilities": plugins,
             "connectors": self.connectors(),
         }
+
+
+
+
+
+
+
+_PLUGIN_CAPABILITY_IDS = {
+    "terminal": "terminal.execute",
+    "screen_capture": "screen.capture",
+    "app_control": "ui.automation",
+}
+
+
+def _apply_automation_state(
+    plugins: list[dict[str, Any]],
+    automation_status: Mapping[str, Any],
+) -> None:
+    """Report each computer-control plugin from the broker's own status."""
+
+    by_capability = {
+        str(entry.get("capability")): entry
+        for entry in automation_status.get("capabilities") or []
+        if isinstance(entry, Mapping)
+    }
+    for plugin in plugins:
+        capability = _PLUGIN_CAPABILITY_IDS.get(str(plugin["id"]))
+        entry = by_capability.get(capability or "")
+        if entry is None:
+            continue
+        runnable = bool(entry.get("runtime_available"))
+        granted = bool(entry.get("effective_enabled"))
+        plugin["availability"] = "available" if runnable else "unavailable"
+        plugin["unavailable_reason"] = (
+            None
+            if runnable
+            else str(
+                entry.get("runtime_unavailable_reason")
+                or "This capability is not part of this build."
+            )
+        )
+        plugin["capability"] = capability
+        plugin["granted"] = granted
 
 
 def _tool_names(value: Any) -> list[str]:

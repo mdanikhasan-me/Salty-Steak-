@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AppWindow,
   Bot,
+  Camera,
   Check,
   ChefHat,
   ChevronDown,
   CircleAlert,
   FileText,
+  Globe,
   Image,
   MessageCircle,
   MoreHorizontal,
@@ -19,7 +22,9 @@ import {
   ShieldCheck,
   ShieldQuestion,
   Square,
+  Terminal,
   Trash2,
+  Video,
   X,
 } from "lucide-react";
 import { api } from "../api/client.js";
@@ -132,6 +137,35 @@ function initialGenerationSettings() {
   } catch {
     return { remembered: false, settings: { ...DEFAULT_GENERATION_SETTINGS } };
   }
+}
+
+
+
+
+
+
+const PLUGIN_ICONS = {
+  web_search: Globe,
+  text_files: FileText,
+  images: Image,
+  terminal: Terminal,
+  screen_capture: Camera,
+  screen_recording: Video,
+  app_control: AppWindow,
+};
+
+const PLUGIN_CATEGORY_ICONS = {
+  attachment_plugin: Paperclip,
+  computer_control_plugin: MousePointerClick,
+  built_in_plugin: Plug,
+};
+
+export function pluginIcon(plugin) {
+  return (
+    PLUGIN_ICONS[String(plugin?.id || "")]
+    || PLUGIN_CATEGORY_ICONS[String(plugin?.category || "")]
+    || Plug
+  );
 }
 
 export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {

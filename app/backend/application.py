@@ -4800,10 +4800,19 @@ class Application:
         )
 
     def tool_capabilities(self) -> dict[str, Any]:
-        return self.plugins.describe(vision_status=self.chat.vision_status())
+        return self._describe_plugins()
 
     def plugin_capabilities(self) -> dict[str, Any]:
-        return self.plugins.describe(vision_status=self.chat.vision_status())
+        return self._describe_plugins()
+
+    def _describe_plugins(self) -> dict[str, Any]:
+
+
+
+        return self.plugins.describe(
+            vision_status=self.chat.vision_status(),
+            automation_status=self.automation.status(),
+        )
 
     def plugin_connectors(self) -> list[dict[str, Any]]:
         return self.plugins.connectors()
