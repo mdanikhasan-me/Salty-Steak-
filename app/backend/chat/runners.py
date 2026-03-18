@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from types import SimpleNamespace
 from typing import Any
 
 from ..research import Budget, ResearchLoop
@@ -227,6 +228,30 @@ def _describe_effect(route: Any, result: Mapping[str, Any]) -> str:
     return "Done."
 
 
+def _plain_failure(node: Any) -> str:
+    """A node's failure without the exception plumbing wrapped around it.
+
+    Failures arrive as "CapabilityCallFailed: UI Automation command must be one
+    of: collapse, expand, ..." — a class name, a colon, and a schema dump. The
+    class name means nothing to the reader and the list is not an explanation,
+    so the sentence keeps the human half and drops the rest.
+    """
+
+    text = str(getattr(node, "failure", "") or "").strip()
+
+    while True:
+        head, separator, tail = text.partition(": ")
+        if not separator or " " in head or not head or not head[0].isupper():
+            break
+        text = tail.strip()
+    listing = text.find(" must be one of:")
+    if listing != -1:
+        text = text[: listing + len(" must be one of")].replace(
+            " must be one of", " was not one this capability accepts"
+        )
+    return text or "the step did not succeed"
+
+
 class LiveRunners:
     """Carry out an action, a plan, or research on behalf of a chat turn."""
 
@@ -434,7 +459,7 @@ class LiveRunners:
         )
         result = engine.run(plan)
         return {
-            "answer": result.message,
+            "answer": self._plan_answer(result, request),
             "status": result.state,
             "plan": result.plan.to_dict(),
             "replans": result.replans,
@@ -494,6 +519,43 @@ class LiveRunners:
             "result": dict(result),
             "steps": steps,
         }
+
+    def _plan_answer(self, result: Any, request: str) -> str:
+        """What to tell the user once a plan has finished running.
+
+        The engine answers "Done." for a completed plan, which is true and
+        useless: asked to open Notepad, bring it forward and say what was on
+        the screen, the three steps ran and the reply was the single word
+        "Done." The steps each reported what they actually did, so the report
+        is built from those observations — the same evidence the audit records
+        keep — rather than from the request.
+        """
+
+        nodes = list(getattr(getattr(result, "plan", None), "nodes", []) or [])
+        sentences: list[str] = []
+        for node in nodes:
+            if node.state != "completed" or not node.capability:
+                continue
+            route = SimpleNamespace(capability=node.capability)
+            sentences.append(_describe_effect(route, node.result or {}))
+        spoken = [sentence for sentence in sentences if sentence != "Done."]
+
+        if str(getattr(result, "state", "")) == "completed":
+            if not spoken:
+                return str(getattr(result, "message", "") or "Done.")
+            return " ".join(spoken)
+
+
+
+
+
+
+        failed = next((node for node in nodes if node.state == "failed"), None)
+        if failed is None:
+            return str(getattr(result, "message", "") or "")
+        parts = list(spoken)
+        parts.append(f"I could not finish the last step: {_plain_failure(failed)}")
+        return " ".join(parts)
 
     def _repair_arguments(self, brief: str) -> Mapping[str, Any] | None:
         """One correction, from the model, given the capability's real contract.

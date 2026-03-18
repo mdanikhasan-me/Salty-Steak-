@@ -71,6 +71,10 @@ class PlanNode:
     verified: bool | None = None
     failure: str | None = None
 
+
+
+    duration_ms: float | None = None
+
     def __post_init__(self) -> None:
         if bool(self.capability) == bool(self.connector):
             raise PlanError(
@@ -101,7 +105,18 @@ class PlanNode:
             "attempts": self.attempts,
             "verified": self.verified,
             "failure": self.failure,
+            "duration_ms": self.duration_ms,
+
+
+
+
+            "observation": self._reportable_result(),
         }
+
+    def _reportable_result(self) -> dict[str, Any]:
+        result = self.result if isinstance(self.result, dict) else {}
+        artifact = result.get("artifact")
+        return {"artifact": artifact} if isinstance(artifact, Mapping) else {}
 
 
 @dataclass

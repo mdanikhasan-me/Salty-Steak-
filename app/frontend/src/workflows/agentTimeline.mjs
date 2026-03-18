@@ -64,7 +64,13 @@ export function eventSummary(event) {
     if (act === "list") return "List open windows";
     return `${act === "close" ? "Close" : "Focus"} ${args.title || "window"}`;
   }
-  if (action === "ui.automation") return `Interface ${String(args.command || "").replace(/_/g, " ")}`.trim();
+  if (action === "ui.automation") {
+
+
+    const command = String(args.command || "").replace(/_/g, " ").trim();
+    if (command) return `Interface ${command}`;
+    return String(event?.reason || "").slice(0, 140) || "Read the interface";
+  }
   if (action === "input.control") return `Send ${String(args.action || "input").replace(/_/g, " ")}`;
   if (action === "respond") return "Report the result";
 
@@ -120,7 +126,9 @@ export function eventsFromPlanNodes(nodes) {
             : node.state === "ready" || node.state === "pending"
               ? ""
               : node.state,
-      observation: node.failure ? { error: node.failure } : {},
+      observation: node.failure
+        ? { error: node.failure, ...(node.observation || {}) }
+        : { ...(node.observation || {}) },
       duration_ms: node.duration_ms,
     }));
 }

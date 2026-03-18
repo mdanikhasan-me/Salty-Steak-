@@ -175,6 +175,7 @@ class Executor:
             return self._fail(node, cause, f"{type(error).__name__}: {error}", started)
 
         node.result = result
+        node.duration_ms = (time.monotonic() - started) * 1000
         if node.result_as:
             plan.variables[node.result_as] = result
 
