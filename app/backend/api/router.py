@@ -358,6 +358,30 @@ class ApiRouter:
             return app.rename_conversation(
                 parts[2], self._required_string(body, "title", strip=False)
             )
+
+        if method == "GET" and parts == ("chat", "labels"):
+            return app.list_conversation_labels()
+        if method == "POST" and parts == ("chat", "labels"):
+            return app.create_conversation_label(self._read_json())
+        if method == "POST" and len(parts) == 3 and parts[:2] == ("chat", "labels"):
+            return app.update_conversation_label(parts[2], self._read_json())
+        if method == "DELETE" and len(parts) == 3 and parts[:2] == ("chat", "labels"):
+            return app.delete_conversation_label(parts[2])
+        if (
+            method == "POST"
+            and len(parts) == 4
+            and parts[:2] == ("chat", "conversations")
+            and parts[3] == "pin"
+        ):
+            return app.set_conversation_pinned(parts[2], self._read_json())
+        if (
+            method == "POST"
+            and len(parts) == 5
+            and parts[:2] == ("chat", "conversations")
+            and parts[3] == "labels"
+        ):
+            return app.set_conversation_label(parts[2], parts[4], self._read_json())
+
         if (
             method == "POST"
             and len(parts) == 4

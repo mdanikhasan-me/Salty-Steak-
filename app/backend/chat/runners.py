@@ -228,6 +228,26 @@ def _describe_effect(route: Any, result: Mapping[str, Any]) -> str:
     return "Done."
 
 
+
+
+
+
+_PROCESS_PHRASES = (
+    "i read ",
+    "i searched",
+    "distinct findings",
+    "i stopped because",
+    "the findings",
+    "based on the findings",
+    "source budget",
+)
+
+
+def _reads_like_process(answer: str) -> bool:
+    head = answer.strip().lower()[:200]
+    return any(phrase in head for phrase in _PROCESS_PHRASES)
+
+
 def _plain_failure(node: Any) -> str:
     """A node's failure without the exception plumbing wrapped around it.
 
@@ -640,7 +660,7 @@ class LiveRunners:
         )
         report = loop.run(str(decision.get("query") or question))
         return {
-            "answer": self._summarise(report),
+            "answer": self._answer_from(question, report),
             "status": "completed",
             "research": {
                 key: report[key]
@@ -653,7 +673,10 @@ class LiveRunners:
                     "disputed",
                     "stop_reason",
                 )
-            },
+            }
+
+
+            | {"process_summary": self._summarise(report)},
 
             "sources": report["sources"],
             "claims": report["claims"][:25],
@@ -703,6 +726,81 @@ class LiveRunners:
         parsed = _whole_json_object(strip_reasoning(str(reply)))
         query = (parsed or {}).get("query") if isinstance(parsed, Mapping) else None
         return str(query) if query else None
+
+    def _answer_from(self, question: str, report: Mapping[str, Any]) -> str:
+        """Answer the question from the evidence that was gathered.
+
+        The research runner used to return its own execution statistics as the
+        assistant's reply: "I read 6 sources and kept 145 distinct findings. I
+        stopped because: source budget." Asked for the tallest building in the
+        world, the user was told how the search went and never told the answer.
+        Retrieval and comparison are the work; the answer is the product, and
+        the statistics belong in the provenance beside it.
+        """
+
+        claims = list(report.get("claims") or [])
+        if not claims:
+            return (
+                "I could not find enough to answer that. "
+                + self._summarise(report)
+            )
+
+
+
+        ordered = sorted(
+            claims,
+            key=lambda claim: (
+                bool(claim.get("disputed")),
+                -int(claim.get("source_count") or 0),
+            ),
+        )[:24]
+
+        if self.generate is not None:
+            if self.task is not None:
+                self.task.metrics.model_calls += 1
+            reply = self.generate(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Answer the user's question using only the findings "
+                            "below. Write the answer itself in plain prose — do "
+                            "not describe the search, do not count sources, do "
+                            "not mention findings or claims. If the findings "
+                            "disagree, say what the disagreement is. If they do "
+                            "not answer the question, say so plainly."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "question": question,
+                                "findings": [
+                                    {
+                                        "text": claim.get("text"),
+                                        "sources": int(claim.get("source_count") or 0),
+                                        "disputed": bool(claim.get("disputed")),
+                                    }
+                                    for claim in ordered
+                                ],
+                            },
+                            default=str,
+                        ),
+                    },
+                ]
+            )
+            answer = strip_reasoning(str(reply or "")).strip()
+            if answer and not _reads_like_process(answer):
+                return answer
+
+
+
+        return "\n".join(
+            f"- {claim.get('text')}"
+            for claim in ordered[:6]
+            if str(claim.get("text") or "").strip()
+        ) or self._summarise(report)
 
     @staticmethod
     def _summarise(report: Mapping[str, Any]) -> str:

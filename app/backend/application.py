@@ -4587,6 +4587,46 @@ class Application:
     def delete_conversation(self, conversation_id: str) -> dict[str, Any]:
         return self.chat.delete_conversation(conversation_id)
 
+
+
+    def set_conversation_pinned(
+        self, conversation_id: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return self.chat.set_conversation_pinned(
+            conversation_id, bool(payload.get("pinned"))
+        )
+
+    def list_conversation_labels(self) -> dict[str, Any]:
+        return {"labels": self.chat.list_labels()}
+
+    def create_conversation_label(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "label": self.chat.create_label(
+                payload.get("name"), str(payload.get("tone") or "neutral")
+            )
+        }
+
+    def update_conversation_label(
+        self, label_id: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return {
+            "label": self.chat.update_label(
+                label_id,
+                name=payload.get("name") if "name" in payload else None,
+                tone=payload.get("tone") if "tone" in payload else None,
+            )
+        }
+
+    def delete_conversation_label(self, label_id: str) -> dict[str, Any]:
+        return self.chat.delete_label(label_id)
+
+    def set_conversation_label(
+        self, conversation_id: str, label_id: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return self.chat.set_conversation_label(
+            conversation_id, label_id, bool(payload.get("applied"))
+        )
+
     def send_message(
         self,
         conversation_id: str,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sqlite3
 import threading
 import re
 import urllib.parse
@@ -62,6 +63,31 @@ from .vision_inputs import VisionInputClaim, VisionInputStore
 
 ActivationStarter = Callable[[str, str | None], dict[str, Any]]
 MAX_CONVERSATION_TITLE_LENGTH = 80
+MAX_LABEL_NAME_LENGTH = 60
+
+
+
+LABEL_TONES = ("neutral", "warm", "blue", "green", "violet", "amber", "red")
+
+
+def _checked_label_name(name: Any) -> str:
+    checked = str(name or "").strip()
+    if not checked:
+        raise ValueError("Label name cannot be empty")
+    if len(checked) > MAX_LABEL_NAME_LENGTH:
+        raise ValueError(
+            f"Label name cannot exceed {MAX_LABEL_NAME_LENGTH} characters"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in checked):
+        raise ValueError("Label name must be one line")
+    return checked
+
+
+def _checked_tone(tone: Any) -> str:
+    value = str(tone or "neutral").strip().lower()
+    if value not in LABEL_TONES:
+        raise ValueError(f"Label tone must be one of: {', '.join(LABEL_TONES)}")
+    return value
 GENERATION_LIMITS = {
     "context_window_tokens": {"minimum": 256, "maximum": 65536},
     "maximum_output_tokens": {"minimum": 1, "maximum": 8192},
@@ -685,13 +711,188 @@ class ChatService:
         }
 
     def list_conversations(self) -> list[dict[str, Any]]:
-        return self.database.fetch_all(
+        conversations = self.database.fetch_all(
             """
             SELECT c.*, COUNT(m.id) AS message_count
             FROM conversations c LEFT JOIN messages m ON m.conversation_id = c.id
-            GROUP BY c.id ORDER BY c.updated_at DESC
+            GROUP BY c.id
+            -- Pinned first, then both groups by recency. Ordering here rather
+            -- than in the interface means every caller sees the same order and
+            -- a reload cannot rearrange the list.
+            ORDER BY (c.pinned_at IS NULL), c.pinned_at DESC, c.updated_at DESC
             """
         )
+        links = self.database.fetch_all(
+            """
+            SELECT l.conversation_id, b.id, b.name, b.tone
+            FROM conversation_label_links l
+            JOIN conversation_labels b ON b.id = l.label_id
+            ORDER BY b.name COLLATE NOCASE
+            """
+        )
+        applied: dict[str, list[dict[str, Any]]] = {}
+        for link in links:
+            applied.setdefault(str(link["conversation_id"]), []).append(
+                {
+                    "id": link["id"],
+                    "name": link["name"],
+                    "tone": link["tone"],
+                }
+            )
+        for conversation in conversations:
+            conversation["pinned"] = bool(conversation.get("pinned_at"))
+            conversation["labels"] = applied.get(str(conversation["id"]), [])
+        return conversations
+
+
+
+    def set_conversation_pinned(
+        self, conversation_id: str, pinned: bool
+    ) -> dict[str, Any]:
+        """Pin or unpin one conversation, durably.
+
+        The pin is a column on the conversation, so it survives a restart for
+        the same reason the title does. `updated_at` is deliberately not
+        touched: pinning is not activity, and bumping it would reorder the
+        user's recents every time they organised them.
+        """
+
+        with self.database.transaction() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+            if exists is None:
+                raise KeyError(f"Conversation does not exist: {conversation_id}")
+            connection.execute(
+                "UPDATE conversations SET pinned_at = ? WHERE id = ?",
+                (utc_now() if pinned else None, conversation_id),
+            )
+        return self.conversation_summary(conversation_id)
+
+    def conversation_summary(self, conversation_id: str) -> dict[str, Any]:
+        """One conversation's row and its organisation, without its messages."""
+
+        row = self.database.fetch_one(
+            "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+        )
+        if not row:
+            raise KeyError(f"Conversation does not exist: {conversation_id}")
+        row["pinned"] = bool(row.get("pinned_at"))
+        row["labels"] = self.database.fetch_all(
+            """
+            SELECT b.id, b.name, b.tone
+            FROM conversation_label_links l
+            JOIN conversation_labels b ON b.id = l.label_id
+            WHERE l.conversation_id = ?
+            ORDER BY b.name COLLATE NOCASE
+            """,
+            (conversation_id,),
+        )
+        return row
+
+    def list_labels(self) -> list[dict[str, Any]]:
+        return self.database.fetch_all(
+            """
+            SELECT b.*, COUNT(l.conversation_id) AS conversation_count
+            FROM conversation_labels b
+            LEFT JOIN conversation_label_links l ON l.label_id = b.id
+            GROUP BY b.id ORDER BY b.name COLLATE NOCASE
+            """
+        )
+
+    def create_label(self, name: str, tone: str = "neutral") -> dict[str, Any]:
+        checked = _checked_label_name(name)
+        identifier = new_id()
+        now = utc_now()
+        try:
+            self.database.execute(
+                "INSERT INTO conversation_labels(id, name, tone, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (identifier, checked, _checked_tone(tone), now, now),
+            )
+        except sqlite3.IntegrityError as error:
+            raise ValueError(f"A label called {checked!r} already exists") from error
+        return {
+            "id": identifier,
+            "name": checked,
+            "tone": _checked_tone(tone),
+            "created_at": now,
+            "updated_at": now,
+            "conversation_count": 0,
+        }
+
+    def update_label(
+        self,
+        label_id: str,
+        *,
+        name: str | None = None,
+        tone: str | None = None,
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            current = connection.execute(
+                "SELECT * FROM conversation_labels WHERE id = ?", (label_id,)
+            ).fetchone()
+            if current is None:
+                raise KeyError(f"Label does not exist: {label_id}")
+            try:
+                connection.execute(
+                    "UPDATE conversation_labels SET name = ?, tone = ?, updated_at = ? "
+                    "WHERE id = ?",
+                    (
+                        _checked_label_name(name) if name is not None else current["name"],
+                        _checked_tone(tone) if tone is not None else current["tone"],
+                        utc_now(),
+                        label_id,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("Another label already has that name") from error
+        return self.database.fetch_one(
+            "SELECT * FROM conversation_labels WHERE id = ?", (label_id,)
+        )
+
+    def delete_label(self, label_id: str) -> dict[str, Any]:
+        """Remove a label. The conversations it was applied to are untouched."""
+
+        with self.database.transaction() as connection:
+            existing = connection.execute(
+                "SELECT id, name FROM conversation_labels WHERE id = ?", (label_id,)
+            ).fetchone()
+            if existing is None:
+                raise KeyError(f"Label does not exist: {label_id}")
+            connection.execute(
+                "DELETE FROM conversation_label_links WHERE label_id = ?", (label_id,)
+            )
+            connection.execute(
+                "DELETE FROM conversation_labels WHERE id = ?", (label_id,)
+            )
+        return {"deleted": True, "id": existing["id"], "name": existing["name"]}
+
+    def set_conversation_label(
+        self, conversation_id: str, label_id: str, applied: bool
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            if connection.execute(
+                "SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone() is None:
+                raise KeyError(f"Conversation does not exist: {conversation_id}")
+            if connection.execute(
+                "SELECT 1 FROM conversation_labels WHERE id = ?", (label_id,)
+            ).fetchone() is None:
+                raise KeyError(f"Label does not exist: {label_id}")
+            if applied:
+                connection.execute(
+                    "INSERT OR IGNORE INTO conversation_label_links("
+                    "conversation_id, label_id, created_at) VALUES (?, ?, ?)",
+                    (conversation_id, label_id, utc_now()),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM conversation_label_links "
+                    "WHERE conversation_id = ? AND label_id = ?",
+                    (conversation_id, label_id),
+                )
+        return self.conversation_summary(conversation_id)
 
     def create_conversation(self) -> dict[str, Any]:
         identifier = new_id()

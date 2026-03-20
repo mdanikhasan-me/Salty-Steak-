@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 OPERATION_STATES = frozenset(
     {"queued", "running", "stop_requested", "completed", "interrupted", "failed"}
 )
@@ -296,6 +296,38 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 CREATE INDEX IF NOT EXISTS ix_conversations_updated
     ON conversations(updated_at DESC);
+
+-- Organisation the user imposes on their own history. Both live here rather
+-- than in the interface, because a pin that forgets itself when the window
+-- closes is not a pin.
+CREATE TABLE IF NOT EXISTS conversation_labels (
+    id TEXT PRIMARY KEY
+        CHECK(length(id) = 36 AND substr(id, 9, 1) = '-'
+              AND substr(id, 14, 1) = '-' AND substr(id, 19, 1) = '-'
+              AND substr(id, 24, 1) = '-'),
+    name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 60),
+    -- A name from the product's own palette, never an arbitrary colour value.
+    tone TEXT NOT NULL DEFAULT 'neutral'
+        CHECK(tone IN ('neutral','warm','blue','green','violet','amber','red')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_conversation_labels_name
+    ON conversation_labels(lower(trim(name)));
+
+-- Many-to-many on purpose: a conversation can belong to "Salty Steak" and to
+-- "Hardware" at once, and forcing one label per conversation would make the
+-- user choose between two true answers.
+CREATE TABLE IF NOT EXISTS conversation_label_links (
+    conversation_id TEXT NOT NULL
+        REFERENCES conversations(id) ON DELETE CASCADE,
+    label_id TEXT NOT NULL
+        REFERENCES conversation_labels(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (conversation_id, label_id)
+);
+CREATE INDEX IF NOT EXISTS ix_conversation_label_links_label
+    ON conversation_label_links(label_id);
 
 CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY
@@ -820,7 +852,7 @@ class Database:
                 raise DatabaseError(
                     "Refusing to reuse a database not created by the clean application"
                 )
-            if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, SCHEMA_VERSION):
+            if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, SCHEMA_VERSION):
                 raise DatabaseError(
                     f"Unsupported database schema {version}; expected {SCHEMA_VERSION}"
                 )
@@ -850,6 +882,7 @@ class Database:
                 self._restore_legacy_automation_rows(connection)
             self._migrate_training_policy(connection)
             self._migrate_chat_runtime_provenance(connection)
+            self._migrate_conversation_organisation(connection)
             now = utc_now()
             connection.execute(
                 "INSERT OR IGNORE INTO application_metadata(key, value) VALUES (?, ?)",
@@ -1012,6 +1045,29 @@ class Database:
             raise
         else:
             connection.commit()
+
+    @staticmethod
+    def _migrate_conversation_organisation(
+        connection: sqlite3.Connection,
+    ) -> None:
+        """Give existing conversations somewhere to record a pin.
+
+        ADD COLUMN on an existing table, so every conversation, message,
+        timestamp and piece of turn provenance the user already has is left
+        exactly where it is. A database that has never seen this column has
+        nothing pinned, which is the correct starting state.
+        """
+
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(conversations)").fetchall()
+        }
+        if "pinned_at" not in columns:
+            connection.execute("ALTER TABLE conversations ADD COLUMN pinned_at TEXT")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS ix_conversations_pinned "
+                "ON conversations(pinned_at DESC)"
+            )
 
     @staticmethod
     def _migrate_chat_runtime_provenance(
