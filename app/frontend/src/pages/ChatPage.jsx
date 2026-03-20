@@ -27,9 +27,10 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { api } from "../api/client.js";
+import { api, asList } from "../api/client.js";
 import { ChatMessage } from "../components/ChatMessage.jsx";
 import { AgentActivityPanel } from "../components/AgentActivityPanel.jsx";
+import { ConversationSidebar } from "../components/ConversationSidebar.jsx";
 import { CookingActivityPanel } from "../components/CookingActivityPanel.jsx";
 import { CookingStatus } from "../components/CookingStatus.jsx";
 import { PluginConnectionDialog } from "../components/PluginConnectionDialog.jsx";
@@ -196,6 +197,8 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const [creating, setCreating] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
   const [managedConversation, setManagedConversation] = useState(null);
+
+  const [labels, setLabels] = useState([]);
   const [managementMode, setManagementMode] = useState(null);
   const [managementBusy, setManagementBusy] = useState(false);
   const [managementError, setManagementError] = useState("");
@@ -292,6 +295,23 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listConversationLabels()
+      .then((payload) => {
+        if (!cancelled) setLabels(asList(payload, ["labels"]));
+      })
+      .catch(() => {
+
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setCookingActivityMessageId(null);
@@ -1180,6 +1200,100 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     items[nextIndex]?.focus();
   }
 
+
+
+
+
+
+
+  async function renameConversationTo(item, title) {
+
+
+    const checked = validConversationTitle(title);
+    if (!checked) return;
+    try {
+      await api.renameConversation(item.id, checked);
+      setResources((previous) => ({
+        ...previous,
+        conversations: previous.conversations.map((row) =>
+          String(row.id) === String(item.id) ? { ...row, title: checked } : row,
+        ),
+      }));
+      if (String(selectedId) === String(item.id)) {
+        setConversation((previous) =>
+          previous ? { ...previous, title: checked } : previous,
+        );
+      }
+    } catch (error) {
+      reportError(error, "rename-conversation");
+    }
+  }
+
+  async function reloadOrganisation() {
+    try {
+      const [conversationPayload, labelPayload] = await Promise.all([
+        api.listConversations(),
+        api.listConversationLabels(),
+      ]);
+      setResources((previous) => ({
+        ...previous,
+        conversations: asList(conversationPayload, ["conversations"]),
+      }));
+      setLabels(asList(labelPayload, ["labels"]));
+    } catch (error) {
+      reportError(error, "chat-organisation");
+    }
+  }
+
+  async function toggleConversationPin(item, pinned) {
+    try {
+      await api.setConversationPinned(item.id, pinned);
+      await reloadOrganisation();
+    } catch (error) {
+      reportError(error, "pin-conversation");
+    }
+  }
+
+  async function toggleConversationLabel(item, labelId, applied) {
+    try {
+      await api.setConversationLabel(item.id, labelId, applied);
+      await reloadOrganisation();
+    } catch (error) {
+      reportError(error, "label-conversation");
+    }
+  }
+
+  async function createLabelForConversation(name, item) {
+    try {
+      const created = await api.createConversationLabel(name, "neutral");
+      const label = created?.label || created;
+      if (item && label?.id) {
+        await api.setConversationLabel(item.id, label.id, true);
+      }
+      await reloadOrganisation();
+    } catch (error) {
+      reportError(error, "create-label");
+    }
+  }
+
+  async function renameLabel(label, name) {
+    try {
+      await api.updateConversationLabel(label.id, { name });
+      await reloadOrganisation();
+    } catch (error) {
+      reportError(error, "rename-label");
+    }
+  }
+
+  async function removeLabel(label) {
+    try {
+      await api.deleteConversationLabel(label.id);
+      await reloadOrganisation();
+    } catch (error) {
+      reportError(error, "delete-label");
+    }
+  }
+
   function closeManagement() {
     if (managementBusy) return;
     setManagementMode(null);
@@ -1537,123 +1651,27 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           onClick={closeSidebar}
         />
       ) : null}
-      <aside
-        id="workspace-sidebar"
-        className={`workspace-sidebar chat-sidebar ${
-          sidebarOpen ? "workspace-sidebar--open" : "workspace-sidebar--closed"
-        }`}
-        aria-label="Chats"
-        aria-hidden={!sidebarOpen}
-        inert={!sidebarOpen ? "" : undefined}
-      >
-          <div className="workspace-sidebar__heading">Chats</div>
-          <button
-            type="button"
-            className="sidebar-row sidebar-new-chat"
-            disabled={creating}
-            onClick={newChat}
-          >
-            <Plus aria-hidden="true" />
-            <span>{creating ? "Creating" : "New chat"}</span>
-          </button>
-          <nav className="conversation-list" aria-label="Conversations">
-            {conversationGroups.map((group) => (
-              <section className="conversation-group" key={group.label}>
-                <h2>{group.label}</h2>
-                {group.items.map((item) => (
-                  <div
-                    key={item.id}
-                    className={
-                      String(item.id) === String(selectedId)
-                        ? "conversation-row conversation-row--active"
-                        : "conversation-row"
-                    }
-                  >
-                    <button
-                      type="button"
-                      className="conversation-link"
-                      aria-current={String(item.id) === String(selectedId) ? "page" : undefined}
-                      onClick={() => {
-                        selectConversation(item.id);
-                        closeCompactSidebar();
-                      }}
-                    >
-                      <MessageCircle aria-hidden="true" />
-                      <span>{item.title || "New chat"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="conversation-actions-button"
-                      aria-label={`Actions for ${item.title || "New chat"}`}
-                      aria-haspopup="menu"
-                      aria-expanded={String(actionsFor) === String(item.id)}
-                      aria-controls={`conversation-menu-${item.id}`}
-                      ref={(element) => {
-                        if (element) actionTriggerRefs.current.set(item.id, element);
-                        else actionTriggerRefs.current.delete(item.id);
-                      }}
-                      onClick={(event) => openConversationActions(item, event)}
-                      onKeyDown={(event) => {
-                        if (!["ArrowDown", "ArrowUp"].includes(event.key)) return;
-                        event.preventDefault();
-                        setManagedConversation(item);
-                        setRenameTitle(item.title || "New chat");
-                        setManagementError("");
-                        setActionsFor(item.id);
-                        window.requestAnimationFrame(() => {
-                          const items = actionMenuRefs.current
-                            .get(item.id)
-                            ?.querySelectorAll('[role="menuitem"]');
-                          items?.[event.key === "ArrowUp" ? items.length - 1 : 0]?.focus();
-                        });
-                      }}
-                    >
-                      <MoreHorizontal aria-hidden="true" />
-                    </button>
-                    {String(actionsFor) === String(item.id) ? (
-                      <div
-                        className="conversation-actions-menu"
-                        id={`conversation-menu-${item.id}`}
-                        role="menu"
-                        aria-label={`Actions for ${item.title || "New chat"}`}
-                        ref={(element) => {
-                          if (element) actionMenuRefs.current.set(item.id, element);
-                          else actionMenuRefs.current.delete(item.id);
-                        }}
-                        onKeyDown={(event) => moveConversationMenuFocus(event, item.id)}
-                      >
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setActionsFor(null);
-                            setManagementMode("rename");
-                          }}
-                        >
-                          <Pencil aria-hidden="true" /> Rename
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="conversation-actions-menu__delete"
-                          onClick={() => {
-                            setActionsFor(null);
-                            setManagementMode("delete");
-                          }}
-                        >
-                          <Trash2 aria-hidden="true" /> Delete
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-              </section>
-            ))}
-            {!conversations.length ? (
-              <p className="conversation-list__empty">No conversations yet.</p>
-            ) : null}
-          </nav>
-      </aside>
+      <ConversationSidebar
+        open={sidebarOpen}
+        conversations={conversations}
+        labels={labels}
+        selectedId={selectedId}
+        creating={creating}
+        onNewChat={newChat}
+        onSelect={selectConversation}
+        onAfterSelect={closeCompactSidebar}
+        onRename={(item, title) => renameConversationTo(item, title)}
+        onDelete={(item) => {
+          setManagedConversation(item);
+          setManagementError("");
+          setManagementMode("delete");
+        }}
+        onTogglePin={toggleConversationPin}
+        onToggleLabel={toggleConversationLabel}
+        onCreateLabel={createLabelForConversation}
+        onRenameLabel={renameLabel}
+        onDeleteLabel={removeLabel}
+      />
 
       {showAbout ? (
         <AboutPage onBack={onCloseAbout} />

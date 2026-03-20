@@ -359,6 +359,29 @@ export const api = {
   deleteConversation: (id) =>
     request(`/conversations/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
+
+
+  setConversationPinned: (id, pinned) =>
+    request(`/chat/conversations/${encodeURIComponent(id)}/pin`, {
+      method: "POST",
+      body: { pinned },
+    }),
+  listConversationLabels: () => request("/chat/labels"),
+  createConversationLabel: (name, tone) =>
+    request("/chat/labels", { method: "POST", body: { name, tone } }),
+  updateConversationLabel: (id, changes) =>
+    request(`/chat/labels/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: changes,
+    }),
+  deleteConversationLabel: (id) =>
+    request(`/chat/labels/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  setConversationLabel: (conversationId, labelId, applied) =>
+    request(
+      `/chat/conversations/${encodeURIComponent(conversationId)}/labels/${encodeURIComponent(labelId)}`,
+      { method: "POST", body: { applied } },
+    ),
+
   getProject: () => request("/project"),
   getAbout: () => request("/about", { timeout: 15_000 }),
   getAboutStorage: (refresh = false) =>
