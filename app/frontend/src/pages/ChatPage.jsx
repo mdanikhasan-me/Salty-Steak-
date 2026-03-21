@@ -31,6 +31,7 @@ import { api, asList } from "../api/client.js";
 import { ChatMessage } from "../components/ChatMessage.jsx";
 import { AgentActivityPanel } from "../components/AgentActivityPanel.jsx";
 import { ConversationSidebar } from "../components/ConversationSidebar.jsx";
+import { ResponseDetails } from "../components/ResponseDetails.jsx";
 import { CookingActivityPanel } from "../components/CookingActivityPanel.jsx";
 import { CookingStatus } from "../components/CookingStatus.jsx";
 import { PluginConnectionDialog } from "../components/PluginConnectionDialog.jsx";
@@ -199,6 +200,9 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const [managedConversation, setManagedConversation] = useState(null);
 
   const [labels, setLabels] = useState([]);
+
+
+  const [responseDetailsFor, setResponseDetails] = useState(null);
   const [managementMode, setManagementMode] = useState(null);
   const [managementBusy, setManagementBusy] = useState(false);
   const [managementError, setManagementError] = useState("");
@@ -317,6 +321,10 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     setCookingActivityMessageId(null);
     setComposerMenu(null);
     setActionsFor(null);
+
+
+
+    setResponseDetails(null);
   }, [selectedId]);
 
   useEffect(() => {
@@ -1731,6 +1739,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                   onConfirmAction={(proposal, settings) =>
                     confirmHostActionProposal(message, proposal, settings)}
                   onStopAction={stopGeneration}
+                  onOpenDetails={(details) => setResponseDetails(details)}
                 />
               ))}
               {selectedConversationGenerating ? (

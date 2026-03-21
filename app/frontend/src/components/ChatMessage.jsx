@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
+  ChevronRight,
   Copy,
   FileCode2,
   RotateCcw,
 } from "lucide-react";
 import { formatDuration, formatNumber } from "../workflows/formatters.js";
+import { responseDetails } from "../workflows/responseProvenance.mjs";
 import { presentAssistantContent } from "../workflows/chatContent.mjs";
 import { generatedImageForMessage } from "../workflows/generatedImages.mjs";
 import {
@@ -33,6 +35,7 @@ export function ChatMessage({
   actionBusy = false,
   onConfirmAction,
   onStopAction,
+  onOpenDetails,
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [actionsVisible, setActionsVisible] = useState(false);
@@ -189,6 +192,9 @@ export function ChatMessage({
           ) : null}
           {assistant && detailsOpen ? <TechnicalDetails details={details || {}} /> : null}
         </div>
+        {assistant ? (
+          <ResponseProvenance details={details} onOpenDetails={onOpenDetails} />
+        ) : null}
         <div className="message__footer">
           {assistant ? <ResponseMetadata details={details} duration={duration} /> : <span />}
         <div
@@ -240,6 +246,42 @@ function messageReasoningMode(details) {
   ).trim().toLowerCase();
   if (value === "cooking" || value === "instant") return value;
   return "";
+}
+
+
+
+
+
+
+
+function ResponseProvenance({ details, onOpenDetails }) {
+  const account = responseDetails(details || {});
+  if (!account.completion) return null;
+  const count = account.sources.length;
+  const summary = [
+    account.completion,
+    count ? `${count} ${count === 1 ? "source" : "sources"}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  if (!account.hasDetails) {
+    return (
+      <p className={`response-provenance response-provenance--${account.state}`}>
+        {summary}
+      </p>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={`response-provenance response-provenance--${account.state} response-provenance--open`}
+      onClick={() => onOpenDetails?.(details)}
+    >
+      {summary}
+      <ChevronRight aria-hidden="true" />
+    </button>
+  );
 }
 
 function ResponseMetadata({ details, duration }) {

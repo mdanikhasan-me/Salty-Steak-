@@ -6,6 +6,7 @@ import hashlib
 import os
 import sqlite3
 import threading
+import time
 import re
 import urllib.parse
 from collections.abc import Callable, Mapping
@@ -68,6 +69,40 @@ MAX_LABEL_NAME_LENGTH = 60
 
 
 LABEL_TONES = ("neutral", "warm", "blue", "green", "violet", "amber", "red")
+
+
+def _turn_completion(
+    details: Mapping[str, Any],
+    *,
+    response: Any,
+    turn: Any,
+    proposal_pending: bool,
+) -> str:
+    """How the turn ended, in the product's own words.
+
+    Instant and Cooking are two different promises and they keep two different
+    completions: a Cooking turn that finishes says it was cooked, permanently,
+    rather than being flattened back into a generic "Done". Everything else
+    reports what actually happened — a cancelled turn is never "Done in 8s".
+    """
+
+    if getattr(response, "cancelled", False):
+        return "stopped"
+    if proposal_pending:
+        return "waiting"
+
+    status = str((getattr(turn, "details", {}) or {}).get("status") or "")
+    if status in {"failed", "rejected", "declined"}:
+        return "failed"
+    if status in {"exhausted", "needs_review", "blocked"}:
+        return "partial"
+    if status == "waiting":
+        return "waiting"
+    if str(details.get("finish_reason") or "") == "maximum_output":
+        return "partial"
+
+    cooking = str(details.get("reasoning_mode_effective") or "").strip().lower()
+    return "cooked" if cooking == "cooking" else "done"
 
 
 def _checked_label_name(name: Any) -> str:
@@ -3703,6 +3738,11 @@ class ChatService:
         generation_settings = self._normalise_generation_settings(
             generation_settings
         )
+
+
+
+
+        turn_started = time.monotonic()
         relationship = {
             "conversation_id": conversation_id,
             "user_message_id": user_message_id,
@@ -3986,6 +4026,7 @@ class ChatService:
             "web_search": relationship["web_search"],
             "cancellation_token": cancellation_token,
             "cancellation_state": "not_requested",
+            "turn_duration_ms": round((time.monotonic() - turn_started) * 1000),
         }
         if previous_response_id:
             details.update(
@@ -4059,6 +4100,18 @@ class ChatService:
                 "execution_requested": False,
                 "execution_performed": False,
             }
+
+
+
+
+
+        details["turn_duration_ms"] = round((time.monotonic() - turn_started) * 1000)
+        details["turn_completion"] = _turn_completion(
+            details,
+            response=response,
+            turn=turn,
+            proposal_pending=bool(details.get("host_action_proposal")),
+        )
         finished = utc_now()
         with self.database.transaction() as connection:
             if active_target_kind == "model_bundle":
