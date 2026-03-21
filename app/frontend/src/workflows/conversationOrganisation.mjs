@@ -9,20 +9,31 @@
 
 
 
+
+
+
+
+
+
 import { groupConversationsByRecency } from "./conversations.mjs";
+
+
+export function folderOf(conversation) {
+  const first = (conversation?.labels || [])[0];
+  return first?.id ? { id: String(first.id), name: String(first.name || "") } : null;
+}
 
 
 export function matchesQuery(conversation, query) {
   const needle = String(query || "").trim().toLowerCase();
   if (!needle) return true;
-  const title = String(conversation?.title || "").toLowerCase();
-  if (title.includes(needle)) return true;
+  if (String(conversation?.title || "").toLowerCase().includes(needle)) return true;
 
 
 
-  return (conversation?.labels || []).some((label) =>
-    String(label?.name || "").toLowerCase().includes(needle),
-  );
+  return String(folderOf(conversation)?.name || "")
+    .toLowerCase()
+    .includes(needle);
 }
 
 export function isPinned(conversation) {
@@ -44,18 +55,16 @@ function pinnedOrder(conversation) {
 
 export function organiseConversations({
   conversations = [],
-  labels = [],
+  folders = [],
   query = "",
-  activeLabelId = null,
+  openFolderId = null,
   now = new Date(),
 } = {}) {
-  const label = activeLabelId ? String(activeLabelId) : null;
+  const folderId = openFolderId ? String(openFolderId) : null;
   const visible = conversations.filter((conversation) => {
     if (!matchesQuery(conversation, query)) return false;
-    if (!label) return true;
-    return (conversation?.labels || []).some(
-      (applied) => String(applied?.id) === label,
-    );
+    if (!folderId) return true;
+    return folderOf(conversation)?.id === folderId;
   });
 
   const pinned = visible
@@ -66,28 +75,27 @@ export function organiseConversations({
   return {
     pinned,
     groups: groupConversationsByRecency(recents, now),
-    labels: labels
+    folders: folders
       .map((item) => ({
         id: String(item?.id || ""),
         name: String(item?.name || ""),
-        tone: String(item?.tone || "neutral"),
         count: Number(item?.conversation_count) || 0,
       }))
       .filter((item) => item.id && item.name),
-    activeLabelId: label,
+    openFolderId: folderId,
     total: conversations.length,
     visibleCount: visible.length,
 
 
-    filtered: Boolean(label) || Boolean(String(query || "").trim()),
+    filtered: Boolean(folderId) || Boolean(String(query || "").trim()),
   };
 }
 
 
-export function activeLabel(organised) {
+export function openFolder(organised) {
   return (
-    (organised?.labels || []).find(
-      (item) => item.id === organised?.activeLabelId,
+    (organised?.folders || []).find(
+      (item) => item.id === organised?.openFolderId,
     ) || null
   );
 }
@@ -96,16 +104,13 @@ export function activeLabel(organised) {
 
 
 
-export function labelChoicesFor(conversation, labels) {
-  const applied = new Set(
-    (conversation?.labels || []).map((item) => String(item?.id)),
-  );
-  return (labels || [])
+export function moveChoicesFor(conversation, folders) {
+  const current = folderOf(conversation)?.id || null;
+  return (folders || [])
     .map((item) => ({
       id: String(item?.id || ""),
       name: String(item?.name || ""),
-      tone: String(item?.tone || "neutral"),
-      applied: applied.has(String(item?.id)),
+      current: String(item?.id) === current,
     }))
     .filter((item) => item.id && item.name);
 }

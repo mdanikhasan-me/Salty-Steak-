@@ -1,22 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Check,
   ChevronRight,
+  Folder,
+  FolderOpen,
+  FolderInput,
   MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
   Plus,
   Search,
-  Tag,
   Trash2,
   X,
 } from "lucide-react";
 
 import {
-  activeLabel,
   conversationTitle,
-  labelChoicesFor,
+  folderOf,
+  moveChoicesFor,
+  openFolder,
   organiseConversations,
 } from "../workflows/conversationOrganisation.mjs";
 
@@ -44,7 +46,7 @@ function storedSections() {
 export function ConversationSidebar({
   open,
   conversations,
-  labels,
+  folders,
   selectedId,
   creating,
   onNewChat,
@@ -52,22 +54,22 @@ export function ConversationSidebar({
   onRename,
   onDelete,
   onTogglePin,
-  onToggleLabel,
-  onCreateLabel,
-  onRenameLabel,
-  onDeleteLabel,
+  onMoveToFolder,
+  onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
   onAfterSelect,
 }) {
   const [query, setQuery] = useState("");
-  const [labelFilter, setLabelFilter] = useState(null);
+  const [browsing, setBrowsing] = useState(null);
   const [menuFor, setMenuFor] = useState(null);
   const [submenuFor, setSubmenuFor] = useState(null);
   const [renamingId, setRenamingId] = useState(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [newLabelFor, setNewLabelFor] = useState(null);
-  const [newLabelName, setNewLabelName] = useState("");
-  const [renamingLabelId, setRenamingLabelId] = useState(null);
-  const [labelDraft, setLabelDraft] = useState("");
+  const [newFolderFor, setNewFolderFor] = useState(null);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [renamingFolderId, setRenamingFolderId] = useState(null);
+  const [folderDraft, setFolderDraft] = useState("");
   const [collapsed, setCollapsed] = useState(storedSections);
   const triggerRefs = useRef(new Map());
   const renameRef = useRef(null);
@@ -76,13 +78,13 @@ export function ConversationSidebar({
     () =>
       organiseConversations({
         conversations,
-        labels,
+        folders,
         query,
-        activeLabelId: labelFilter,
+        openFolderId: browsing,
       }),
-    [conversations, labels, query, labelFilter],
+    [conversations, folders, query, browsing],
   );
-  const filteringLabel = activeLabel(organised);
+  const current = openFolder(organised);
 
   useEffect(() => {
     try {
@@ -94,10 +96,10 @@ export function ConversationSidebar({
 
 
   useEffect(() => {
-    if (labelFilter && !organised.labels.some((item) => item.id === labelFilter)) {
-      setLabelFilter(null);
+    if (browsing && !organised.folders.some((item) => item.id === browsing)) {
+      setBrowsing(null);
     }
-  }, [labelFilter, organised.labels]);
+  }, [browsing, organised.folders]);
 
   useEffect(() => {
     if (renamingId) renameRef.current?.select();
@@ -111,10 +113,9 @@ export function ConversationSidebar({
       closeMenu();
     }
     function onKey(event) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        closeMenu();
-      }
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      closeMenu();
     }
     document.addEventListener("mousedown", dismiss);
     document.addEventListener("keydown", onKey, true);
@@ -128,8 +129,8 @@ export function ConversationSidebar({
     const previous = menuFor;
     setMenuFor(null);
     setSubmenuFor(null);
-    setNewLabelFor(null);
-    setNewLabelName("");
+    setNewFolderFor(null);
+    setNewFolderName("");
     if (previous) {
       window.requestAnimationFrame(() =>
         triggerRefs.current.get(previous)?.focus(),
@@ -154,32 +155,30 @@ export function ConversationSidebar({
     await onRename?.(item, title);
   }
 
-  async function createLabelAndApply(item) {
-    const name = newLabelName.trim();
+  async function createFolderAndMove(item) {
+    const name = newFolderName.trim();
     if (!name) return;
-    setNewLabelName("");
-    setNewLabelFor(null);
-    await onCreateLabel?.(name, item);
+    setNewFolderName("");
+    setNewFolderFor(null);
+    closeMenu();
+    await onCreateFolder?.(name, item);
   }
-
-  const rowProps = (item) => ({
-    key: item.id,
-    className: [
-      "chat-row",
-      String(item.id) === String(selectedId) ? "chat-row--active" : "",
-      String(menuFor) === String(item.id) ? "chat-row--menu" : "",
-    ]
-      .filter(Boolean)
-      .join(" "),
-  });
 
   function renderRow(item) {
     const title = conversationTitle(item);
     const pinned = Boolean(item.pinned ?? item.pinned_at);
     const menuOpen = String(menuFor) === String(item.id);
+    const className = [
+      "chat-row",
+      String(item.id) === String(selectedId) ? "chat-row--active" : "",
+      menuOpen ? "chat-row--menu" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
     if (String(renamingId) === String(item.id)) {
       return (
-        <div {...rowProps(item)}>
+        <div className={className} key={item.id}>
           <form
             className="chat-row__rename"
             onSubmit={(event) => {
@@ -206,8 +205,9 @@ export function ConversationSidebar({
         </div>
       );
     }
+
     return (
-      <div {...rowProps(item)}>
+      <div className={className} key={item.id}>
         <button
           type="button"
           className="chat-row__open"
@@ -219,16 +219,6 @@ export function ConversationSidebar({
           }}
         >
           <span className="chat-row__title">{title}</span>
-          {(item.labels || []).length ? (
-            <span className="chat-row__labels" aria-hidden="true">
-              {(item.labels || []).slice(0, 3).map((label) => (
-                <span
-                  key={label.id}
-                  className={`chat-dot chat-dot--${label.tone || "neutral"}`}
-                />
-              ))}
-            </span>
-          ) : null}
         </button>
         <span className="chat-row__actions">
           <button
@@ -265,7 +255,9 @@ export function ConversationSidebar({
 
   function renderMenu(item, title) {
     const pinned = Boolean(item.pinned ?? item.pinned_at);
-    const choices = labelChoicesFor(item, labels);
+    const home = folderOf(item);
+    const choices = moveChoicesFor(item, folders);
+    const submenuOpen = String(submenuFor) === String(item.id);
     return (
       <div className="chat-menu" role="menu" aria-label={`Actions for ${title}`}>
         <button type="button" role="menuitem" onClick={() => beginRename(item)}>
@@ -286,52 +278,62 @@ export function ConversationSidebar({
           type="button"
           role="menuitem"
           aria-haspopup="menu"
-          aria-expanded={String(submenuFor) === String(item.id)}
-          className="chat-menu__submenu-trigger"
-          onClick={() =>
-            setSubmenuFor(
-              String(submenuFor) === String(item.id) ? null : item.id,
-            )
-          }
+          aria-expanded={submenuOpen}
+          onClick={() => setSubmenuFor(submenuOpen ? null : item.id)}
         >
-          <Tag aria-hidden="true" /> Add label
+          <FolderInput aria-hidden="true" /> Move to
           <ChevronRight aria-hidden="true" className="chat-menu__chevron" />
         </button>
-        {String(submenuFor) === String(item.id) ? (
-          <div className="chat-menu__submenu" role="menu" aria-label="Labels">
+        {submenuOpen ? (
+          <div className="chat-menu__submenu" role="menu" aria-label="Folders">
             {choices.map((choice) => (
               <button
                 key={choice.id}
                 type="button"
-                role="menuitemcheckbox"
-                aria-checked={choice.applied}
-                onClick={() => onToggleLabel?.(item, choice.id, !choice.applied)}
+                role="menuitemradio"
+                aria-checked={choice.current}
+                disabled={choice.current}
+                onClick={() => {
+                  closeMenu();
+                  onMoveToFolder?.(item, choice.id);
+                }}
               >
-                <span className={`chat-dot chat-dot--${choice.tone}`} aria-hidden="true" />
-                <span className="chat-menu__label-name">{choice.name}</span>
-                {choice.applied ? <Check aria-hidden="true" /> : null}
+                <Folder aria-hidden="true" />
+                <span className="chat-menu__folder-name">{choice.name}</span>
               </button>
             ))}
-            {newLabelFor === item.id ? (
+            {home ? (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMenu();
+                  onMoveToFolder?.(item, null);
+                }}
+              >
+                <X aria-hidden="true" /> Take out of {home.name}
+              </button>
+            ) : null}
+            {newFolderFor === item.id ? (
               <form
-                className="chat-menu__new-label"
+                className="chat-menu__new-folder"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void createLabelAndApply(item);
+                  void createFolderAndMove(item);
                 }}
               >
                 <input
                   autoFocus
-                  value={newLabelName}
+                  value={newFolderName}
                   maxLength={60}
-                  placeholder="Label name"
-                  aria-label="New label name"
-                  onChange={(event) => setNewLabelName(event.target.value)}
+                  placeholder="Folder name"
+                  aria-label="New folder name"
+                  onChange={(event) => setNewFolderName(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key !== "Escape") return;
                     event.preventDefault();
                     event.stopPropagation();
-                    setNewLabelFor(null);
+                    setNewFolderFor(null);
                   }}
                 />
               </form>
@@ -340,9 +342,9 @@ export function ConversationSidebar({
                 type="button"
                 role="menuitem"
                 className="chat-menu__create"
-                onClick={() => setNewLabelFor(item.id)}
+                onClick={() => setNewFolderFor(item.id)}
               >
-                <Plus aria-hidden="true" /> New label
+                <Plus aria-hidden="true" /> New folder
               </button>
             )}
           </div>
@@ -421,33 +423,31 @@ export function ConversationSidebar({
             }}
           />
         </label>
-        {organised.filtered ? (
-          <div className="chat-sidebar__filter" role="status">
-            <span>
-              {filteringLabel ? (
-                <>
-                  <span
-                    className={`chat-dot chat-dot--${filteringLabel.tone}`}
-                    aria-hidden="true"
-                  />
-                  {filteringLabel.name}
-                </>
-              ) : (
-                `${organised.visibleCount} of ${organised.total}`
-              )}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setLabelFilter(null);
-                setQuery("");
-              }}
-            >
-              <X aria-hidden="true" /> Show all
-            </button>
-          </div>
-        ) : null}
       </div>
+
+      {organised.filtered ? (
+        <div className="chat-sidebar__scope" role="status">
+          <span className="chat-sidebar__scope-name">
+            {current ? (
+              <>
+                <FolderOpen aria-hidden="true" />
+                {current.name}
+              </>
+            ) : (
+              `${organised.visibleCount} of ${organised.total}`
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setBrowsing(null);
+              setQuery("");
+            }}
+          >
+            Show all
+          </button>
+        </div>
+      ) : null}
 
       <nav className="chat-sidebar__body" aria-label="Conversations">
         {organised.pinned.length
@@ -459,76 +459,77 @@ export function ConversationSidebar({
             )
           : null}
 
-        {organised.labels.length
+        {organised.folders.length
           ? renderSection(
-              "labels",
-              "Labels",
-              <div className="chat-labels">
-                {organised.labels.map((label) =>
-                  String(renamingLabelId) === String(label.id) ? (
+              "folders",
+              "Folders",
+              <div className="chat-folders">
+                {organised.folders.map((folder) =>
+                  String(renamingFolderId) === String(folder.id) ? (
                     <form
-                      className="chat-label chat-label--renaming"
-                      key={label.id}
+                      className="chat-folder chat-folder--renaming"
+                      key={folder.id}
                       onSubmit={(event) => {
                         event.preventDefault();
-                        const name = labelDraft.trim();
-                        setRenamingLabelId(null);
-                        if (name && name !== label.name) {
-                          void onRenameLabel?.(label, name);
+                        const name = folderDraft.trim();
+                        setRenamingFolderId(null);
+                        if (name && name !== folder.name) {
+                          void onRenameFolder?.(folder, name);
                         }
                       }}
                     >
                       <input
                         autoFocus
-                        value={labelDraft}
+                        value={folderDraft}
                         maxLength={60}
-                        aria-label={`Rename label ${label.name}`}
-                        onChange={(event) => setLabelDraft(event.target.value)}
-                        onBlur={() => setRenamingLabelId(null)}
+                        aria-label={`Rename folder ${folder.name}`}
+                        onChange={(event) => setFolderDraft(event.target.value)}
+                        onBlur={() => setRenamingFolderId(null)}
                         onKeyDown={(event) => {
                           if (event.key !== "Escape") return;
                           event.preventDefault();
                           event.stopPropagation();
-                          setRenamingLabelId(null);
+                          setRenamingFolderId(null);
                         }}
                       />
                     </form>
                   ) : (
-                    <div className="chat-label" key={label.id}>
+                    <div className="chat-folder" key={folder.id}>
                       <button
                         type="button"
-                        className="chat-label__open"
-                        aria-pressed={labelFilter === label.id}
+                        className="chat-folder__open"
+                        aria-pressed={browsing === folder.id}
                         onClick={() =>
-                          setLabelFilter(labelFilter === label.id ? null : label.id)
+                          setBrowsing(browsing === folder.id ? null : folder.id)
                         }
                       >
-                        <span
-                          className={`chat-dot chat-dot--${label.tone}`}
-                          aria-hidden="true"
-                        />
-                        <span className="chat-label__name">{label.name}</span>
-                        <small>{label.count}</small>
+                        {browsing === folder.id ? (
+                          <FolderOpen aria-hidden="true" />
+                        ) : (
+                          <Folder aria-hidden="true" />
+                        )}
+                        <span className="chat-folder__name">{folder.name}</span>
+                        <small>{folder.count}</small>
                       </button>
-                      <button
-                        type="button"
-                        className="chat-label__edit"
-                        aria-label={`Rename label ${label.name}`}
-                        onClick={() => {
-                          setRenamingLabelId(label.id);
-                          setLabelDraft(label.name);
-                        }}
-                      >
-                        <Pencil aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="chat-label__remove"
-                        aria-label={`Delete label ${label.name}`}
-                        onClick={() => onDeleteLabel?.(label)}
-                      >
-                        <Trash2 aria-hidden="true" />
-                      </button>
+                      <span className="chat-folder__actions">
+                        <button
+                          type="button"
+                          aria-label={`Rename folder ${folder.name}`}
+                          onClick={() => {
+                            setRenamingFolderId(folder.id);
+                            setFolderDraft(folder.name);
+                          }}
+                        >
+                          <Pencil aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Delete folder ${folder.name}`}
+                          onClick={() => onDeleteFolder?.(folder)}
+                        >
+                          <Trash2 aria-hidden="true" />
+                        </button>
+                      </span>
                     </div>
                   ),
                 )}
@@ -536,21 +537,17 @@ export function ConversationSidebar({
             )
           : null}
 
-        {organised.groups.length
-          ? organised.groups.map((group) =>
-              renderSection(
-                `recents:${group.label}`,
-                group.label,
-                <div className="chat-rows">{group.items.map(renderRow)}</div>,
-              ),
-            )
-          : null}
+        {organised.groups.map((group) =>
+          renderSection(
+            `recents:${group.label}`,
+            group.label,
+            <div className="chat-rows">{group.items.map(renderRow)}</div>,
+          ),
+        )}
 
         {!organised.visibleCount ? (
           <p className="chat-sidebar__empty">
-            {organised.total
-              ? "No chats match that."
-              : "No conversations yet."}
+            {organised.total ? "No chats match that." : "No conversations yet."}
           </p>
         ) : null}
       </nav>

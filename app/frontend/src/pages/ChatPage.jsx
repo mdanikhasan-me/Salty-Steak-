@@ -1254,43 +1254,54 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     }
   }
 
-  async function toggleConversationLabel(item, labelId, applied) {
-    try {
-      await api.setConversationLabel(item.id, labelId, applied);
-      await reloadOrganisation();
-    } catch (error) {
-      reportError(error, "label-conversation");
-    }
-  }
 
-  async function createLabelForConversation(name, item) {
+
+
+  async function moveConversationToFolder(item, folderId) {
     try {
-      const created = await api.createConversationLabel(name, "neutral");
-      const label = created?.label || created;
-      if (item && label?.id) {
-        await api.setConversationLabel(item.id, label.id, true);
+      for (const current of item.labels || []) {
+        if (String(current.id) !== String(folderId)) {
+          await api.setConversationLabel(item.id, current.id, false);
+        }
+      }
+      if (folderId) {
+        await api.setConversationLabel(item.id, folderId, true);
       }
       await reloadOrganisation();
     } catch (error) {
-      reportError(error, "create-label");
+      reportError(error, "move-conversation");
     }
   }
 
-  async function renameLabel(label, name) {
+  async function createFolderForConversation(name, item) {
     try {
-      await api.updateConversationLabel(label.id, { name });
+      const created = await api.createConversationLabel(name, "neutral");
+      const folder = created?.label || created;
+      if (item && folder?.id) {
+        await moveConversationToFolder(item, folder.id);
+        return;
+      }
       await reloadOrganisation();
     } catch (error) {
-      reportError(error, "rename-label");
+      reportError(error, "create-folder");
     }
   }
 
-  async function removeLabel(label) {
+  async function renameFolder(folder, name) {
     try {
-      await api.deleteConversationLabel(label.id);
+      await api.updateConversationLabel(folder.id, { name });
       await reloadOrganisation();
     } catch (error) {
-      reportError(error, "delete-label");
+      reportError(error, "rename-folder");
+    }
+  }
+
+  async function removeFolder(folder) {
+    try {
+      await api.deleteConversationLabel(folder.id);
+      await reloadOrganisation();
+    } catch (error) {
+      reportError(error, "delete-folder");
     }
   }
 
@@ -1654,7 +1665,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       <ConversationSidebar
         open={sidebarOpen}
         conversations={conversations}
-        labels={labels}
+        folders={labels}
         selectedId={selectedId}
         creating={creating}
         onNewChat={newChat}
@@ -1667,10 +1678,10 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           setManagementMode("delete");
         }}
         onTogglePin={toggleConversationPin}
-        onToggleLabel={toggleConversationLabel}
-        onCreateLabel={createLabelForConversation}
-        onRenameLabel={renameLabel}
-        onDeleteLabel={removeLabel}
+        onMoveToFolder={moveConversationToFolder}
+        onCreateFolder={createFolderForConversation}
+        onRenameFolder={renameFolder}
+        onDeleteFolder={removeFolder}
       />
 
       {showAbout ? (
