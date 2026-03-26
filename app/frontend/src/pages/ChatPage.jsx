@@ -242,6 +242,10 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const generationTaskRef = useRef(0);
   const activeGenerationRef = useRef(null);
   const [agentMode, setAgentMode] = useState(false);
+
+
+
+  const [researchMode, setResearchMode] = useState(false);
   const [dismissedAgentTask, setDismissedAgentTask] = useState("");
 
 
@@ -250,9 +254,13 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
 
 
   const agentModeRef = useRef(false);
+  const researchModeRef = useRef(false);
   useEffect(() => {
     agentModeRef.current = agentMode;
   }, [agentMode]);
+  useEffect(() => {
+    researchModeRef.current = researchMode;
+  }, [researchMode]);
   const serialGenerationTransitionRef = useRef(null);
   if (!serialGenerationTransitionRef.current) {
     serialGenerationTransitionRef.current = createSerialGenerationExecutor();
@@ -701,6 +709,10 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               DEFAULT_GENERATION_SETTINGS,
             ),
             agent_mode: Boolean(agentModeRef.current),
+            research_mode: Boolean(researchModeRef.current),
+
+            web_search_enabled:
+              Boolean(researchModeRef.current) || undefined,
           };
           const submitted = await api.sendMessage(
             conversationId,

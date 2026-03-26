@@ -743,6 +743,11 @@ class ChatService:
 
 
             "agent_mode": bool(supplied.get("agent_mode", False)),
+
+
+
+
+            "research_mode": bool(supplied.get("research_mode", False)),
         }
 
     def list_conversations(self) -> list[dict[str, Any]]:
@@ -3449,9 +3454,18 @@ class ChatService:
             looks_like_a_decision_attempt,
             read_decision,
         )
-        from .orchestrator import RESPOND, conversation_request
+        from .orchestrator import RESPOND, conversation_request, strip_reasoning
 
-        decision = read_decision(reply_text)
+
+
+
+
+
+
+        if bool(generation_settings.get("research_mode")):
+            decision = {"action": "research", "question": request}
+        else:
+            decision = read_decision(reply_text)
         if decision is None and looks_like_a_decision_attempt(reply_text):
 
 
@@ -3469,15 +3483,26 @@ class ChatService:
                 corrected = ""
             decision = read_decision(corrected)
             if decision is None:
-
                 from .dispatch import TurnOutcome
 
+
+
+
+
+                second = strip_reasoning(str(corrected or "")).strip()
+                if second and not looks_like_a_decision_attempt(second):
+                    return TurnOutcome(
+                        "respond",
+                        content=second,
+                        details={"decision_corrected_to_prose": True},
+                    )
                 return TurnOutcome(
                     "respond",
                     content=(
-                        "I started planning that and my own plan came out "
-                        "malformed, so I stopped rather than run something I "
-                        "could not read. Ask me again and I will retry."
+                        "I started answering that in a machine format by "
+                        "mistake and could not correct it, so I stopped rather "
+                        "than show you a data dump. Ask me again and I will "
+                        "answer properly."
                     ),
                     details={"decision_unparsable": True},
                 )

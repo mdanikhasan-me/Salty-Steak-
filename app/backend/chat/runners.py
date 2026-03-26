@@ -237,8 +237,6 @@ _PROCESS_PHRASES = (
     "i searched",
     "distinct findings",
     "i stopped because",
-    "the findings",
-    "based on the findings",
     "source budget",
 )
 

@@ -202,10 +202,53 @@ export function activityOf(details) {
     });
   }
 
-  if (research.source_count || orchestration.steps?.length || orchestration.plan) {
-    const label = completionLabel(details);
-    if (label) events.push({ kind: "finished", text: label });
+
+
+
+
+  if (!events.length) {
+    const model = String(details?.model_bundle_id || details?.model_name || "").trim();
+    const mode = String(details?.reasoning_mode_effective || "").toLowerCase();
+    events.push({
+      kind: "answer",
+      text: model
+        ? `Answered from ${model}${mode ? ` in ${mode} mode` : ""}`
+        : "Answered from the local model",
+    });
+    const tokens = Number(details?.generated_output_tokens);
+    const rate = Number(details?.decode_tokens_per_second);
+    if (Number.isFinite(tokens) && tokens > 0) {
+      events.push({
+        kind: "note",
+        text: Number.isFinite(rate) && rate > 0
+          ? `Generated ${tokens.toLocaleString()} output tokens at ${rate.toFixed(1)} tokens/sec`
+          : `Generated ${tokens.toLocaleString()} output tokens`,
+      });
+    }
   }
+
+
+  if (details?.decision_corrected_to_prose) {
+    events.push({
+      kind: "conflict",
+      text: "The first reply came back in a machine format and was rewritten as an answer",
+    });
+  }
+  if (details?.decision_unparsable) {
+    events.push({
+      kind: "conflict",
+      text: "The reply came back in a machine format and could not be corrected, so nothing was shown",
+    });
+  }
+  if (String(details?.generation_state || "") === "stopped") {
+    events.push({ kind: "conflict", text: "Stopped by you before it finished" });
+  }
+  if (String(details?.finish_reason || "") === "maximum_output") {
+    events.push({ kind: "note", text: "Reached the maximum output length" });
+  }
+
+  const label = completionLabel(details);
+  if (label) events.push({ kind: "finished", text: label });
   return events;
 }
 
@@ -224,6 +267,8 @@ export function responseDetails(details) {
     sources,
     memories,
     activity,
+
+
     hasDetails: Boolean(activity.length || sources.length || memories.length),
   };
 }

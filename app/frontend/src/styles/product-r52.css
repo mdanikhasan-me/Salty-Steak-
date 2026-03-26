@@ -326,12 +326,14 @@
 
 
 .composer-tool--agent-on,
+.composer-tool--research-on,
 .composer-tool--authority-full {
   color: var(--accent-dark);
   background: var(--accent-soft);
 }
 
 .composer-tool--agent-on svg,
+.composer-tool--research-on svg,
 .composer-tool--authority-full svg { opacity: 1; }
 
 .send-button,

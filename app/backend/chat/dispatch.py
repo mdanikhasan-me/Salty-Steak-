@@ -171,30 +171,43 @@ class TurnOutcome:
 
 
 def looks_like_a_decision_attempt(reply: str) -> bool:
-    """True when a reply was trying to be a decision object and failed.
+    """True when a reply is machine output rather than an answer.
 
-    A 9B model writes structurally invalid JSON sometimes — a missing brace
-    part-way through a plan is the one seen live. `read_decision` correctly
-    refuses to parse it, and the raw braces were then shown to the user as the
-    assistant's answer. Recognising the attempt is what lets the turn ask for
-    one correction instead of printing machine output at a person.
+    Two shapes reach here. A decision object that does not parse — a missing
+    brace part-way through a plan is the one seen live. And a reply that is a
+    perfectly well-formed JSON document which is not a decision at all: asked
+    for SSD prices in Bangladesh, the live model answered with
+    ``{"research": {"subject": ..., "sources_analyzed": [...]}}`` and the raw
+    braces were printed at the user for eighty lines.
+
+    Whatever its keys, a whole JSON document is not an answer to a person, so
+    the test is the shape rather than the vocabulary. Prose that merely
+    contains a brace is untouched, because the document has to be the entire
+    reply.
     """
 
     text = strip_reasoning(str(reply or "")).strip()
-    if not text.startswith("{"):
+    if not text.startswith(("{", "[")):
         return False
     if read_decision(reply) is not None:
         return False
-    return '"action"' in text or '"nodes"' in text or '"capability"' in text
+    try:
+        json.loads(text)
+    except (TypeError, ValueError):
+
+
+
+        return '"action"' in text or '"nodes"' in text or '"capability"' in text
+    return True
 
 
 DECISION_REPAIR_INSTRUCTION = (
-    "Your previous reply was meant to be one JSON object but it does not "
-    "parse — check that every brace and bracket is closed. Send the corrected "
-    "object and nothing else: no prose, no code fence. A plan looks like "
-    '{"action":"plan","nodes":[{"node":"a","capability":"...","arguments":{}}]}. '
-    "If you did not mean to return an object, answer the user in plain words "
-    "instead."
+    "Your previous reply was JSON. The person reading it wants an answer in "
+    "plain words, not a data structure. Answer their question directly, in "
+    "prose — no JSON, no code fence, no field names. Only if you meant to use "
+    "a tool, send the corrected decision object and nothing else; a plan looks "
+    'like {"action":"plan","nodes":[{"node":"a","capability":"...",'
+    '"arguments":{}}]}.'
 )
 
 
