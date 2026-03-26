@@ -296,3 +296,17 @@ button.response-provenance:focus-visible { color: var(--ink); }
 @media (max-width: 1280px) {
   .response-details { width: min(22rem, 100vw); }
 }
+
+
+
+.response-reasoning {
+  margin: 0;
+  padding: var(--space-4);
+  border-left: 2px solid var(--line-strong);
+  color: var(--muted);
+  background: var(--surface-muted);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-leading);
+  white-space: pre-wrap;
+}

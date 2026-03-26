@@ -71,6 +71,30 @@ MAX_LABEL_NAME_LENGTH = 60
 LABEL_TONES = ("neutral", "warm", "blue", "green", "violet", "amber", "red")
 
 
+_THINK_BLOCK = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
+_THINK_UNCLOSED = re.compile(r"<think>(.*)$", re.IGNORECASE | re.DOTALL)
+
+
+def _separate_reasoning(text: Any) -> tuple[str, str]:
+    """Split a reply into what to show and what the model was working through.
+
+    A turn that runs out of output while still inside the block leaves it
+    unclosed; that is still reasoning and still must not be shown as the
+    answer, so it is treated the same way.
+    """
+
+    body = str(text or "")
+    thoughts: list[str] = []
+
+    def take(match: re.Match[str]) -> str:
+        thoughts.append(match.group(1).strip())
+        return ""
+
+    body = _THINK_BLOCK.sub(take, body)
+    body = _THINK_UNCLOSED.sub(take, body)
+    return body.strip(), "\n\n".join(part for part in thoughts if part).strip()
+
+
 def _turn_completion(
     details: Mapping[str, Any],
     *,
@@ -4060,7 +4084,14 @@ class ChatService:
                     "retry_of_assistant_message_id": previous_response_id,
                 }
             )
-        assistant_content = response.text
+
+
+
+
+
+        assistant_content, reasoning_text = _separate_reasoning(response.text)
+        if reasoning_text:
+            details["reasoning_text"] = reasoning_text
 
 
 

@@ -107,6 +107,13 @@ export function ResponseDetails({ details, onClose }) {
           </section>
         ) : null}
 
+        {account.reasoning ? (
+          <section className="response-section">
+            <h3>Working</h3>
+            <p className="response-reasoning">{account.reasoning}</p>
+          </section>
+        ) : null}
+
         {account.memories.length ? (
           <section className="response-section">
             <h3>

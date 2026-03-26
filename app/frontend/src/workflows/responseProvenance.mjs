@@ -124,6 +124,18 @@ export function supportFor(details, sourceId) {
 }
 
 
+
+
+
+
+
+
+
+export function reasoningOf(details) {
+  return String(details?.reasoning_text || "").trim();
+}
+
+
 export function memoriesOf(details) {
   const used = orchestrationOf(details).memory || details?.memory_used || [];
   return (Array.isArray(used) ? used : [])
@@ -267,6 +279,7 @@ export function responseDetails(details) {
     sources,
     memories,
     activity,
+    reasoning: reasoningOf(details),
 
 
     hasDetails: Boolean(activity.length || sources.length || memories.length),

@@ -1,33 +1,34 @@
+const CLOSED_THINK = /<think>([\s\S]*?)<\/think>/gi;
+const UNCLOSED_THINK = /<think>([\s\S]*)$/i;
+
 export function splitAssistantContent(value) {
   const content = String(value || "");
-  const match = content.match(/<think>([\s\S]*?)<\/think>/i);
-  if (match && match.index !== undefined) {
-    const before = content.slice(0, match.index).trim();
-    const after = content.slice(match.index + match[0].length).trim();
-    return {
-      answer: [before, after].filter(Boolean).join("\n\n"),
-      reasoning: match[1].trim(),
-      reasoningIncomplete: false,
-    };
-  }
+  const thoughts = [];
 
 
 
 
 
-  const openMatch = content.match(/<think>([\s\S]*)$/i);
-  if (openMatch && openMatch.index !== undefined) {
-    return {
-      answer: content.slice(0, openMatch.index).trim(),
-      reasoning: openMatch[1].trim(),
-      reasoningIncomplete: true,
-    };
+  let answer = content.replace(CLOSED_THINK, (_, inner) => {
+    thoughts.push(String(inner).trim());
+    return "";
+  });
+
+
+
+
+  let incomplete = false;
+  const unclosed = answer.match(UNCLOSED_THINK);
+  if (unclosed && unclosed.index !== undefined) {
+    thoughts.push(String(unclosed[1]).trim());
+    answer = answer.slice(0, unclosed.index);
+    incomplete = true;
   }
 
   return {
-    answer: content.trim(),
-    reasoning: "",
-    reasoningIncomplete: false,
+    answer: answer.trim(),
+    reasoning: thoughts.filter(Boolean).join("\n\n").trim(),
+    reasoningIncomplete: incomplete,
   };
 }
 
