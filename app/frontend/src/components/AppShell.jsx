@@ -1,8 +1,10 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useReducer,
+  useRef,
 } from "react";
 import {
   Archive,
@@ -48,6 +50,35 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
     readSidebarPreference,
   );
   const { connection, chatStatus } = useAppState();
+
+
+
+
+
+
+
+
+
+
+  const lastFocused = useRef(null);
+  useEffect(() => {
+    function remember(event) {
+      const node = event.target;
+      if (!node || node === document.body) return;
+      if (node.id === "main-content") return;
+      lastFocused.current = node;
+    }
+    document.addEventListener("focusin", remember, true);
+    return () => document.removeEventListener("focusin", remember, true);
+  }, []);
+
+  const returnFocusFromMain = useCallback((event) => {
+
+    if (event.relatedTarget) return;
+    const previous = lastFocused.current;
+    if (!previous || !previous.isConnected || previous === event.target) return;
+    previous.focus({ preventScroll: true });
+  }, []);
   const contentTrainingPage = isTrainingPage(page);
   const trainingMode =
     contentTrainingPage || (page === "about" && isTrainingPage(aboutFrom));
@@ -138,6 +169,7 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
               contentTrainingPage ? "main-content--training" : ""
             } ${page === "about" ? "main-content--about" : ""}`}
             tabIndex="-1"
+            onFocus={returnFocusFromMain}
           >
             {!connection.online && !connection.loading ? (
               <div className="connection-banner" role="status">

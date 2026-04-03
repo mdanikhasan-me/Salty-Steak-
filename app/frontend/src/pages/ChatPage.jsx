@@ -1673,7 +1673,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   return (
     <div className={`chat-page ${sidebarOpen ? "chat-page--sidebar-open" : ""} ${
       cookingActivityOpen ? "chat-page--activity-open" : ""
-    }`}>
+    } ${responseDetailsFor ? "chat-page--details-open" : ""}`}>
       {sidebarOpen ? (
         <button
           type="button"
@@ -1853,3 +1853,818 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                   type="file"
                   multiple
                   accept="text
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                           }
+          <button
+            type="button"
+            className="response-details-scrim"
+            aria-label="Close response details"
+            onClick={() => setResponseDetails(null)}
+          />
+          <ResponseDetails
+            details={responseDetailsFor}
+            onClose={() => setResponseDetails(null)}
+          />
+        </>
+      ) : null}
+
+      {agentActivity && !showAbout ? (
+        <AgentActivityPanel
+          task={agentActivity}
+          running={agentRunning}
+          onStop={stopGeneration}
+          onClose={() => setDismissedAgentTask(agentActivityKey)}
+        />
+      ) : null}
+
+      {inspectorOpen && !showAbout ? (
+        <div
+          className="chat-settings-layer"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setInspectorOpen(false);
+          }}
+        >
+          {settingsView === "plugins" ? (
+            <PluginsSettingsSheet active={!pluginSetup} onClose={() => setInspectorOpen(false)}>
+              <PluginsPanel
+                automaticWebSearch={{
+                  available: webSearchPlugin?.availability === "available",
+                  enabled: generationSettings.web_search_enabled,
+                }}
+                connections={pluginConnections}
+                automationAdapter={AUTOMATION_ADAPTER}
+                proposedInvocation={selectedActionProposal}
+                onAnalyzeCapture={async (captureResult) => {
+                  if (!chatStatus?.vision?.application_available) {
+                    notify({ message: chatStatus?.vision?.reason || "Image analysis is unavailable.", kind: "error" });
+                    return;
+                  }
+                  const prompt = draft.trim();
+                  if (!prompt) {
+                    notify({ message: "Write what you want Base Steak 2.0 to analyze in this capture.", kind: "error" });
+                    return;
+                  }
+                  try {
+                    const staged = await api.stageScreenCaptureForVision(captureResult.audit_record_id);
+                    setInspectorOpen(false);
+                    setDraft("");
+                    const taskId = generationTaskRef.current + 1;
+                    generationTaskRef.current = taskId;
+                    setSending(true);
+                    let conversationId = selectedIdRef.current;
+                    if (!conversationId) {
+                      const createdPayload = await api.createConversation();
+                      const created = createdPayload?.conversation || createdPayload;
+                      conversationId = created.id;
+                      selectConversation(created.id);
+                    }
+                    let operation = await api.analyzeVisionInput(
+                      conversationId,
+                      prompt,
+                      staged.vision_input_token,
+                      api.makeRequestKey(),
+                      128,
+                    );
+                    activeGenerationRef.current = operation;
+                    setActiveGeneration(operation);
+                    while (!generationTerminal(operation)) {
+                      await waitFor(GENERATION_PREVIEW_POLL_MS);
+                      operation = await api.getOperation(operation.id);
+                      activeGenerationRef.current = operation;
+                      setActiveGeneration(operation);
+                    }
+                    const refreshed = await api.getConversation(conversationId);
+                    setConversation(refreshed?.conversation || refreshed);
+                    if (operation.state === "failed") {
+                      setDraft(prompt);
+                      notify({
+                        message: operation.error?.message || "Salty Steak could not analyze this capture.",
+                        kind: "error",
+                      });
+                    }
+                    await Promise.all([
+                      refreshDomain("conversations", { quiet: true }),
+                      refreshDomain("chat", { quiet: true }),
+                    ]);
+                  } catch (error) {
+                    setDraft(prompt);
+                    notify({ message: errorMessage(error), kind: "error" });
+                  } finally {
+                    activeGenerationRef.current = null;
+                    setActiveGeneration(null);
+                    setSending(false);
+                  }
+                }}
+                loading={!pluginState && !pluginLoadError}
+                error={pluginLoadError}
+                onRetry={refreshPlugins}
+                busyId={pluginBusyId}
+                onAutomaticWebSearchChange={(enabled) => {
+                  setGenerationSettings((current) => ({ ...current, web_search_enabled: enabled }));
+                }}
+                onConnect={(connectorId) => {
+                  setPluginError("");
+                  setPluginSetup({ connectorId, mode: "connect" });
+                }}
+                onManage={(connectorId) => {
+                  setPluginError("");
+                  setPluginSetup({ connectorId, mode: "manage" });
+                }}
+                onAddMcpServer={() => {
+                  setPluginError("");
+                  setPluginSetup({ connectorId: "mcp", mode: "connect" });
+                }}
+              />
+            </PluginsSettingsSheet>
+          ) : (
+            <ResponseSettingsSheet
+              title={modelActivationBusy ? "Loading model..." : "Model & response"}
+              models={modelOptions}
+              selectedModelId={activeVersionId ? String(activeVersionId) : ""}
+              modelLabel={activeModelLabel}
+              modelDetail={readiness.key === "ready" ? "Loaded for this conversation" : readiness.label}
+              modelReady={readiness.key === "ready"}
+              modelStatusLabel={modelActivationBusy ? "Loading" : undefined}
+              settings={generationSettings}
+              onSettingsChange={setGenerationSettings}
+              onModelChange={selectConversationModel}
+              onOpenModels={() => {
+                setInspectorOpen(false);
+                onNavigate("versions");
+              }}
+              onReset={() => setGenerationSettings(normaliseGenerationSettingsSnapshot({
+                ...(chatStatus?.generation_defaults || DEFAULT_GENERATION_SETTINGS),
+                web_search_enabled: generationSettings.web_search_enabled,
+              }, DEFAULT_GENERATION_SETTINGS))}
+              onClose={() => setInspectorOpen(false)}
+            />
+          )}
+        </div>
+      ) : null}
+
+      {pluginSetup && !showAbout ? (
+        <PluginConnectionDialog
+          connectorId={pluginSetup.connectorId}
+          connector={pluginConnections[pluginSetup.connectorId] || { status: "disconnected" }}
+          busy={pluginBusyId === pluginSetup.connectorId}
+          error={pluginError}
+          onConnect={connectPlugin}
+          onRecheck={recheckPlugin}
+          onDisconnect={disconnectPlugin}
+          onClose={() => {
+            if (!pluginBusyId) {
+              setPluginError("");
+              setPluginSetup(null);
+            }
+          }}
+        />
+      ) : null}
+
+      <Dialog
+        open={managementMode === "rename"}
+        title="Rename conversation"
+        onClose={closeManagement}
+      >
+        <form className="stack-form" onSubmit={renameConversation}>
+          <Field label="Title" error={managementError}>
+            <input
+              autoFocus
+              type="text"
+              maxLength="80"
+              value={renameTitle}
+              onChange={(event) => {
+                setRenameTitle(event.target.value);
+                setManagementError("");
+              }}
+            />
+          </Field>
+          <FormActions>
+            <Button disabled={managementBusy} onClick={closeManagement}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              busy={managementBusy}
+              disabled={!validConversationTitle(renameTitle)}
+            >
+              Save
+            </Button>
+          </FormActions>
+        </form>
+      </Dialog>
+
+      <Dialog
+        open={managementMode === "delete"}
+        title="Delete conversation"
+        description={managedConversation?.title || ""}
+        onClose={closeManagement}
+      >
+        <InlineNotice kind="warning" title="Permanent deletion">
+          This conversation and every message in it will be removed. It cannot be recovered.
+        </InlineNotice>
+        {managementError ? (
+          <InlineNotice kind="error" title="Conversation not deleted">
+            {managementError}
+          </InlineNotice>
+        ) : null}
+        <FormActions>
+          <Button disabled={managementBusy} onClick={closeManagement}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            icon={Trash2}
+            busy={managementBusy}
+            onClick={deleteConversation}
+          >
+            Delete
+          </Button>
+        </FormActions>
+      </Dialog>
+      <Dialog
+        open={Boolean(fullAccessRequest)}
+        title="Turn on full access"
+        description="Salty Steak will be able to use your computer without asking each time."
+        onClose={() => setFullAccessRequest(null)}
+      >
+        <InlineNotice kind="warning" title="This enables real capabilities">
+          Full access is not only about confirmation. Enabling it grants the
+          capabilities below, and they stay granted until you revoke them in
+          Computer control. Every use is recorded in the audit log.
+        </InlineNotice>
+        <ul className="capability-consent-list">
+          {(fullAccessRequest?.capabilities || []).map((capability) => (
+            <li key={capability.id}>
+              <strong>{capability.name}</strong>
+              <span>{capability.description}</span>
+              {capability.alreadyGranted ? <em>Already enabled</em> : null}
+            </li>
+          ))}
+        </ul>
+        <FormActions>
+          <Button
+            disabled={grantingFullAccess}
+            onClick={() => setFullAccessRequest(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            icon={ShieldCheck}
+            busy={grantingFullAccess}
+            onClick={confirmFullAccess}
+          >
+            {`Enable ${fullAccessRequest?.missing?.length || 0} and turn on full access`}
+          </Button>
+        </FormActions>
+      </Dialog>
+    </div>
+  );
+}
+
+function ComposerPopover({ id, label, align = "left", children }) {
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const firstItem = menuRef.current?.querySelector(
+      '[role="menuitem"]:not(:disabled),[role="menuitemradio"]:not(:disabled)',
+    );
+    window.requestAnimationFrame(() => firstItem?.focus());
+  }, []);
+
+  function moveFocus(event) {
+    const direction = ({
+      ArrowDown: "next",
+      ArrowUp: "previous",
+      Home: "first",
+      End: "last",
+    })[event.key];
+    if (!direction) return;
+    const items = Array.from(menuRef.current?.querySelectorAll(
+      '[role="menuitem"],[role="menuitemradio"]',
+    ) || []);
+    const enabledItems = items.map((item) => !item.disabled);
+    const currentIndex = items.indexOf(document.activeElement);
+    const nextIndex = nextEnabledMenuIndex(currentIndex, direction, enabledItems);
+    if (nextIndex < 0) return;
+    event.preventDefault();
+    items[nextIndex]?.focus();
+  }
+
+  return (
+    <div
+      ref={menuRef}
+      id={id}
+      className={`composer-popover composer-popover--${align}`}
+      role="menu"
+      aria-label={label}
+      onKeyDown={moveFocus}
+    >
+      <div className="composer-popover__title" aria-hidden="true">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function ComposerMenuItem({
+  icon: Icon,
+  label,
+  description,
+  status = "",
+  selected = false,
+  radio = false,
+  disabled = false,
+  onSelect,
+}) {
+  return (
+    <button
+      type="button"
+      className={`composer-menu-item ${selected ? "is-selected" : ""}`}
+      role={radio ? "menuitemradio" : "menuitem"}
+      aria-checked={radio ? selected : undefined}
+      disabled={disabled}
+      onClick={onSelect}
+    >
+      <span className="composer-menu-item__icon"><Icon aria-hidden="true" /></span>
+      <span className="composer-menu-item__copy">
+        <strong>{label}</strong>
+        <small>{description}</small>
+      </span>
+      {status ? <span className="composer-menu-item__status">{status}</span> : null}
+    </button>
+  );
+}
+
+function ReadinessState({ readiness, chatStatus }) {
+  return (
+    <div className={`readiness readiness--${readiness.key}`}>
+      <Status value={readiness.statusValue} label={readiness.label} />
+      {chatStatus?.active_version_label ? <span>{chatStatus.active_version_label}</span> : null}
+    </div>
+  );
+}
+
+function PluginsSettingsSheet({ children, onClose, active = true }) {
+  const sheetRef = useModalFocusTrap({ active, onClose });
+  return (
+    <aside ref={sheetRef} className="plugins-settings-sheet" role="dialog" aria-modal="true" aria-labelledby="plugins-settings-title" tabIndex="-1">
+      <header className="plugins-settings-sheet__chrome">
+        <div>
+          <strong id="plugins-settings-title">Plugins</strong>
+          <span>Connections and permissions</span>
+        </div>
+        <button type="button" aria-label="Close plugins" onClick={onClose}>
+          <X aria-hidden="true" />
+        </button>
+      </header>
+      <div className="plugins-settings-sheet__body">{children}</div>
+    </aside>
+  );
+}
+
+function activeCookingLabel(phase, mode = "instant") {
+  if (mode !== "cooking") return "Responding";
+  const value = String(phase || "").toLowerCase();
+  if (value.includes("queue") || value.includes("wait")) return "Waiting to respond";
+  if (value.includes("search")) return "Searching sources";
+  if (value.includes("load") || value.includes("runtime")) return "Preparing runtime";
+  if (value.includes("prepar") || value.includes("prefill") || value.includes("prompt")) return "Preparing response";
+  if (value.includes("sav") || value.includes("final")) return "Finishing response";
+  if (value.includes("generat") || value.includes("cook")) return "Cooking";
+  if (value.includes("stop") || value.includes("cancel")) return "Stopping response";
+  return "Cooking";
+}
+
+function operationReasoningMode(operation, fallback = "instant") {
+  const details = operation?.result || operation?.details || {};
+  const value = String(
+    details.reasoning_mode_effective ?? details.reasoning_mode ?? fallback,
+  ).trim().toLowerCase();
+  return value === "cooking" ? "cooking" : "instant";
+}
+
+function messageReasoningMode(message) {
+  const details = message?.technical_details || message?.details || {};
+  const value = String(
+    details.reasoning_mode_effective ?? details.reasoning_mode ?? "",
+  ).trim().toLowerCase();
+  return value === "cooking" ? "cooking" : "instant";
+}
+
+function generationTerminal(operation) {
+  return ["completed", "failed", "interrupted", "cancelled"].includes(
+    String(operation?.state || "").toLowerCase(),
+  );
+}
+
+function waitFor(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function awaitTerminalOperation(operation, onUpdate) {
+  let current = operation;
+  while (!generationTerminal(current)) {
+    await waitFor(GENERATION_PREVIEW_POLL_MS);
+    current = await api.getOperation(current.id);
+    onUpdate?.(current);
+  }
+  return current;
+}
+
+function getReadiness(status) {
+  const explicit = normaliseToken(status?.readiness || status?.state);
+  const activeId = status?.active_saved_version_id || status?.saved_version_id;
+  const selectedModelId = status?.selected_model_id;
+  const selectedTargetId = activeId || selectedModelId;
+  const runtimeReady =
+    status?.runtime_ready === true ||
+    explicit === "ready" ||
+    normaliseToken(status?.runtime_state) === "ready";
+
+  if (selectedTargetId && runtimeReady) {
+    return {
+      key: "ready",
+      label: "Ready",
+      statusValue: "ready",
+      blockedMessage: "",
+    };
+  }
+  if (
+    selectedTargetId &&
+    [
+      "preparing",
+      "loading",
+      "queued",
+      "running",
+      "preparing_salty_potato",
+      "native_runtime_cold",
+      "ready_cold_load",
+      "",
+    ].includes(
+      explicit,
+    )
+  ) {
+    return {
+      key: "preparing",
+      label: "Preparing Salty Steak",
+      statusValue: "preparing_salty_potato",
+      blockedMessage: "",
+    };
+  }
+  if (!selectedTargetId && ["", "no_saved_version_selected", "no_version"].includes(explicit)) {
+    return {
+      key: "no_version",
+      label: "No saved version selected",
+      statusValue: "not_selected",
+      blockedMessage: "Choose a saved version before sending a message.",
+    };
+  }
+  if (selectedModelId && explicit === "engine_build_required") {
+    return {
+      key: "unavailable",
+      label: "Native engine setup required",
+      statusValue: "warning",
+      blockedMessage:
+        status?.message || "The selected base model is registered but its native engine has not passed activation.",
+    };
+  }
+  return {
+    key: "unavailable",
+    label: "Unavailable",
+    statusValue: "unavailable",
+    blockedMessage: status?.message || "Salty Steak is currently unavailable.",
+  };
+}
