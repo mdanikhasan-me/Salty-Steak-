@@ -90,12 +90,16 @@ class Source:
     title: str = ""
     retrieved_at: float = field(default_factory=time.time)
 
+
+    page_type: str = "unknown"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "source": self.source_id,
             "url": self.url,
             "title": self.title,
             "retrieved_at": self.retrieved_at,
+            "page_type": self.page_type,
         }
 
 
@@ -152,6 +156,8 @@ class ResearchLedger:
         self.budget = budget or Budget()
         self.sources: dict[str, Source] = {}
         self.claims: dict[str, Claim] = {}
+
+        self.observations: list[dict[str, Any]] = []
         self.queries: list[str] = []
         self.open_questions: list[str] = []
         self.started_at = time.monotonic()
@@ -218,6 +224,17 @@ class ResearchLedger:
                 claim.confidence = 0.4
         self.claims[claim.claim_id] = claim
         return claim
+
+    def record_observation(self, observation: Mapping[str, Any]) -> None:
+        """One page binding one product to one price, kept whole.
+
+        These never merge with each other. Two retailers selling the same
+        drive at different prices are two facts, not a disagreement to average
+        away, and a follow-up asking for exact links needs each one's own
+        address.
+        """
+
+        self.observations.append(dict(observation))
 
     def ingest(
         self, source: Source, statements: Iterable[str]
@@ -309,6 +326,7 @@ class ResearchLedger:
             "queries": list(self.queries),
             "sources": [source.to_dict() for source in self.sources.values()],
             "claims": [claim.to_dict() for claim in self.claims.values()],
+            "observations": [dict(item) for item in self.observations],
             "source_count": len(self.sources),
             "claim_count": len(self.claims),
             "corroborated": len(self.corroborated_claims),

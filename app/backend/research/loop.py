@@ -16,6 +16,12 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from .ledger import Budget, ResearchLedger
+from .pages import (
+    CATEGORY_LISTING,
+    classify_page,
+    looks_like_a_range,
+    price_observation,
+)
 
 
 
@@ -125,9 +131,30 @@ class ResearchLoop:
                     self._event("research_source_failed", url=url, error=str(error)[:200])
                     continue
 
-                summary = self.ledger.ingest(source, self.extract(page))
+
+
+
+
+                page_type = classify_page(page)
+                source.page_type = page_type
+                statements = list(self.extract(page))
+                if page_type == CATEGORY_LISTING:
+                    statements = [
+                        f"[catalogue page, not one product] {statement}"
+                        if looks_like_a_range(statement)
+                        else statement
+                        for statement in statements
+                    ]
+
+                observation = price_observation(page, page_type)
+                if observation is not None:
+                    self.ledger.record_observation(observation)
+
+                summary = self.ledger.ingest(source, statements)
                 opened += 1
-                self._event("research_source", **summary, url=url)
+                self._event(
+                    "research_source", **summary, url=url, page_type=page_type
+                )
 
             if opened == 0:
                 ended = "no_further_sources"

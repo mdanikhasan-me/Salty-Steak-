@@ -678,6 +678,10 @@ class LiveRunners:
 
             "sources": report["sources"],
             "claims": report["claims"][:25],
+
+
+
+            "observations": report.get("observations") or [],
         }
 
     def _follow_up(self, ledger: Any) -> str | None:
@@ -776,6 +780,13 @@ class LiveRunners:
                             "Do not estimate, round or fill a gap. If the "
                             "findings do not give a specific figure that was "
                             "asked for, say that they do not. "
+                            "A price for a named item may only come from "
+                            "verified_products, which is the only place a "
+                            "product, its price and its seller were bound "
+                            "together by one page. Quote each seller's price "
+                            "separately and give its link; never average them. "
+                            "A finding marked as a catalogue page describes a "
+                            "whole shop, not any item on it. "
                             "If the findings disagree, say what the "
                             "disagreement is. If they do not answer the "
                             "question, say so plainly."
@@ -786,6 +797,21 @@ class LiveRunners:
                         "content": json.dumps(
                             {
                                 "question": question,
+
+
+
+
+                                "verified_products": [
+                                    {
+                                        "product": item.get("product"),
+                                        "price": item.get("price"),
+                                        "currency": item.get("currency"),
+                                        "seller": item.get("seller"),
+                                        "stock": item.get("stock"),
+                                        "url": item.get("url"),
+                                    }
+                                    for item in (report.get("observations") or [])
+                                ],
                                 "findings": [
                                     {
                                         "text": claim.get("text"),
