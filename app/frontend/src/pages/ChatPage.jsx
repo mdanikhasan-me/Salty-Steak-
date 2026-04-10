@@ -32,6 +32,7 @@ import { ChatMessage } from "../components/ChatMessage.jsx";
 import { AgentActivityPanel } from "../components/AgentActivityPanel.jsx";
 import { ConversationSidebar } from "../components/ConversationSidebar.jsx";
 import { ResponseDetails } from "../components/ResponseDetails.jsx";
+import { externalLinkFromEvent } from "../workflows/externalLinks.mjs";
 import { CookingActivityPanel } from "../components/CookingActivityPanel.jsx";
 import { CookingStatus } from "../components/CookingStatus.jsx";
 import { PluginConnectionDialog } from "../components/PluginConnectionDialog.jsx";
@@ -1226,6 +1227,16 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
 
 
 
+
+
+
+  const openExternalLink = useCallback((event) => {
+    const href = externalLinkFromEvent(event);
+    if (!href) return;
+    event.preventDefault();
+    api.openExternal(href).catch((error) => reportError(error, "open-link"));
+  }, [reportError]);
+
   async function renameConversationTo(item, title) {
 
 
@@ -1715,7 +1726,12 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
             <button type="button" onClick={() => onNavigate("versions")}>Evidence</button>
           </div>
         ) : null}
-        <div ref={transcriptRef} className="message-scroll" onScroll={onTranscriptScroll}>
+        <div
+          ref={transcriptRef}
+          className="message-scroll"
+          onScroll={onTranscriptScroll}
+          onClick={openExternalLink}
+        >
 
           {loadingConversation && !messages.length && !selectedConversationGenerating ? (
             <div className="message-loading" role="status" aria-label="Opening conversation">
@@ -2195,6 +2211,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           <ResponseDetails
             details={responseDetailsFor}
             onClose={() => setResponseDetails(null)}
+            onOpenExternal={openExternalLink}
           />
         </>
       ) : null}

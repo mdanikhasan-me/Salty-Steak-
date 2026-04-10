@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 import threading
@@ -3203,6 +3204,62 @@ class ChatService:
             and runtime.get("external_service_required") is False
         )
 
+    def _research_provenance_note(self, conversation_id: str) -> str:
+        """What the last researched turn in this conversation actually verified.
+
+        "Give me the exact links" used to run as an ordinary turn with nothing
+        to work from, so the model reconstructed product-and-price pairings out
+        of its own prose and produced addresses that had never been visited.
+        The verified observations and the pages they came from are carried
+        forward instead, so a follow-up about "those" or "the cheapest one" is
+        answered from the same evidence that produced the original answer.
+        """
+
+        row = self.database.fetch_one(
+            """
+            SELECT technical_details_json FROM messages
+            WHERE conversation_id = ? AND role = 'assistant'
+              AND technical_details_json LIKE '%"observations"%'
+            ORDER BY sequence DESC LIMIT 1
+            """,
+            (conversation_id,),
+        )
+        if not row:
+            return ""
+        details = parse_json(row["technical_details_json"], None) or {}
+        orchestration = details.get("orchestration") or {}
+        observations = list(orchestration.get("observations") or [])[:8]
+        sources = list(orchestration.get("sources") or [])[:8]
+        if not observations and not sources:
+            return ""
+
+        packet = {
+            "verified_products": [
+                {
+                    "product": item.get("product"),
+                    "price": item.get("price"),
+                    "currency": item.get("currency"),
+                    "seller": item.get("seller"),
+                    "stock": item.get("stock"),
+                    "url": item.get("url"),
+                }
+                for item in observations
+            ],
+            "pages_read": [
+                {"title": item.get("title"), "url": item.get("url")}
+                for item in sources
+            ],
+        }
+        return (
+            "\nEarlier in this conversation you researched the web. These are "
+            "the pages that were actually opened and the products that were "
+            "actually verified on them. If the user refers to those results — "
+            "asking for exact links, which is cheapest, whether something is "
+            "in stock, or to compare them — answer from this and quote these "
+            "addresses exactly. Never write a link that is not here.\n"
+            + json.dumps(packet, default=str)
+        )
+
     def _turn_instruction(
         self, conversation_id: str, *, agent_mode: bool = False
     ) -> str:
@@ -3230,7 +3287,8 @@ class ChatService:
                 services = self.connectors.orchestration_hints()
             except Exception:
                 services = []
-        return build_turn_instruction(
+        provenance = self._research_provenance_note(conversation_id)
+        return provenance + build_turn_instruction(
             image_available=self._image_generation_available(),
             has_previous_image=has_previous,
 

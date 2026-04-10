@@ -366,6 +366,12 @@ export const api = {
       method: "POST",
       body: { pinned },
     }),
+
+
+
+
+  openExternal: (url) =>
+    request("/chat/open-external", { method: "POST", body: { url } }),
   listConversationLabels: () => request("/chat/labels"),
   createConversationLabel: (name, tone) =>
     request("/chat/labels", { method: "POST", body: { name, tone } }),

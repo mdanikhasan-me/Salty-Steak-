@@ -43,7 +43,7 @@ function SourceChip({ source }) {
   );
 }
 
-export function ResponseDetails({ details, onClose }) {
+export function ResponseDetails({ details, onClose, onOpenExternal }) {
   const panel = useRef(null);
   const account = responseDetails(details);
 
@@ -73,7 +73,7 @@ export function ResponseDetails({ details, onClose }) {
         </button>
       </header>
 
-      <div className="response-details__body">
+      <div className="response-details__body" onClick={onOpenExternal}>
         {account.activity.length ? (
           <section className="response-section">
             <h3>Activity</h3>

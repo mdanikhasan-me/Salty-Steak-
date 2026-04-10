@@ -358,6 +358,9 @@ class ApiRouter:
             return app.rename_conversation(
                 parts[2], self._required_string(body, "title", strip=False)
             )
+        if method == "POST" and parts == ("chat", "open-external"):
+            return app.open_external(self._read_json())
+
 
         if method == "GET" and parts == ("chat", "labels"):
             return app.list_conversation_labels()

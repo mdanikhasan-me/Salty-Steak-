@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
+import urllib.parse
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -5554,6 +5555,32 @@ class Application:
             "storage_reclaimed_bytes": reclaimed,
             "files_removed_count": files,
         }
+
+    def open_external(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Open a web address the user clicked in their own browser.
+
+        The WebView cancels every navigation that is not the application
+        itself, which is correct — a source link must not replace Salty Steak
+        with a retailer's page — but it left the links inert. This hands the
+        address to Windows, which opens whatever browser the user has chosen.
+
+        It is deliberately not the automation capability: the model is not
+        doing this, the person clicking is, so it needs no grant. It is also
+        deliberately narrow — http and https only, so nothing here can be
+        talked into launching a file, a UNC path or a custom scheme.
+        """
+
+        address = str(payload.get("url") or "").strip()
+        parsed = urllib.parse.urlsplit(address)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Only http and https addresses can be opened.")
+        if any(character in address for character in (chr(13), chr(10), chr(0))):
+            raise ValueError("That address is not a single line.")
+        if os.name == "nt":
+            os.startfile(address)
+        else:
+            subprocess.Popen(["xdg-open", address])
+        return {"opened": True, "url": address}
 
     def open_path(self, value: str | Path) -> None:
         path = Path(value).resolve()
