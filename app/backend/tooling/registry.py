@@ -635,6 +635,35 @@ class PluginRegistry:
         )
         return payload
 
+    def connected_apps(self) -> list[dict[str, Any]]:
+        """The external services Salty Steak can be connected to.
+
+        These are the plugins in the product's sense: another company's
+        account, reached over a network, with an authorisation the user grants
+        and can take back. Web search, the terminal and the screen are not
+        that — they are this application's own capabilities, and calling them
+        plugins told the user they had installed something they had not.
+        """
+
+        rows = []
+        for connector in self.connectors():
+            connected = bool(
+                connector.get("enabled") and connector.get("credentials_present")
+            )
+            rows.append(
+                {
+                    "id": connector.get("connector") or connector.get("provider"),
+                    "provider": connector.get("provider"),
+                    "name": connector.get("display_name"),
+                    "description": connector.get("description") or "",
+                    "account": connector.get("account") or "",
+                    "state": "connected" if connected else "not_connected",
+                    "scopes": connector.get("permission_scopes") or [],
+                    "last_error": connector.get("last_error"),
+                }
+            )
+        return rows
+
     def describe(
         self,
         *,
@@ -656,7 +685,11 @@ class PluginRegistry:
                 plugin["runtime_status"] = dict(vision_status)
         return {
             "architecture": "salty_steak_native_plugin_registry_v1",
-            "terminology": "plugins",
+
+
+            "terminology": "tools_and_connected_apps",
+            "tools": plugins,
+            "connected_apps": self.connected_apps(),
             "execution_policy": "deny_unregistered_and_require_declared_permission",
             "network_default": "off_except_built_in_read_only_web_search",
             "automatic_invocation_default": "host_intent_gated_read_only",
