@@ -70,6 +70,7 @@ import {
   shouldRenderConversationGeneration,
   visibleConversationForSelection,
 } from "../workflows/chatGeneration.mjs";
+import { readComposerCommand } from "../workflows/composerCommands.mjs";
 import { normaliseToken } from "../workflows/operations.mjs";
 import {
   isNearTranscriptBottom,
@@ -663,8 +664,11 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   }, [fullAccessRequest, notify, setGenerationSettings]);
 
   const sendExactMessage = useCallback(
-    async (content, requestedConversationId = selectedIdRef.current) => {
-      if (!content || !content.trim()) return;
+    async (typed, requestedConversationId = selectedIdRef.current) => {
+      if (!typed || !typed.trim()) return;
+
+
+      const { content, modes: commandModes } = readComposerCommand(typed);
       const taskId = generationTaskRef.current + 1;
       generationTaskRef.current = taskId;
       setSending(true);
@@ -710,10 +714,15 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               DEFAULT_GENERATION_SETTINGS,
             ),
             agent_mode: Boolean(agentModeRef.current),
-            research_mode: Boolean(researchModeRef.current),
+            research_mode:
+              Boolean(researchModeRef.current) ||
+              Boolean(commandModes.research_mode),
+            image_mode: Boolean(commandModes.image_mode) || undefined,
 
             web_search_enabled:
-              Boolean(researchModeRef.current) || undefined,
+              Boolean(researchModeRef.current) ||
+              Boolean(commandModes.research_mode) ||
+              undefined,
           };
           const submitted = await api.sendMessage(
             conversationId,
@@ -1519,6 +1528,14 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       },
     ]),
   ), [pluginState]);
+
+
+
+
+  const connectedApps = useMemo(
+    () => (pluginState?.connected_apps || []).filter((app) => app && app.name),
+    [pluginState],
+  );
   const webSearchPlugin = (pluginState?.plugins || []).find((plugin) => plugin.id === "web_search");
   const cookingActivityMessage = messages.find(
     (message) => String(message.id) === String(cookingActivityMessageId),

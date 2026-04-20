@@ -39,6 +39,28 @@ ORCHESTRATOR_SCHEMA = "salty-steak-image-orchestrator-v1"
 MAX_BRIEF_CORRECTIONS = 1
 
 
+
+
+
+BRIEF_AUTHOR_INSTRUCTION = """\
+You are writing the render brief for a local diffusion image model.
+
+Turn the request into concrete visual instruction. Be specific about the \
+subject, the framing, the lighting, the medium or lens, materials, colour and \
+the background. Say what must NOT appear in negative_constraints — the image \
+model cannot read a prohibition anywhere else.
+
+Reply with ONE JSON object and nothing else:
+{"subject":"","image_type":"logo|icon|illustration|photograph|diagram|poster|\
+pattern|concept_art|ui_mockup","goal":"","brand":"","style":"","composition":"",\
+"colour":"","background":"","text_content":"","required_elements":[],\
+"negative_constraints":[]}
+
+Keep the subject the one that was asked for. Elaborate it; never replace it. \
+Leave a field out rather than inventing a brand, a slogan or wording the \
+request does not have."""
+
+
 class ImageOrchestrationError(RuntimeError):
     """Raised when an image job cannot be prepared or run."""
 
@@ -57,6 +79,7 @@ class ImageOrchestrator:
         registry: ImageJobRegistry | None = None,
         task: Any = None,
         rebrief: Callable[[str, RenderBrief], Mapping[str, Any] | None] | None = None,
+        author: Callable[..., Mapping[str, Any] | None] | None = None,
         backend: str = "",
     ) -> None:
         self.generate = generate
@@ -64,6 +87,13 @@ class ImageOrchestrator:
         self.task = task
 
         self.rebrief = rebrief
+
+
+
+
+
+
+        self.author = author
         self.backend = backend
 
 
@@ -73,16 +103,32 @@ class ImageOrchestrator:
         decision: Mapping[str, Any],
         *,
         original_request: str,
+        latest_request: str = "",
+        notes: str = "",
         conversation_id: str = "",
         message_id: str = "",
     ) -> ImageGenerationJob:
-        """Build a new image job from a generate_image decision."""
+        """Build a new image job from a generate_image decision.
+
+        ``original_request`` is the recent thread, so a brief keeps the task a
+        follow-up refers to. ``latest_request`` is only what was just asked,
+        and it is the better fallback subject: a brief with no subject of its
+        own used to take the first two hundred characters of the joined
+        thread, which is several turns of somebody else's request.
+        """
 
         self._event("image_brief_started", request=original_request[:200])
+
+
+
+
+
         brief = build_brief(
-            decision.get("brief") or decision.get("arguments") or {},
+            decision.get("brief") or decision.get("arguments") or decision,
             original_request=original_request,
+            fallback_subject=str(latest_request or ""),
         )
+        brief = self._author_brief(brief, request=original_request, notes=notes)
         brief = self._enforce(brief, original_request)
         job = ImageGenerationJob(
             brief=brief,
@@ -125,6 +171,7 @@ class ImageOrchestrator:
             return self.prepare(
                 decision,
                 original_request=feedback,
+                latest_request=feedback,
                 conversation_id=conversation_id,
                 message_id=message_id,
             )
@@ -140,6 +187,52 @@ class ImageOrchestrator:
         self.registry.add(job)
         self._event("image_brief_completed", **job.activity())
         return job
+
+
+
+    def _author_brief(
+        self, brief: RenderBrief, *, request: str, notes: str = ""
+    ) -> RenderBrief:
+        """Let the text model write the brief out properly before rendering.
+
+        The decision that routes a turn is made in the same breath as the
+        answer, so the brief inside it is whatever fitted there. "cow" and
+        "realistic" is not a description of a photograph, and a diffusion model
+        given three words draws three words.
+
+        Fails open in every direction. If the model is unreachable, replies
+        with prose, or returns something that no longer describes what was
+        asked for, the brief that came out of the decision is used unchanged —
+        a thin picture beats no picture, and the guard still runs afterwards.
+        """
+
+        if self.author is None:
+            return brief
+        self._event("image_brief_authoring", subject=brief.subject[:120])
+        try:
+            payload = self.author(request=request, brief=brief, notes=notes)
+        except Exception as error:
+            self._event("image_brief_authoring_failed", error=str(error)[:200])
+            return brief
+        if not isinstance(payload, Mapping) or not payload:
+            return brief
+
+        merged = brief.to_dict()
+        merged.pop("schema", None)
+        merged.pop("brief_id", None)
+        for key, value in payload.items():
+            if key not in merged or value in (None, "", [], {}):
+                continue
+            merged[key] = value
+        candidate = build_brief(merged, original_request=brief.original_request or request)
+
+
+
+        if not inspect(candidate, request=request).ok:
+            self._event("image_brief_authoring_rejected", subject=candidate.subject[:120])
+            return brief
+        self._event("image_brief_authored", subject=candidate.subject[:120])
+        return candidate
 
 
 

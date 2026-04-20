@@ -122,6 +122,94 @@ def build_decision_prompt(
     return "\n".join(lines)
 
 
+
+
+ACTION_ALIASES = {
+    "image": GENERATE_IMAGE,
+    "image.generate": GENERATE_IMAGE,
+    "generate": GENERATE_IMAGE,
+    "generateimage": GENERATE_IMAGE,
+    "generate_image": GENERATE_IMAGE,
+    "revise": REVISE_IMAGE,
+    "revise_image": REVISE_IMAGE,
+    "answer": RESPOND,
+    "reply": RESPOND,
+    "respond": RESPOND,
+    "workflow": PLAN,
+    "plan": PLAN,
+    "action": SINGLE_ACTION,
+    "research": RESEARCH,
+}
+
+
+
+
+_BARE_ARGUMENT_FIELD = {
+    RESEARCH: "question",
+    GENERATE_IMAGE: "subject",
+    REVISE_IMAGE: "changes",
+    SINGLE_ACTION: "target",
+}
+
+
+def _declined(value: Any) -> bool:
+    """Whether a job flag reads as "not this one"."""
+
+    if value is None or value is False:
+        return True
+    if isinstance(value, str):
+        return value.strip().casefold() in {"", "false", "no", "none", "0"}
+    if isinstance(value, (list, tuple, dict, set)):
+        return not value
+    if isinstance(value, (int, float)):
+        return not value
+    return False
+
+
+def _decision_from_job_keys(parsed: Mapping[str, Any]) -> dict[str, Any]:
+    """Read a decision written as job names rather than as an action value.
+
+    Observed live on "Generate an image of a cow.":
+    ``{"research": false, "generate_image": true, "brief": {...}}``. The model
+    treated the list of choices as a set of switches. It had decided correctly;
+    only the shape was wrong, and rejecting it threw away a right answer.
+
+    Normalisation is deterministic and refuses to guess: exactly one job may be
+    claimed. Two claimed jobs means the model did not decide, and that belongs
+    in the correction pass rather than in a coin toss here.
+    """
+
+    claimed = [
+        key
+        for key in parsed
+        if isinstance(key, str)
+        and key.strip().casefold() in ACTION_ALIASES
+        and not _declined(parsed[key])
+    ]
+    if len(claimed) != 1:
+        return dict(parsed)
+
+    key = claimed[0]
+    action = ACTION_ALIASES[key.strip().casefold()]
+    payload = parsed[key]
+
+
+    decision = {
+        name: value
+        for name, value in parsed.items()
+        if not (isinstance(name, str) and name.strip().casefold() in ACTION_ALIASES)
+    }
+    if isinstance(payload, Mapping):
+        for name, value in payload.items():
+            decision.setdefault(name, value)
+    elif isinstance(payload, str) and payload.strip():
+        field = _BARE_ARGUMENT_FIELD.get(action)
+        if field:
+            decision.setdefault(field, payload.strip())
+    decision["action"] = action
+    return decision
+
+
 THINK_BLOCK = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
 UNCLOSED_THINK = re.compile(r"<think>[\s\S]*$", re.IGNORECASE)
 
@@ -187,20 +275,15 @@ def parse_decision(reply: str) -> dict[str, Any]:
         if remaining and "arguments" not in parsed:
             parsed["arguments"] = remaining
 
+    if not str(parsed.get("action") or "").strip():
+
+
+
+        parsed = _decision_from_job_keys(parsed)
+
     action = str(parsed.get("action") or "").strip().casefold()
 
-    aliases = {
-        "image": GENERATE_IMAGE,
-        "image.generate": GENERATE_IMAGE,
-        "generate": GENERATE_IMAGE,
-        "generateimage": GENERATE_IMAGE,
-        "revise": REVISE_IMAGE,
-        "revise_image": REVISE_IMAGE,
-        "answer": RESPOND,
-        "reply": RESPOND,
-        "workflow": PLAN,
-    }
-    action = aliases.get(action, action)
+    action = ACTION_ALIASES.get(action, action)
 
     decision = dict(parsed)
     if action not in JOB_TYPES and action in CAPABILITY_ACTIONS:

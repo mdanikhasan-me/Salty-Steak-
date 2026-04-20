@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
 import threading
 import time
@@ -773,6 +774,11 @@ class ChatService:
 
 
             "research_mode": bool(supplied.get("research_mode", False)),
+
+
+
+
+            "image_mode": bool(supplied.get("image_mode", False)),
         }
 
     def list_conversations(self) -> list[dict[str, Any]]:
@@ -1783,7 +1789,19 @@ class ChatService:
         width = int(settings.get("width", 512))
         height = int(settings.get("height", 512))
         steps = int(settings.get("steps", settings.get("num_inference_steps", 8)))
-        seed = int(settings.get("seed", 42))
+
+
+
+
+
+
+
+        requested_seed = settings.get("seed")
+        seed = (
+            int(requested_seed)
+            if requested_seed is not None
+            else secrets.randbelow(0x1_0000_0000)
+        )
 
         if (width, height, steps) != (512, 512, 8):
             raise ValueError("The validated Steak Gen profile is 512x512 with 8 steps")
@@ -3536,7 +3554,12 @@ class ChatService:
             looks_like_a_decision_attempt,
             read_decision,
         )
-        from .orchestrator import RESPOND, conversation_request, strip_reasoning
+        from .orchestrator import (
+            RESPOND,
+            conversation_request,
+            latest_user_message,
+            strip_reasoning,
+        )
 
 
 
@@ -3546,6 +3569,15 @@ class ChatService:
 
         if bool(generation_settings.get("research_mode")):
             decision = {"action": "research", "question": request}
+        elif bool(generation_settings.get("image_mode")):
+
+
+
+            decision = {
+                "action": "generate_image",
+                "reason": "The user asked for an image directly.",
+                "model_notes": strip_reasoning(reply_text)[:2_000],
+            }
         else:
             decision = read_decision(reply_text)
         if decision is None and looks_like_a_decision_attempt(reply_text):
@@ -3572,11 +3604,19 @@ class ChatService:
 
 
                 second = strip_reasoning(str(corrected or "")).strip()
+
+
+
+
+                unread = str(strip_reasoning(str(reply_text or "")))[:1_200]
                 if second and not looks_like_a_decision_attempt(second):
                     return TurnOutcome(
                         "respond",
                         content=second,
-                        details={"decision_corrected_to_prose": True},
+                        details={
+                            "decision_corrected_to_prose": True,
+                            "unreadable_decision": unread,
+                        },
                     )
                 return TurnOutcome(
                     "respond",
@@ -3586,7 +3626,10 @@ class ChatService:
                         "than show you a data dump. Ask me again and I will "
                         "answer properly."
                     ),
-                    details={"decision_unparsable": True},
+                    details={
+                        "decision_unparsable": True,
+                        "unreadable_decision": unread,
+                    },
                 )
         if decision is None or decision.get("action") == RESPOND:
             return None
@@ -3603,9 +3646,55 @@ class ChatService:
         from ..imaging import ImageOrchestrator
         from .runners import LiveRunners
 
+
+
+
+
+        established = next(
+            (
+                str(message.get("content") or "")
+                for message in reversed(history)
+                if str(message.get("role") or "").casefold() == "assistant"
+            ),
+            "",
+        )[:2_000]
+
+        def author_brief(*, request: str, brief, notes: str = "") -> dict[str, Any] | None:
+            """Base Steak writes the render brief; Steak Gen only draws it."""
+
+            from ..imaging.orchestrator import BRIEF_AUTHOR_INSTRUCTION
+            from .actions import _whole_json_object
+
+            body = [f"REQUEST:\n{request}"]
+            if notes:
+                body.append(f"NOTES:\n{str(notes)[:2_000]}")
+            if established:
+                body.append(f"ESTABLISHED IN THIS CONVERSATION:\n{established}")
+            body.append(
+                "BRIEF SO FAR:\n" + json.dumps(brief.to_dict(), default=str)
+            )
+            reply = self._agent_generate(
+                [
+                    {"role": "system", "content": BRIEF_AUTHOR_INSTRUCTION},
+                    {"role": "user", "content": "\n\n".join(body)},
+                ],
+                context=context,
+                generation_settings=generation_settings,
+            )
+            parsed = _whole_json_object(strip_reasoning(str(reply or "")))
+            return dict(parsed) if isinstance(parsed, Mapping) else None
+
         images = ImageOrchestrator(
             generate=self._render_image,
             backend="steak-gen-1-scaledfp8",
+            author=author_brief,
+
+
+            rebrief=lambda correction, brief: author_brief(
+                request=conversation_request(history) or request,
+                brief=brief,
+                notes=correction,
+            ),
         )
         runners = self._live_runners(
             images=images,
@@ -3631,6 +3720,8 @@ class ChatService:
 
 
             request=conversation_request(history) or request,
+
+            latest_request=latest_user_message(history) or request,
             conversation_id=conversation_id,
             message_id=message_id,
         )
@@ -3812,6 +3903,107 @@ class ChatService:
             ).hexdigest(),
             "planner_output_bytes": len(rendered.encode("utf-8")),
         }
+
+    def _seed_of_image_job(self, conversation_id: str, job_id: str) -> int | None:
+        """The seed a finished image job was actually rendered with.
+
+        Read from the artifact's own provenance rather than recomputed, so a
+        revision reproduces the picture it is revising even after a restart.
+        """
+
+        rows = self.database.fetch_all(
+            """
+            SELECT m.technical_details_json AS details,
+                   a.provenance_json AS provenance
+            FROM messages m
+            JOIN chat_artifacts a ON a.message_id = m.id
+            WHERE m.conversation_id = ? AND m.role = 'assistant'
+            ORDER BY m.sequence DESC LIMIT 24
+            """,
+            (conversation_id,),
+        )
+        for row in rows or []:
+            details = parse_json(row["details"], {}) or {}
+            proposal = details.get("host_action_proposal") or {}
+            if str(proposal.get("image_job_id") or "") != job_id:
+                continue
+            provenance = parse_json(row["provenance"], {}) or {}
+            seed = provenance.get("seed")
+            if isinstance(seed, int):
+                return seed
+        return None
+
+    @staticmethod
+    def _image_underway_sentence(turn) -> str:
+        """What the transcript says while the picture is being made."""
+
+        job = dict(turn.details.get("image_job") or {})
+        subject = str(job.get("subject") or "").strip()
+        declared = str(job.get("image_type") or "").strip()
+        kind = "image" if declared in {"", "other"} else declared.replace("_", " ")
+        revision = int(job.get("revision") or 1)
+        if revision > 1:
+            return f"Revising the {kind}, keeping everything else the same."
+        if subject:
+            return f"Creating the {kind}: {subject}."
+        return f"Creating the {kind}."
+
+    def _start_requested_image(
+        self,
+        *,
+        conversation_id: str,
+        assistant_message_id: str,
+        details: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Render the image the user asked for, instead of offering to.
+
+        The proposal shape stays: it carries the checked render brief, the
+        artifact persistence, the progress reporting and the cancellation that
+        the reviewed path already had, and none of that is worth rebuilding.
+        What changes is who confirms it. Asking someone to approve a picture
+        they have not seen, having just asked for that picture, is a click that
+        conveys no information — and it is why "Generate an image of a cow"
+        produced a sentence about a cow and no cow.
+
+        Only an orchestrated image decision starts itself. Anything else that
+        writes a proposal keeps its review.
+        """
+
+        from .orchestrator import GENERATE_IMAGE, REVISE_IMAGE
+
+        proposal = details.get("host_action_proposal")
+        orchestration = details.get("orchestration") or {}
+        if not isinstance(proposal, Mapping) or not isinstance(orchestration, Mapping):
+            return None
+        if str(orchestration.get("kind")) not in {GENERATE_IMAGE, REVISE_IMAGE}:
+            return None
+        if (
+            proposal.get("kind") != IMAGE_ACTION
+            or proposal.get("state") != "pending_review"
+        ):
+            return None
+
+
+
+
+
+        settings: dict[str, Any] | None = None
+        parent_job_id = str(proposal.get("image_parent_job_id") or "")
+        if parent_job_id:
+            inherited = self._seed_of_image_job(conversation_id, parent_job_id)
+            if inherited is not None:
+                settings = {"seed": inherited}
+        try:
+            return self.confirm_image_generation(
+                conversation_id,
+                str(proposal.get("id") or ""),
+                assistant_message_id,
+                settings,
+            )
+        except Exception:
+
+
+            return None
 
     def _render_image(self, brief, job):
         """Placeholder generator for the orchestrator's own bookkeeping.
@@ -4188,6 +4380,11 @@ class ChatService:
 
 
                 details["host_action_proposal"] = proposal
+
+
+
+                if proposal["state"] == "pending_review":
+                    assistant_content = self._image_underway_sentence(turn)
                 relationship["host_action"] = {
                     "intent": IMAGE_ACTION,
                     "state": proposal["state"],
@@ -4342,9 +4539,19 @@ class ChatService:
                 "UPDATE conversations SET updated_at = ? WHERE id = ?",
                 (finished, conversation_id),
             )
+
+
+        image_operation = self._start_requested_image(
+            conversation_id=conversation_id,
+            assistant_message_id=assistant_id,
+            details=details,
+        )
         result = {
             **relationship,
             "assistant_message_id": assistant_id,
+            "image_operation_id": (
+                str(image_operation["id"]) if image_operation else None
+            ),
             "partial_output_saved": False,
             "finish_reason": details["finish_reason"],
 

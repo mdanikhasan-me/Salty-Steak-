@@ -68,6 +68,33 @@ MAX_BRIEF_CHARACTERS = 6_000
 MAX_ITEMS = 40
 
 
+
+
+
+
+
+
+
+
+REQUEST_WRAPPER = re.compile(
+    r"^\s*(?:please\s+)?(?:\w+[\s,]+){0,3}?"
+    r"\b(?:an?|the|some)\s+"
+    r"(?:image|picture|photo|photograph|drawing|illustration|render|rendering|"
+    r"visual|visualisation|visualization|graphic|artwork|painting|sketch)s?\s+"
+    r"(?:of|showing|depicting|featuring|with)\s+",
+    re.IGNORECASE,
+)
+
+
+def subject_from_request(text: str) -> str:
+    """What a request is asking for, without the asking."""
+
+    cleaned = _clean(text)
+    stripped = REQUEST_WRAPPER.sub("", cleaned, count=1)
+    stripped = stripped.strip().rstrip(".!").strip()
+    return stripped or cleaned
+
+
 def _clean(value: Any) -> str:
     return " ".join(str(value or "").split())
 
@@ -216,7 +243,11 @@ class RenderBrief:
         """
 
         lines: list[str] = []
-        headline = self.image_type.replace("_", " ")
+
+
+        headline = (
+            "image" if self.image_type == "other" else self.image_type.replace("_", " ")
+        )
         lines.append(f"TASK: {headline} — {self.subject}")
         if self.brand:
             lines.append(f"BRAND: {self.brand}")
@@ -313,10 +344,17 @@ def build_brief(
     payload = dict(payload or {})
     request = _clean(original_request)
 
-    subject = _clean(payload.get("subject") or fallback_subject or request[:200])
+
+
+    subject = _clean(payload.get("subject"))
+    if not subject:
+        subject = subject_from_request(fallback_subject or request)[:200]
     declared = str(payload.get("image_type") or "").strip().casefold()
+
+
+
     image_type = declared if declared in IMAGE_TYPES else infer_image_type(
-        f"{subject} {payload.get('goal') or ''} {request}"
+        f"{declared} {subject} {payload.get('goal') or ''} {request}"
     )
 
 

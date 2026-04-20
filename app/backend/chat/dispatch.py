@@ -43,9 +43,13 @@ DISPATCH_SCHEMA = "salty-steak-turn-dispatch-v1"
 
 
 
+
+
+
+
 DECISION_INSTRUCTION = """\
 Answer normally. If the request needs more than an answer, reply with ONE JSON \
-object instead:
+object instead: {{"action":"<name below>","reason":"<one sentence>"}}
 {jobs}
 Judge by intent, not wording: a logo, icon or poster request is an image request.\
 """
@@ -296,8 +300,16 @@ class TurnDispatcher:
         request: str,
         conversation_id: str,
         message_id: str = "",
+        latest_request: str = "",
     ) -> TurnOutcome:
-        """Carry out whatever the model decided."""
+        """Carry out whatever the model decided.
+
+        ``request`` is the recent thread, so a follow-up still carries the task
+        it refers to. ``latest_request`` is only what the user just said, which
+        is what a revision is a revision *of* — the two are different, and a
+        revision handed the whole thread wrote "this revision changes: create a
+        minimal professional logo…" into a brief that already said that.
+        """
 
         if decision is None:
 
@@ -313,6 +325,7 @@ class TurnDispatcher:
                 decision,
                 action=action,
                 request=request,
+                latest_request=latest_request or request,
                 conversation_id=conversation_id,
                 message_id=message_id,
             )
@@ -351,6 +364,7 @@ class TurnDispatcher:
         request: str,
         conversation_id: str,
         message_id: str,
+        latest_request: str = "",
     ) -> TurnOutcome:
         if self.images is None:
             return TurnOutcome(
@@ -373,7 +387,7 @@ class TurnDispatcher:
             if action == REVISE_IMAGE:
                 job = self.images.prepare_revision(
                     decision,
-                    feedback=request,
+                    feedback=latest_request or request,
                     conversation_id=conversation_id,
                     message_id=message_id,
                     parent_job_id=parent.job_id if parent else None,
@@ -382,6 +396,8 @@ class TurnDispatcher:
                 job = self.images.prepare(
                     decision,
                     original_request=request,
+                    latest_request=latest_request or request,
+                    notes=str(decision.get("model_notes") or ""),
                     conversation_id=conversation_id,
                     message_id=message_id,
                 )
