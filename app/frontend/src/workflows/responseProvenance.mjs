@@ -18,6 +18,10 @@ const COMPLETION_WORDS = {
   failed: "Failed after",
   partial: "Partial ·",
   waiting: "Waiting",
+
+
+
+  rendering: "Creating the image",
 };
 
 
@@ -69,7 +73,7 @@ export function completionLabel(details) {
   const state = completionState(details);
   const word = COMPLETION_WORDS[state];
   if (!word) return "";
-  if (state === "waiting") return word;
+  if (state === "waiting" || state === "rendering") return word;
   const elapsed = formatElapsed(turnDuration(details));
   return elapsed ? `${word} ${elapsed}` : word;
 }

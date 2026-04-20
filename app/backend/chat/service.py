@@ -115,7 +115,9 @@ def _turn_completion(
     if getattr(response, "cancelled", False):
         return "stopped"
     if proposal_pending:
-        return "waiting"
+
+
+        return "rendering" if details.get("image_render_started") else "waiting"
 
     status = str((getattr(turn, "details", {}) or {}).get("status") or "")
     if status in {"failed", "rejected", "declined"}:
@@ -2499,6 +2501,17 @@ class ChatService:
                 )
                 details["host_action_proposal"] = proposal
                 details["generated_image"] = generated_image
+
+
+
+                if details.get("turn_completion") == "rendering":
+                    details["turn_completion"] = (
+                        "cooked"
+                        if str(details.get("reasoning_mode_effective") or "").lower()
+                        == "cooking"
+                        else "done"
+                    )
+                    details["image_render_started"] = False
                 connection.execute(
                     """
                     INSERT INTO chat_artifacts(
@@ -3904,6 +3917,29 @@ class ChatService:
             "planner_output_bytes": len(rendered.encode("utf-8")),
         }
 
+    @staticmethod
+    def _image_will_render(details: Mapping[str, Any]) -> bool:
+        """Whether this turn's proposal starts drawing without being asked again.
+
+        One predicate, read twice: once before the message is written so the
+        turn can say it is creating an image rather than waiting on the user,
+        and once after, to actually start it. Two conditions written twice is
+        how a message ends up describing something that never happened.
+        """
+
+        from .orchestrator import GENERATE_IMAGE, REVISE_IMAGE
+
+        proposal = details.get("host_action_proposal")
+        orchestration = details.get("orchestration") or {}
+        if not isinstance(proposal, Mapping) or not isinstance(orchestration, Mapping):
+            return False
+        if str(orchestration.get("kind")) not in {GENERATE_IMAGE, REVISE_IMAGE}:
+            return False
+        return (
+            proposal.get("kind") == IMAGE_ACTION
+            and proposal.get("state") == "pending_review"
+        )
+
     def _seed_of_image_job(self, conversation_id: str, job_id: str) -> int | None:
         """The seed a finished image job was actually rendered with.
 
@@ -3969,18 +4005,8 @@ class ChatService:
         writes a proposal keeps its review.
         """
 
-        from .orchestrator import GENERATE_IMAGE, REVISE_IMAGE
-
         proposal = details.get("host_action_proposal")
-        orchestration = details.get("orchestration") or {}
-        if not isinstance(proposal, Mapping) or not isinstance(orchestration, Mapping):
-            return None
-        if str(orchestration.get("kind")) not in {GENERATE_IMAGE, REVISE_IMAGE}:
-            return None
-        if (
-            proposal.get("kind") != IMAGE_ACTION
-            or proposal.get("state") != "pending_review"
-        ):
+        if not self._image_will_render(details) or not isinstance(proposal, Mapping):
             return None
 
 
@@ -4003,7 +4029,33 @@ class ChatService:
         except Exception:
 
 
+
+            self._mark_turn_completion(assistant_message_id, "waiting")
             return None
+
+    def _mark_turn_completion(self, assistant_message_id: str, completion: str) -> None:
+        """Correct how a committed turn says it ended."""
+
+        try:
+            with self.database.transaction() as connection:
+                row = connection.execute(
+                    "SELECT technical_details_json FROM messages WHERE id = ?",
+                    (assistant_message_id,),
+                ).fetchone()
+                if row is None:
+                    return
+                details = parse_json(row["technical_details_json"], {})
+                if not isinstance(details, dict):
+                    return
+                details["turn_completion"] = completion
+                if completion != "rendering":
+                    details["image_render_started"] = False
+                connection.execute(
+                    "UPDATE messages SET technical_details_json = ? WHERE id = ?",
+                    (json_text(details), assistant_message_id),
+                )
+        except Exception:
+            return
 
     def _render_image(self, brief, job):
         """Placeholder generator for the orchestrator's own bookkeeping.
@@ -4417,6 +4469,7 @@ class ChatService:
 
 
         details["turn_duration_ms"] = round((time.monotonic() - turn_started) * 1000)
+        details["image_render_started"] = self._image_will_render(details)
         details["turn_completion"] = _turn_completion(
             details,
             response=response,

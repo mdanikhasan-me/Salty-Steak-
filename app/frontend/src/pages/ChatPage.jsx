@@ -2,14 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppWindow,
   Bot,
+  CalendarDays,
   Camera,
   Check,
   ChefHat,
   ChevronDown,
   CircleAlert,
   FileText,
+  Github,
   Globe,
+  HardDrive,
   Image,
+  Mail,
   MessageCircle,
   MoreHorizontal,
   MousePointerClick,
@@ -71,6 +75,7 @@ import {
   visibleConversationForSelection,
 } from "../workflows/chatGeneration.mjs";
 import { readComposerCommand } from "../workflows/composerCommands.mjs";
+import { composerPickerSections } from "../workflows/composerPlugins.mjs";
 import { normaliseToken } from "../workflows/operations.mjs";
 import {
   isNearTranscriptBottom,
@@ -170,6 +175,42 @@ export function pluginIcon(plugin) {
     || PLUGIN_CATEGORY_ICONS[String(plugin?.category || "")]
     || Plug
   );
+}
+
+
+
+
+
+const CONNECTED_APP_ICONS = {
+  gmail: Mail,
+  "mail.google": Mail,
+  google_calendar: CalendarDays,
+  icloud_calendar: CalendarDays,
+  google_drive: HardDrive,
+  discord: MessageCircle,
+  github: Github,
+  mcp: Plug,
+};
+
+
+
+
+const CONNECTED_APP_KIND_ICONS = [
+  [/mail|gmail|inbox/i, Mail],
+  [/calendar/i, CalendarDays],
+  [/drive|storage|files/i, HardDrive],
+  [/discord|chat|message/i, MessageCircle],
+  [/github|git\b/i, Github],
+];
+
+export function connectedAppIcon(app) {
+  const known =
+    CONNECTED_APP_ICONS[String(app?.id || "")]
+    || CONNECTED_APP_ICONS[String(app?.provider || "")];
+  if (known) return known;
+  const described = `${app?.id || ""} ${app?.provider || ""} ${app?.name || ""}`;
+  const matched = CONNECTED_APP_KIND_ICONS.find(([pattern]) => pattern.test(described));
+  return matched ? matched[1] : Plug;
 }
 
 export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
@@ -1532,8 +1573,8 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
 
 
 
-  const connectedApps = useMemo(
-    () => (pluginState?.connected_apps || []).filter((app) => app && app.name),
+  const pickerSections = useMemo(
+    () => composerPickerSections(pluginState),
     [pluginState],
   );
   const webSearchPlugin = (pluginState?.plugins || []).find((plugin) => plugin.id === "web_search");
@@ -1886,6 +1927,29 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                   type="file"
                   multiple
                   accept="text
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
