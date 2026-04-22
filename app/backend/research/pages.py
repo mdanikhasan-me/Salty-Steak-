@@ -84,6 +84,53 @@ _ARTICLE_PHRASES = (
 )
 
 
+
+
+_RELATED_BOUNDARIES = (
+    "related product",
+    "similar product",
+    "you may also like",
+    "you might also like",
+    "customers also",
+    "frequently bought",
+    "recommended for you",
+    "recently viewed",
+    "compare with similar",
+    "more from this",
+)
+
+
+
+
+
+
+
+
+
+
+
+_LABEL_BEFORE = (
+    "emi",
+    "instal",
+    "save",
+    "discount",
+    "cashback",
+    "delivery",
+    "shipping",
+    "coupon",
+    "voucher",
+    "reward",
+    "% off",
+)
+
+_PERIOD_AFTER = ("/month", "/mo", "per month", "a month", "monthly", "/year")
+
+
+
+_LABEL_WINDOW = 24
+_PERIOD_WINDOW = 10
+
+
 def _counts(text: str) -> tuple[int, int]:
     """How many priced amounts the page carries, and how many are distinct."""
 
@@ -100,6 +147,32 @@ def _counts(text: str) -> tuple[int, int]:
 
 def _hits(text: str, phrases: tuple[str, ...]) -> int:
     return sum(1 for phrase in phrases if phrase in text)
+
+
+def own_product_text(text: str) -> str:
+    """The part of a page that is about the product the page is for."""
+
+    lowered = str(text or "").casefold()
+    cut = len(text or "")
+    for boundary in _RELATED_BOUNDARIES:
+        found = lowered.find(boundary)
+        if found >= 0:
+            cut = min(cut, found)
+    return str(text or "")[:cut]
+
+
+def _is_the_products_own_price(text: str, match: re.Match[str]) -> bool:
+    """Whether an amount on a product page is what the product costs.
+
+    An instalment, a saving and a delivery charge are all money printed beside
+    a price, and none of them is one.
+    """
+
+    before = text[max(0, match.start() - _LABEL_WINDOW) : match.start()].casefold()
+    after = text[match.end() : match.end() + _PERIOD_WINDOW].casefold()
+    if any(label in before for label in _LABEL_BEFORE):
+        return False
+    return not any(period in after for period in _PERIOD_AFTER)
 
 
 def classify_page(page: Mapping[str, Any]) -> str:
@@ -131,7 +204,13 @@ def classify_page(page: Mapping[str, Any]) -> str:
 
     if counted or (distinct_prices >= 6 and listing >= 2):
         return CATEGORY_LISTING
-    if product >= 2 and distinct_prices <= 4:
+
+
+
+
+
+
+    if product >= 2 and (listing <= 1 or distinct_prices <= 4):
         return PRODUCT_DETAIL
     if article >= 2 and distinct_prices <= 2:
         return ARTICLE_REVIEW
@@ -154,9 +233,16 @@ def _amount(match: re.Match[str]) -> tuple[str, float] | None:
     currency = (match.group("pre") or match.group("post") or "").strip()
     cleaned = raw.replace(",", "").replace(" ", "").replace(" ", "")
     try:
-        return currency, float(cleaned)
+        value = float(cleaned)
     except ValueError:
         return None
+
+
+
+
+    if value <= 0:
+        return None
+    return currency, value
 
 
 def price_observation(page: Mapping[str, Any], page_type: str) -> dict[str, Any] | None:
@@ -174,17 +260,32 @@ def price_observation(page: Mapping[str, Any], page_type: str) -> dict[str, Any]
     if not title or not url:
         return None
 
-    text = str(page.get("summary") or page.get("text") or "")
-    found = [value for value in (_amount(m) for m in PRICE.finditer(text)) if value]
+
+
+
+    text = own_product_text(str(page.get("summary") or page.get("text") or ""))
+    found = [
+        value
+        for value in (
+            _amount(match)
+            for match in PRICE.finditer(text)
+            if _is_the_products_own_price(text, match)
+        )
+        if value
+    ]
     if not found:
         return None
 
 
 
     distinct = {value for _, value in found}
-    if len(distinct) > 3:
+    if len(distinct) > 4:
         return None
+
+
     currency, price = min(found, key=lambda item: item[1])
+    if not currency:
+        currency = next((unit for unit, _ in found if unit), "")
 
     lowered = text.casefold()
     stock = (

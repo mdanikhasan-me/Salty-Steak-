@@ -84,6 +84,16 @@ PLAN_CAPABILITY_SHAPE = (
 )
 
 
+
+
+
+
+ACTION_SHAPE = (
+    '\naction example: {"action":"action","capability":"<one listed below>",'
+    '"arguments":{...}}'
+)
+
+
 def build_turn_instruction(
     *,
     image_available: bool,
@@ -119,6 +129,8 @@ def build_turn_instruction(
 
     jobs = "\n".join(f'  "{name}" — {JOB_TYPE_MANIFEST[name]}' for name in offered)
     text = DECISION_INSTRUCTION.format(jobs=jobs)
+    if SINGLE_ACTION in offered:
+        text += ACTION_SHAPE
     if PLAN in offered:
         text += PLAN_SHAPE
         if capabilities:

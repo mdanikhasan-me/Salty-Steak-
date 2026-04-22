@@ -3235,16 +3235,17 @@ class ChatService:
             and runtime.get("external_service_required") is False
         )
 
-    def _research_provenance_note(self, conversation_id: str) -> str:
-        """What the last researched turn in this conversation actually verified.
+    def conversation_task_state(self, conversation_id: str) -> dict[str, Any]:
+        """Everything this conversation has actually established, as things.
 
-        "Give me the exact links" used to run as an ordinary turn with nothing
-        to work from, so the model reconstructed product-and-price pairings out
-        of its own prose and produced addresses that had never been visited.
-        The verified observations and the pages they came from are carried
-        forward instead, so a follow-up about "those" or "the cheapest one" is
-        answered from the same evidence that produced the original answer.
+        A projection, not a second store: it is read from the turns that
+        produced the evidence, so it can never disagree with the transcript and
+        there is no migration to get wrong. Newest evidence wins; a later
+        research turn replaces an earlier one rather than merging two sets of
+        prices from different days into one list.
         """
+
+        from . import task_state
 
         row = self.database.fetch_one(
             """
@@ -3255,41 +3256,53 @@ class ChatService:
             """,
             (conversation_id,),
         )
-        if not row:
-            return ""
-        details = parse_json(row["technical_details_json"], None) or {}
-        orchestration = details.get("orchestration") or {}
-        observations = list(orchestration.get("observations") or [])[:8]
-        sources = list(orchestration.get("sources") or [])[:8]
-        if not observations and not sources:
-            return ""
+        orchestration: Mapping[str, Any] = {}
+        if row:
+            details = parse_json(row["technical_details_json"], None) or {}
+            orchestration = details.get("orchestration") or {}
 
-        packet = {
-            "verified_products": [
-                {
-                    "product": item.get("product"),
-                    "price": item.get("price"),
-                    "currency": item.get("currency"),
-                    "seller": item.get("seller"),
-                    "stock": item.get("stock"),
-                    "url": item.get("url"),
-                }
-                for item in observations
-            ],
-            "pages_read": [
-                {"title": item.get("title"), "url": item.get("url")}
-                for item in sources
-            ],
-        }
-        return (
-            "\nEarlier in this conversation you researched the web. These are "
-            "the pages that were actually opened and the products that were "
-            "actually verified on them. If the user refers to those results — "
-            "asking for exact links, which is cheapest, whether something is "
-            "in stock, or to compare them — answer from this and quote these "
-            "addresses exactly. Never write a link that is not here.\n"
-            + json.dumps(packet, default=str)
+        images = self.database.fetch_all(
+            """
+            SELECT technical_details_json FROM messages
+            WHERE conversation_id = ? AND role = 'assistant'
+              AND technical_details_json LIKE '%"generated_image"%'
+            ORDER BY sequence DESC LIMIT ?
+            """,
+            (conversation_id, task_state.MAX_ARTIFACTS),
         )
+        artifacts = []
+        for record in images or []:
+            details = parse_json(record["technical_details_json"], None) or {}
+            image = details.get("generated_image")
+            if isinstance(image, Mapping):
+                artifacts.append(image)
+
+        return task_state.build(
+            observations=orchestration.get("observations") or [],
+            sources=orchestration.get("sources") or [],
+            artifacts=artifacts,
+        )
+
+    def _task_state_note(self, conversation_id: str, *, can_act: bool) -> str:
+        """The compact projection of task state placed in front of the model.
+
+        "Give me the exact links" used to run as an ordinary turn with nothing
+        to work from, so the model reconstructed product-and-price pairings out
+        of its own prose and produced addresses that had never been visited.
+        Carrying the evidence fixed that for answering — and only for
+        answering. Asked to *open* the cheapest one, the model had verified
+        prices in front of it and no sign it was allowed to act on them, so it
+        researched the whole thing again. What the projection says about the
+        addresses now follows the authority the turn actually has.
+        """
+
+        from . import task_state
+
+        try:
+            state = self.conversation_task_state(conversation_id)
+        except Exception:
+            return ""
+        return task_state.project(state, can_act=can_act)
 
     def _turn_instruction(
         self, conversation_id: str, *, agent_mode: bool = False
@@ -3318,16 +3331,21 @@ class ChatService:
                 services = self.connectors.orchestration_hints()
             except Exception:
                 services = []
-        provenance = self._research_provenance_note(conversation_id)
+        capabilities = (
+            self.granted_automation_capabilities() if agent_mode else []
+        )
+
+
+        provenance = self._task_state_note(
+            conversation_id, can_act=bool(agent_mode and capabilities)
+        )
         return provenance + build_turn_instruction(
             image_available=self._image_generation_available(),
             has_previous_image=has_previous,
 
 
 
-            capabilities=(
-                self.granted_automation_capabilities() if agent_mode else []
-            ),
+            capabilities=capabilities,
             connectors=services,
             agent_mode=agent_mode,
         )
