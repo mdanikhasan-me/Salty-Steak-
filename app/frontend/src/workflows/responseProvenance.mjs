@@ -119,6 +119,48 @@ export function sourcesOf(details) {
 
 
 
+
+
+export const MAX_SOURCE_MARKS = 4;
+
+export function sourceMarks(details, { limit = MAX_SOURCE_MARKS } = {}) {
+  const sources = sourcesOf(details);
+  const bySite = new Map();
+  for (const source of sources) {
+    const host = source.host || source.url;
+    if (!host || bySite.has(host)) continue;
+    bySite.set(host, {
+      host,
+      url: source.url,
+      title: source.title,
+      letter: String(host).charAt(0).toUpperCase(),
+      icon: faviconAddress(source.url),
+    });
+  }
+  const marks = [...bySite.values()];
+  return {
+    marks: marks.slice(0, Math.max(0, limit)),
+    overflow: Math.max(0, marks.length - Math.max(0, limit)),
+    sites: marks.length,
+    pages: sources.length,
+  };
+}
+
+
+export function faviconAddress(url) {
+  try {
+    const parsed = new URL(String(url));
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+    return `${parsed.protocol}//${parsed.host}/favicon.ico`;
+  } catch {
+    return "";
+  }
+}
+
+
+
+
+
 export function supportFor(details, sourceId) {
   const claims = orchestrationOf(details).claims || [];
   return claims

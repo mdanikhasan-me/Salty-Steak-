@@ -8,7 +8,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { formatDuration, formatNumber } from "../workflows/formatters.js";
-import { responseDetails } from "../workflows/responseProvenance.mjs";
+import { responseDetails, sourceMarks } from "../workflows/responseProvenance.mjs";
 import { presentAssistantContent } from "../workflows/chatContent.mjs";
 import { generatedImageForMessage } from "../workflows/generatedImages.mjs";
 import {
@@ -254,13 +254,54 @@ function messageReasoningMode(details) {
 
 
 
+
+
+
+
+
+function SourceMarks({ details }) {
+  const { marks, overflow } = sourceMarks(details);
+  if (!marks.length) return null;
+  return (
+    <span className="source-marks">
+      {marks.map((mark) => (
+        <span
+          key={mark.host}
+          className="source-marks__mark"
+          title={`${mark.host} — ${mark.title}`}
+        >
+          <span aria-hidden="true">{mark.letter}</span>
+          {mark.icon ? (
+            <img
+              src={mark.icon}
+              alt=""
+              loading="lazy"
+
+
+
+              onError={(event) => {
+                event.currentTarget.style.display = "none";
+              }}
+            />
+          ) : null}
+        </span>
+      ))}
+      {overflow ? <span className="source-marks__more">+{overflow}</span> : null}
+    </span>
+  );
+}
+
 function ResponseProvenance({ details, onOpenDetails }) {
   const account = responseDetails(details || {});
   if (!account.completion) return null;
-  const count = account.sources.length;
+  const { sites, pages } = sourceMarks(details);
   const summary = [
     account.completion,
-    count ? `${count} ${count === 1 ? "source" : "sources"}` : null,
+
+    sites
+      ? `${sites} ${sites === 1 ? "site" : "sites"}` +
+        (pages > sites ? `, ${pages} pages` : "")
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -279,6 +320,7 @@ function ResponseProvenance({ details, onOpenDetails }) {
       onClick={() => onOpenDetails?.(details)}
     >
       {summary}
+      <SourceMarks details={details} />
       <ChevronRight aria-hidden="true" />
     </button>
   );
