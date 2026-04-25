@@ -292,6 +292,7 @@ class LiveRunners:
         describe_screenshot: Callable[[str], str] | None = None,
         continue_until_satisfied: bool = False,
         follow_through_steps: int = 10,
+        established: str = "",
     ) -> None:
         self.broker = broker
         self.connectors = connectors
@@ -317,6 +318,11 @@ class LiveRunners:
 
 
         self.follow_through_steps = max(1, int(follow_through_steps))
+
+
+
+
+        self.established = str(established or "")
 
 
 
@@ -419,6 +425,7 @@ class LiveRunners:
             should_stop=self.should_stop,
             describe_screenshot=self.describe_screenshot,
             max_iterations=8,
+            established=self.established,
         ).run(request)
         return {
             "answer": str(outcome.get("answer") or ""),
@@ -526,6 +533,7 @@ class LiveRunners:
             should_stop=self.should_stop,
             describe_screenshot=self.describe_screenshot,
             max_iterations=self.follow_through_steps,
+            established=self.established,
         ).run(request, opening=json.dumps(opening, default=str))
         steps = list(outcome.get("steps") or [])
         return {

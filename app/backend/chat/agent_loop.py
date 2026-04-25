@@ -60,6 +60,16 @@ STALE_ANALYSIS_CHARACTERS = 160
 
 
 MAX_IDENTICAL_ATTEMPTS = 3
+
+
+
+
+
+
+
+
+
+MAX_IDLE_REPEATS = 2
 VISION_PROMPT = (
     "Describe this screen for an automation agent. List the visible windows, "
     "buttons, menus, text fields, and any readable text, and say roughly where "
@@ -451,11 +461,18 @@ class AgentLoop:
         memory: Any = None,
         approve: Callable[[Mapping[str, Any]], bool] | None = None,
         policy: PolicyEngine | None = None,
+        established: str = "",
     ) -> None:
         self.broker = broker
         self.generate = generate
         self.describe_screenshot = describe_screenshot
         self.memory = memory
+
+
+
+
+
+        self.established = str(established or "")
 
 
         self.task = task or TaskContext()
@@ -480,6 +497,8 @@ class AgentLoop:
         self._attempts: dict[str, int] = {}
 
         self._effects: set[str] = set()
+
+        self._idle = 0
         self._step_started = time.monotonic()
 
     def _recall(self, task: str) -> str:
@@ -514,6 +533,11 @@ class AgentLoop:
         remembered = self._recall(task)
         if remembered:
             system_prompt = f"{system_prompt}\n\n{remembered}"
+
+
+
+        if self.established:
+            system_prompt = f"{system_prompt}\n{self.established}"
         transcript: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": task},
@@ -589,6 +613,13 @@ class AgentLoop:
                         ),
                     }
                 )
+                self._idle += 1
+                if self._idle >= MAX_IDLE_REPEATS:
+
+
+
+
+                    return self._finish("completed", self._what_was_achieved())
                 continue
 
 
@@ -684,6 +715,8 @@ class AgentLoop:
                 if landed is not None:
                     self._effects.add(landed)
 
+                self._idle = 0
+
             fingerprint = step_fingerprint(
                 route.capability, route.arguments, observation
             )
@@ -755,12 +788,25 @@ class AgentLoop:
                 "I ran out of steps before finishing this, so treat it as "
                 "incomplete. What did run: " + "; ".join(done)
             )
+
         else:
             summary = (
                 "I ran out of steps before finishing this, and nothing I tried "
                 "succeeded."
             )
         return self._finish("exhausted", summary)
+
+    def _what_was_achieved(self) -> str:
+        """What the task actually did, for a task that has finished doing it."""
+
+        done = [
+            str(step.get("reason") or step.get("action") or "")
+            for step in self.steps
+            if step.get("status") == "succeeded" and step.get("action") != "respond"
+        ]
+        if not done:
+            return "There was nothing left to do — this was already the case."
+        return "Done. " + "; ".join(done)
 
     @staticmethod
     def _compact_screenshots(transcript: list[dict[str, str]]) -> None:

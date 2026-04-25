@@ -3434,6 +3434,16 @@ class ChatService:
 
 
             continue_until_satisfied=bool(generation_settings.get("agent_mode")),
+
+
+
+
+
+            established=self._task_state_note(
+                str(conversation_id or ""), can_act=bool(capabilities)
+            )
+            if conversation_id
+            else "",
             memory=self.memory,
             on_step=publish,
             should_stop=context.stop_requested,
