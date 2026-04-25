@@ -8,7 +8,11 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { formatDuration, formatNumber } from "../workflows/formatters.js";
-import { responseDetails, sourceMarks } from "../workflows/responseProvenance.mjs";
+import {
+  completionState,
+  responseDetails,
+  sourceMarks,
+} from "../workflows/responseProvenance.mjs";
 import { presentAssistantContent } from "../workflows/chatContent.mjs";
 import { generatedImageForMessage } from "../workflows/generatedImages.mjs";
 import {
@@ -128,7 +132,16 @@ export function ChatMessage({
           ) : null}
         </header>
         {agentEvents.length ? (
-          <AgentTimeline events={agentEvents} artifactSource={artifactSource} />
+          <AgentTimeline
+            events={agentEvents}
+            artifactSource={artifactSource}
+
+
+            {...(({ sites, pages }) => ({ sites, pages }))(
+              sourceMarks(message?.technical_details),
+            )}
+            state={completionState(message?.technical_details)}
+          />
         ) : null}
         <div className="message__surface">
           {cookingTurn ? (

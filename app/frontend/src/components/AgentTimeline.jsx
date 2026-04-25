@@ -22,6 +22,7 @@ import {
   formatDuration,
   toolPresentation,
 } from "../workflows/agentTimeline.mjs";
+import { activityAccount } from "../workflows/activitySummary.mjs";
 
 const ICONS = {
   terminal: SquareTerminal,
@@ -109,33 +110,111 @@ function AgentBlock({ event, artifactSource }) {
 
 
 
-export function AgentTimeline({ events, running = false, artifactSource = null }) {
-  const blocks = executionEvents(events);
-  if (!blocks.length) return null;
+
+
+
+
+
+
+
+function ActivityPhase({ phase, artifactSource, startOpen }) {
+  const [open, setOpen] = useState(startOpen);
+  const Icon = ICONS[PHASE_ICONS[phase.phase] || "dot"] || Circle;
+  const duration = formatDuration(phase.milliseconds);
+  const detail = [phase.detail, duration].filter(Boolean).join(" · ");
 
   return (
-    <section className="agent-timeline" aria-label="Agent execution">
-      <ol className="agent-timeline__list">
-        {blocks.map((event, index) => (
-          <AgentBlock
-            key={`${event.step ?? index}-${event.action}`}
-            event={event}
+    <li className="activity-phase">
+      <button
+        type="button"
+        className="activity-phase__head"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <ChevronRight
+          className={`activity-phase__chevron ${open ? "activity-phase__chevron--open" : ""}`}
+          aria-hidden="true"
+        />
+        <Icon className="activity-phase__icon" aria-hidden="true" />
+        <span className="activity-phase__label">{phase.label}</span>
+        <span className="activity-phase__detail">{detail}</span>
+      </button>
+      {open ? (
+        <ol className="agent-timeline__list activity-phase__steps">
+          {phase.events.map((event, index) => (
+            <AgentBlock
+              key={`${event.step ?? index}-${event.action}`}
+              event={event}
+              artifactSource={artifactSource}
+            />
+          ))}
+        </ol>
+      ) : null}
+    </li>
+  );
+}
+
+const PHASE_ICONS = {
+  web: "globe",
+  vision: "camera",
+  windows: "app",
+  terminal: "terminal",
+  files: "list",
+  image: "camera",
+  planning: "list",
+  connected: "layers",
+  other: "dot",
+};
+
+
+
+
+
+
+
+
+
+
+
+
+export function AgentTimeline({
+  events,
+  running = false,
+  artifactSource = null,
+  sites = 0,
+  pages = 0,
+  state = "",
+}) {
+  const blocks = executionEvents(events);
+  if (!blocks.length && !running) return null;
+  const account = activityAccount(blocks, { sites, pages, state });
+
+  return (
+    <section className="agent-timeline" aria-label="What this turn did">
+      <ol className="agent-timeline__phases">
+        {account.phases.map((phase) => (
+          <ActivityPhase
+            key={phase.id}
+            phase={phase}
             artifactSource={artifactSource}
+
+
+            startOpen={running}
           />
         ))}
         {running ? (
-          <li className="agent-block agent-block--running agent-block--pending">
-            <span className="agent-block__marker" aria-hidden="true" />
-            <div className="agent-block__main">
-              <span className="agent-block__head agent-block__head--static">
-                <span className="agent-block__chevron" aria-hidden="true" />
-                <Circle className="agent-block__icon" aria-hidden="true" />
-                <span className="agent-block__tool">Working</span>
-              </span>
-            </div>
+          <li className="activity-phase activity-phase--running">
+            <span className="activity-phase__head activity-phase__head--static">
+              <span className="activity-phase__chevron" aria-hidden="true" />
+              <Circle className="activity-phase__icon" aria-hidden="true" />
+              <span className="activity-phase__label">Working</span>
+            </span>
           </li>
         ) : null}
       </ol>
+      {account.outcome ? (
+        <p className="activity-phase__outcome">{account.outcome}</p>
+      ) : null}
     </section>
   );
 }
