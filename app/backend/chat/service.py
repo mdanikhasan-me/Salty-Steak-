@@ -3424,6 +3424,30 @@ class ChatService:
                 },
             )
 
+        def publish_research(progress: Mapping[str, Any]) -> None:
+            """Research reporting itself while it is still running.
+
+            Research took two minutes and said nothing until it was over, so
+            the application looked frozen for the whole of it. The snapshot is
+            whole rather than incremental, so the interface renders whatever
+            it has whenever it polls and a missed update costs nothing.
+            """
+
+            waves = list(progress.get("waves") or [])
+            sites = sum(len(wave.get("sites") or []) for wave in waves)
+            context.update(
+                phase=(
+                    f"Searching {sites} websites"
+                    if str(progress.get("phase")) == "searching"
+                    else "Reading pages"
+                ),
+                details={
+                    **dict(provenance or {}),
+                    "conversation_id": conversation_id,
+                    "research_progress": dict(progress),
+                },
+            )
+
         return LiveRunners(
             broker=self.automation,
             connectors=self.connectors,
@@ -3450,6 +3474,7 @@ class ChatService:
             else "",
             memory=self.memory,
             on_step=publish,
+            on_research=publish_research,
             should_stop=context.stop_requested,
 
 

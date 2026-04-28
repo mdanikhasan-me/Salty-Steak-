@@ -67,6 +67,17 @@ def statements_from_page(page: Mapping[str, Any], *, limit: int = 40) -> list[st
     return found
 
 
+def _host_of(url: str) -> str:
+    """The site an address belongs to, as a person would name it."""
+
+    try:
+        from urllib.parse import urlparse
+
+        return urlparse(str(url or "")).hostname or ""
+    except Exception:
+        return ""
+
+
 class ResearchLoop:
     """Drive retrieval and extraction until a named stopping rule fires."""
 
@@ -80,6 +91,7 @@ class ResearchLoop:
         follow_up: Callable[[ResearchLedger], str | None] | None = None,
         budget: Budget | None = None,
         task: Any = None,
+        on_progress: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         self.ledger = ResearchLedger(question, budget=budget)
         self.search = search
@@ -87,6 +99,14 @@ class ResearchLoop:
         self.extract = extract
         self.follow_up = follow_up
         self.task = task
+
+
+
+
+
+        self.on_progress = on_progress
+
+        self.waves: list[dict[str, Any]] = []
 
     def run(self, initial_query: str | None = None) -> dict[str, Any]:
         query = initial_query or self.ledger.question
@@ -108,8 +128,24 @@ class ResearchLoop:
                 ended = "query_repeated"
                 break
             self._event("research_query", query=query)
+            wave = self._wave(query)
 
             candidates = list(self.search(query) or [])
+
+
+
+            for candidate in candidates:
+                host = _host_of(str(candidate.get("url") or ""))
+                if host and host not in {site["host"] for site in wave["sites"]}:
+                    wave["sites"].append(
+                        {
+                            "host": host,
+                            "url": str(candidate.get("url") or ""),
+                            "title": str(candidate.get("title") or ""),
+                            "state": "found",
+                        }
+                    )
+            self._publish("searching")
             opened = 0
             for candidate in candidates:
                 if self._stopped():
@@ -156,6 +192,22 @@ class ResearchLoop:
                     "research_source", **summary, url=url, page_type=page_type
                 )
 
+
+
+
+                host = _host_of(url)
+                for site in wave["sites"]:
+                    if site["host"] != host:
+                        continue
+                    site["state"] = "verified" if observation is not None else "read"
+                    site["page_type"] = page_type
+                    break
+                wave["opened"] = opened
+                if observation is not None:
+                    wave["verified"] += 1
+                wave["state"] = "reading"
+                self._publish("reading")
+
             if opened == 0:
                 ended = "no_further_sources"
                 break
@@ -171,10 +223,54 @@ class ResearchLoop:
                 break
             query = nxt
 
+        for wave in self.waves:
+            wave["state"] = "done"
+        self._publish("completed")
+
         report = self.ledger.report()
         if ended:
             report["stop_reason"] = ended
+        report["waves"] = [dict(wave, sites=list(wave["sites"])) for wave in self.waves]
         return report
+
+
+
+    def _wave(self, query: str) -> dict[str, Any]:
+        """Begin a search wave and announce it."""
+
+        wave = {
+            "query": query,
+            "sites": [],
+            "opened": 0,
+            "verified": 0,
+            "rejected": 0,
+            "state": "searching",
+        }
+        self.waves.append(wave)
+        self._publish("searching")
+        return wave
+
+    def _publish(self, phase: str) -> None:
+        """Hand the interface a whole, coherent picture of the work so far.
+
+        A snapshot rather than a delta: the interface can then render whatever
+        it has whenever it polls, and a missed update costs nothing.
+        """
+
+        if self.on_progress is None:
+            return
+        try:
+            self.on_progress(
+                {
+                    "schema": "salty-steak-research-progress-v1",
+                    "phase": phase,
+                    "question": self.ledger.question,
+                    "waves": [dict(wave, sites=list(wave["sites"])) for wave in self.waves],
+                }
+            )
+        except Exception:
+
+            return
 
     def _stopped(self) -> bool:
         return bool(self.task is not None and self.task.stop_requested)

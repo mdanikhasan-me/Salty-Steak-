@@ -288,6 +288,7 @@ class LiveRunners:
         read: Callable[[str], Mapping[str, Any]] | None = None,
         memory: Any = None,
         on_step: Callable[[Mapping[str, Any]], None] | None = None,
+        on_research: Callable[[Mapping[str, Any]], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
         describe_screenshot: Callable[[str], str] | None = None,
         continue_until_satisfied: bool = False,
@@ -309,6 +310,8 @@ class LiveRunners:
 
         self.memory = memory
         self.on_step = on_step
+
+        self.on_research = on_research
         self.should_stop = should_stop
         self.describe_screenshot = describe_screenshot
 
@@ -663,6 +666,7 @@ class LiveRunners:
             follow_up=self._follow_up,
             budget=budget,
             task=self.task,
+            on_progress=self.on_research,
         )
         report = loop.run(str(decision.get("query") or question))
         return {

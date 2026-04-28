@@ -38,6 +38,7 @@ import { ConversationSidebar } from "../components/ConversationSidebar.jsx";
 import { ResponseDetails } from "../components/ResponseDetails.jsx";
 import { externalLinkFromEvent } from "../workflows/externalLinks.mjs";
 import { CookingActivityPanel } from "../components/CookingActivityPanel.jsx";
+import { ResearchProgress } from "../components/ResearchProgress.jsx";
 import { CookingStatus } from "../components/CookingStatus.jsx";
 import { PluginConnectionDialog } from "../components/PluginConnectionDialog.jsx";
 import { PluginsPanel } from "../components/PluginsPanel.jsx";
@@ -1870,6 +1871,14 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                         </button>
                       )}
                     </div>
+
+
+
+                    <ResearchProgress
+                      details={
+                        activeGeneration?.result || activeGeneration?.details
+                      }
+                    />
                   </div>
                 </div>
               ) : null}
