@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Check, ExternalLink, Search, Sparkles, Wrench, X } from "lucide-react";
 
 import {
+  faviconAddress,
   formatElapsed,
   responseDetails,
   supportFor,
@@ -143,7 +144,23 @@ export function ResponseDetails({ details, onClose, onOpenExternal }) {
                       rel="noreferrer noopener"
                       className="response-source"
                     >
-                      <span className="response-source__host">{source.host}</span>
+                      <span className="response-source__host">
+                        {
+                                                                               }
+                        <span className="response-source__icon" aria-hidden="true">
+                          {faviconAddress(source.url) ? (
+                            <img
+                              src={faviconAddress(source.url)}
+                              alt=""
+                              loading="lazy"
+                              onError={(event) => {
+                                event.currentTarget.style.visibility = "hidden";
+                              }}
+                            />
+                          ) : null}
+                        </span>
+                        {source.host}
+                      </span>
                       <span className="response-source__title">{source.title}</span>
                       {support.length ? (
                         <span className="response-source__support">{support[0]}</span>

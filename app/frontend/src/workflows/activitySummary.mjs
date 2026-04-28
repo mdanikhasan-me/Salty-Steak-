@@ -34,7 +34,7 @@ const PHASE_OF_ACTION = {
 
 
 const PHASE = {
-  web: { label: "Web searched", unit: "page" },
+  web: { label: "Searched the web", unit: "page" },
   vision: { label: "Looked at the screen", unit: "capture" },
   windows: { label: "Used this computer", unit: "action" },
   terminal: { label: "Ran commands", unit: "command" },
@@ -98,16 +98,18 @@ export function activityPhases(events, { sites = 0, pages = 0 } = {}) {
 
 
     let counted = plural(run.events.length, descriptor.unit);
+    let label = descriptor.label;
     if (run.phase === "web" && pages) {
-      counted = sites
-        ? `${plural(sites, "site")}, ${plural(pages, "page")}`
-        : plural(pages, "page");
+
+
+      label = sites ? `Searched ${plural(sites, "website")}` : "Searched the web";
+      counted = plural(pages, "page");
     }
 
     return {
       id: `${run.phase}-${index}`,
       phase: run.phase,
-      label: descriptor.label,
+      label,
       detail: counted,
       milliseconds,
       failed,

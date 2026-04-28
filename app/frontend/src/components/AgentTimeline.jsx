@@ -117,7 +117,54 @@ function AgentBlock({ event, artifactSource }) {
 
 
 
-function ActivityPhase({ phase, artifactSource, startOpen }) {
+
+
+
+
+function SiteChips({ sites }) {
+  const [all, setAll] = useState(false);
+  if (!sites?.length) return null;
+  const shown = all ? sites : sites.slice(0, 6);
+  const hidden = sites.length - shown.length;
+
+  return (
+    <div className="site-chips">
+      {shown.map((site) => (
+        <a
+          key={site.host}
+          className="site-chips__chip"
+          href={site.url}
+          title={site.title}
+        >
+          <span className="site-chips__icon" aria-hidden="true">
+            {site.icon ? (
+              <img
+                src={site.icon}
+                alt=""
+                loading="lazy"
+                onError={(event) => {
+                  event.currentTarget.style.visibility = "hidden";
+                }}
+              />
+            ) : null}
+          </span>
+          <span className="site-chips__host">{site.host}</span>
+        </a>
+      ))}
+      {hidden > 0 || all ? (
+        <button
+          type="button"
+          className="site-chips__chip site-chips__chip--more"
+          onClick={() => setAll((value) => !value)}
+        >
+          {all ? "Show less" : `${hidden} more`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ActivityPhase({ phase, artifactSource, startOpen, sites }) {
   const [open, setOpen] = useState(startOpen);
   const Icon = ICONS[PHASE_ICONS[phase.phase] || "dot"] || Circle;
   const duration = formatDuration(phase.milliseconds);
@@ -139,6 +186,7 @@ function ActivityPhase({ phase, artifactSource, startOpen }) {
         <span className="activity-phase__label">{phase.label}</span>
         <span className="activity-phase__detail">{detail}</span>
       </button>
+      {phase.phase === "web" ? <SiteChips sites={sites} /> : null}
       {open ? (
         <ol className="agent-timeline__list activity-phase__steps">
           {phase.events.map((event, index) => (
@@ -183,6 +231,7 @@ export function AgentTimeline({
   artifactSource = null,
   sites = 0,
   pages = 0,
+  siteList = [],
   state = "",
 }) {
   const blocks = executionEvents(events);
@@ -196,6 +245,7 @@ export function AgentTimeline({
           <ActivityPhase
             key={phase.id}
             phase={phase}
+            sites={siteList}
             artifactSource={artifactSource}
 
 

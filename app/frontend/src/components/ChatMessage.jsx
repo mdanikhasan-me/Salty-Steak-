@@ -137,9 +137,11 @@ export function ChatMessage({
             artifactSource={artifactSource}
 
 
-            {...(({ sites, pages }) => ({ sites, pages }))(
-              sourceMarks(message?.technical_details),
-            )}
+            {...(({ sites, pages, marks }) => ({
+              sites,
+              pages,
+              siteList: marks,
+            }))(sourceMarks(message?.technical_details, { limit: 40 }))}
             state={completionState(message?.technical_details)}
           />
         ) : null}
