@@ -88,7 +88,12 @@ export function parseRichTextBlocks(value) {
 export function tokenizeInline(value) {
   const source = String(value || "");
   const tokens = [];
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_([^_\n]+)_|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))/g;
+
+
+
+
+
+  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_([^_\n]+)_|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<>"']+)/g;
   let cursor = 0;
   let match;
 
@@ -104,6 +109,14 @@ export function tokenizeInline(value) {
       tokens.push(link
         ? { type: "link", content: link[1], href: link[2] }
         : { type: "text", content: token });
+    } else if (token.startsWith("http")) {
+
+
+      const trimmed = token.replace(/[.,;:!?)\]}'"]+$/, "");
+      tokens.push({ type: "link", content: trimmed, href: trimmed });
+      if (trimmed.length < token.length) {
+        tokens.push({ type: "text", content: token.slice(trimmed.length) });
+      }
     } else {
       tokens.push({ type: "emphasis", content: token.slice(1, -1) });
     }

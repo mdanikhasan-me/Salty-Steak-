@@ -273,33 +273,36 @@ function messageReasoningMode(details) {
 
 
 function SourceMarks({ details }) {
-  const { marks, overflow } = sourceMarks(details);
+  const { marks, overflow } = sourceMarks(details, { limit: 3 });
   if (!marks.length) return null;
   return (
     <span className="source-marks">
       {marks.map((mark) => (
         <span
           key={mark.host}
-          className="source-marks__mark"
+          className="source-marks__pill"
           title={`${mark.host} — ${mark.title}`}
         >
-          <span aria-hidden="true">{mark.letter}</span>
-          {mark.icon ? (
-            <img
-              src={mark.icon}
-              alt=""
-              loading="lazy"
-
-
-
-              onError={(event) => {
-                event.currentTarget.style.display = "none";
-              }}
-            />
-          ) : null}
+          <span className="source-marks__icon" aria-hidden="true">
+            {mark.icon ? (
+              <img
+                src={mark.icon}
+                alt=""
+                loading="lazy"
+                onError={(event) => {
+                  event.currentTarget.style.visibility = "hidden";
+                }}
+              />
+            ) : null}
+          </span>
+          <span className="source-marks__host">{mark.host}</span>
         </span>
       ))}
-      {overflow ? <span className="source-marks__more">+{overflow}</span> : null}
+      {overflow ? (
+        <span className="source-marks__pill source-marks__pill--more">
+          +{overflow} more
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -307,17 +310,10 @@ function SourceMarks({ details }) {
 function ResponseProvenance({ details, onOpenDetails }) {
   const account = responseDetails(details || {});
   if (!account.completion) return null;
-  const { sites, pages } = sourceMarks(details);
-  const summary = [
-    account.completion,
 
-    sites
-      ? `${sites} ${sites === 1 ? "site" : "sites"}` +
-        (pages > sites ? `, ${pages} pages` : "")
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+
+
+  const summary = account.completion;
 
   if (!account.hasDetails) {
     return (

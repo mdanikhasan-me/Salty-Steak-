@@ -3339,7 +3339,11 @@ class ChatService:
         provenance = self._task_state_note(
             conversation_id, can_act=bool(agent_mode and capabilities)
         )
-        return provenance + build_turn_instruction(
+
+
+
+
+        return build_turn_instruction(
             image_available=self._image_generation_available(),
             has_previous_image=has_previous,
 
@@ -3348,7 +3352,7 @@ class ChatService:
             capabilities=capabilities,
             connectors=services,
             agent_mode=agent_mode,
-        )
+        ) + provenance
 
     def _live_runners(
         self,
