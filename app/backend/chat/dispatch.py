@@ -120,10 +120,20 @@ def build_turn_instruction(
 
     offered = [SINGLE_ACTION, PLAN] if capabilities else []
     offered.append(RESEARCH)
+    trailing = ""
     if image_available:
         offered.append(GENERATE_IMAGE)
         if has_previous_image:
             offered.append(REVISE_IMAGE)
+
+
+
+
+            trailing = (
+                "\nChoose from what THIS message asks for. An earlier image is "
+                "context, not an instruction: a question, a correction or a "
+                'change of subject is an answer, not a revision.'
+            )
     if not offered:
         return ""
 
@@ -136,7 +146,7 @@ def build_turn_instruction(
         if capabilities:
             text += PLAN_CAPABILITY_SHAPE
     if image_available:
-        text += IMAGE_SHAPE
+        text += IMAGE_SHAPE + trailing
     if capabilities:
         text += "\nActions: " + ", ".join(capabilities)
     if connectors:

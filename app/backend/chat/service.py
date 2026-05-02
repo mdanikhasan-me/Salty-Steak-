@@ -3283,6 +3283,36 @@ class ChatService:
             artifacts=artifacts,
         )
 
+    def _last_turn_made_an_image(self, conversation_id: str) -> bool:
+        """Whether the newest answer in this conversation was a picture.
+
+        A revision follows an image; it does not follow whatever else the
+        conversation has since gone on to do. Offering "revise_image" because
+        an image exists *somewhere* in the history left it permanently on the
+        menu, and the model took it: told "but this is the price of 512 gb"
+        after a research answer, it rendered a diagram, and told "when did i
+        ask for image gen wtf?" it revised the diagram.
+
+        Read from the newest assistant turn only, so the offer expires the
+        moment the conversation moves on to something else.
+        """
+
+        row = self.database.fetch_one(
+            """
+            SELECT technical_details_json FROM messages
+            WHERE conversation_id = ? AND role = 'assistant'
+            ORDER BY sequence DESC LIMIT 1
+            """,
+            (conversation_id,),
+        )
+        if not row:
+            return False
+        details = parse_json(row["technical_details_json"], None) or {}
+        if details.get("generated_image"):
+            return True
+        orchestration = details.get("orchestration") or {}
+        return str(orchestration.get("kind") or "") in {"generate_image", "revise_image"}
+
     def _task_state_note(self, conversation_id: str, *, can_act: bool) -> str:
         """The compact projection of task state placed in front of the model.
 
@@ -3311,14 +3341,7 @@ class ChatService:
 
         from .dispatch import build_turn_instruction
 
-        has_previous = False
-        if self.image_store is not None:
-            try:
-                has_previous = (
-                    self.image_store.latest_for_conversation(conversation_id) is not None
-                )
-            except Exception:
-                has_previous = False
+        has_previous = self._last_turn_made_an_image(conversation_id)
 
 
 

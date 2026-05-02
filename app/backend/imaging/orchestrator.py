@@ -129,7 +129,13 @@ class ImageOrchestrator:
             fallback_subject=str(latest_request or ""),
         )
         brief = self._author_brief(brief, request=original_request, notes=notes)
-        brief = self._enforce(brief, original_request)
+
+
+
+
+
+
+        brief = self._enforce(brief, latest_request or original_request)
         job = ImageGenerationJob(
             brief=brief,
             conversation_id=conversation_id,
