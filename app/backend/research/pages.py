@@ -149,6 +149,48 @@ def _hits(text: str, phrases: tuple[str, ...]) -> int:
     return sum(1 for phrase in phrases if phrase in text)
 
 
+
+
+
+
+
+
+
+
+
+
+VARIANT_TOKENS = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s?(tb|gb|mb|inch|\"|pack|pcs|pieces)\b"
+    r"(?!\s*(?:/\s*s(?:ec)?\b|ps\b|/\s*second\b))",
+    re.IGNORECASE,
+)
+
+
+_UNIT_SCALE = {"mb": 1, "gb": 1024, "tb": 1024 * 1024}
+
+
+def variant_values(text: str) -> set[str]:
+    """The distinct variant values a piece of text offers.
+
+    Storage sizes are normalised to one unit so a page quoting "2TB" and
+    "2048GB" is understood to be describing one offer rather than two.
+    """
+
+    found: set[str] = set()
+    for match in VARIANT_TOKENS.finditer(str(text or "")):
+        try:
+            amount = float(match.group(1))
+        except ValueError:
+            continue
+        unit = match.group(2).casefold()
+        scale = _UNIT_SCALE.get(unit)
+        if scale is not None:
+            found.add(f"size:{int(amount * scale)}")
+        else:
+            found.add(f"{unit}:{amount:g}")
+    return found
+
+
 def own_product_text(text: str) -> str:
     """The part of a page that is about the product the page is for."""
 
@@ -283,6 +325,25 @@ def price_observation(page: Mapping[str, Any], page_type: str) -> dict[str, Any]
         return None
 
 
+
+
+
+
+
+
+    offered = variant_values(text)
+    wanted = variant_values(title)
+    if len(offered) > 1:
+
+
+        return None
+    if wanted and offered and not (wanted & offered):
+
+
+        return None
+
+
+
     currency, price = min(found, key=lambda item: item[1])
     if not currency:
         currency = next((unit for unit, _ in found if unit), "")
@@ -303,6 +364,9 @@ def price_observation(page: Mapping[str, Any], page_type: str) -> dict[str, Any]
         "url": url,
         "stock": stock,
         "page_type": page_type,
+
+
+        "variant": sorted(wanted or offered)[0] if (wanted or offered) else "",
         "retrieved_at": time.time(),
     }
 
