@@ -191,6 +191,77 @@ def variant_values(text: str) -> set[str]:
     return found
 
 
+
+
+
+
+IN_STOCK = re.compile(
+    r"\b(?:in\s?stock|available\s+now|ready\s+to\s+ship|"
+    r"schema\.org/InStock|\"InStock\"|>InStock<)\b",
+    re.IGNORECASE,
+)
+OUT_OF_STOCK = re.compile(
+    r"\b(?:out\s?of\s?stock|sold\s?out|unavailable|discontinued|"
+    r"schema\.org/OutOfStock|\"OutOfStock\"|>OutOfStock<|currently\s+unavailable)\b",
+    re.IGNORECASE,
+)
+PREORDER = re.compile(
+    r"\b(?:pre-?order|back-?order|schema\.org/(?:PreOrder|BackOrder))\b",
+    re.IGNORECASE,
+)
+
+DISABLED_PURCHASE = re.compile(
+    r"(?:add\s+to\s+(?:cart|basket)|buy\s+now)[^<>]{0,60}"
+    r"(?:disabled|unavailable|out\s+of\s+stock)"
+    r"|disabled[^<>]{0,40}(?:add\s+to\s+(?:cart|basket)|buy\s+now)",
+    re.IGNORECASE,
+)
+
+UNKNOWN_STOCK = "unknown"
+
+
+def availability_of(page: Mapping[str, Any], text: str = "") -> str:
+    """Whether this offer can actually be bought, from the strongest evidence.
+
+    Availability is its own observation, never an assumption. "Unknown" is a
+    real answer and must stay one: silently reading it as in stock is how
+    "cheapest currently in stock" ends up naming something nobody can buy.
+
+    Structured data wins over prose, because a shop's own machine-readable
+    offer is what its checkout uses. Contradictions resolve to unknown rather
+    than to whichever reading is convenient.
+    """
+
+    declared = str(page.get("availability") or "").strip()
+    if declared:
+        lowered = declared.casefold()
+        if "outofstock" in lowered.replace(" ", "") or "soldout" in lowered.replace(" ", ""):
+            return "out_of_stock"
+        if "preorder" in lowered.replace(" ", "") or "backorder" in lowered.replace(" ", ""):
+            return "preorder"
+        if "instock" in lowered.replace(" ", ""):
+            return "in_stock"
+
+    body = str(text or page.get("summary") or page.get("text") or "")
+    if DISABLED_PURCHASE.search(body):
+        return "out_of_stock"
+
+    out = bool(OUT_OF_STOCK.search(body))
+    pre = bool(PREORDER.search(body))
+    inn = bool(IN_STOCK.search(body))
+    if out and inn:
+
+
+        return UNKNOWN_STOCK
+    if out:
+        return "out_of_stock"
+    if pre:
+        return "preorder"
+    if inn:
+        return "in_stock"
+    return UNKNOWN_STOCK
+
+
 def own_product_text(text: str) -> str:
     """The part of a page that is about the product the page is for."""
 
@@ -348,14 +419,7 @@ def price_observation(page: Mapping[str, Any], page_type: str) -> dict[str, Any]
     if not currency:
         currency = next((unit for unit, _ in found if unit), "")
 
-    lowered = text.casefold()
-    stock = (
-        "out_of_stock"
-        if "out of stock" in lowered
-        else "in_stock"
-        if "in stock" in lowered
-        else "unknown"
-    )
+    stock = availability_of(page, text)
     return {
         "seller": urlparse(url).hostname or "",
         "product": title,

@@ -44,13 +44,18 @@ def _text(value: Any, limit: int = 200) -> str:
 def _entity(reference: str, item: Mapping[str, Any]) -> dict[str, Any]:
     """One verified thing, with everything needed to act on it."""
 
+
+
+
+    stock = _text(item.get("stock"), 40) or "unknown"
     entity = {
         "ref": reference,
         "name": _text(item.get("product") or item.get("name") or item.get("title")),
         "price": item.get("price"),
         "currency": _text(item.get("currency"), 8),
         "seller": _text(item.get("seller"), 80),
-        "stock": _text(item.get("stock"), 40),
+        "stock": "not confirmed" if stock == "unknown" else stock,
+        "variant": _text(item.get("variant"), 40),
         "url": _text(item.get("url"), 400),
     }
 
@@ -112,8 +117,14 @@ def project(state: Mapping[str, Any], *, can_act: bool = False) -> str:
 
     lines = [
         "",
-        "This conversation has already established the following. It comes from "
+        "Reference material from earlier in this conversation. It comes from "
         "pages that were actually opened, not from memory.",
+
+
+
+
+        "Answer the message that was actually sent. This is here to be drawn "
+        "on when the message is about it — not to be restated.",
     ]
     if state.get("entities"):
         lines.append(
@@ -135,7 +146,8 @@ def project(state: Mapping[str, Any], *, can_act: bool = False) -> str:
         )
     else:
         lines.append(
-            "Quote these addresses exactly. Never write a link that is not here."
+            "If you cite one of these, quote its address exactly and never "
+            "write a link that is not here."
         )
     lines.append(json.dumps(_without_schema(state), default=str))
     return "\n".join(lines)

@@ -241,6 +241,40 @@ _PROCESS_PHRASES = (
 )
 
 
+def _evidence_limits(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What the gathered evidence settles, and what it does not.
+
+    Availability is its own observation and "unknown" is a real answer.
+    Treating it as good as "in stock" is how a question about what can be
+    bought today gets answered with something nobody established was buyable.
+    """
+
+    confirmed, unconfirmed, unavailable = [], [], []
+    for item in observations:
+        stock = str(item.get("stock") or "unknown")
+        name = str(item.get("product") or "")[:120]
+        if stock == "in_stock":
+            confirmed.append(name)
+        elif stock in {"out_of_stock", "preorder"}:
+            unavailable.append(name)
+        else:
+            unconfirmed.append(name)
+    return {
+        "in_stock_confirmed": confirmed,
+        "stock_not_confirmed": unconfirmed,
+        "not_available": unavailable,
+
+
+        "note": (
+            "Availability was confirmed for none of these, so none of them can "
+            "be called the cheapest one currently in stock."
+            if not confirmed
+            else "Only the items listed under in_stock_confirmed may be "
+            "described as currently in stock."
+        ),
+    }
+
+
 def _reads_like_process(answer: str) -> bool:
     head = answer.strip().lower()[:200]
     return any(phrase in head for phrase in _PROCESS_PHRASES)
@@ -694,6 +728,11 @@ class LiveRunners:
 
 
             "observations": report.get("observations") or [],
+
+
+
+
+            "evidence_limits": _evidence_limits(report.get("observations") or []),
         }
 
     def _follow_up(self, ledger: Any) -> str | None:
@@ -799,6 +838,12 @@ class LiveRunners:
                             "separately and give its link; never average them. "
                             "A finding marked as a catalogue page describes a "
                             "whole shop, not any item on it. "
+                            "Stock is evidence, not an assumption. A product "
+                            "whose stock is 'unknown' has NOT been confirmed "
+                            "available and may never be called in stock, "
+                            "available, or the cheapest one currently in "
+                            "stock — say its availability was not confirmed. "
+                            "Obey evidence_limits. "
                             "If the findings disagree, say what the "
                             "disagreement is. If they do not answer the "
                             "question, say so plainly."
@@ -819,11 +864,15 @@ class LiveRunners:
                                         "price": item.get("price"),
                                         "currency": item.get("currency"),
                                         "seller": item.get("seller"),
-                                        "stock": item.get("stock"),
+                                        "stock": item.get("stock") or "unknown",
+                                        "variant": item.get("variant") or "",
                                         "url": item.get("url"),
                                     }
                                     for item in (report.get("observations") or [])
                                 ],
+                                "evidence_limits": _evidence_limits(
+                                    report.get("observations") or []
+                                ),
                                 "findings": [
                                     {
                                         "text": claim.get("text"),
