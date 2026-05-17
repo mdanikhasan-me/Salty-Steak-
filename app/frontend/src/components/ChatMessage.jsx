@@ -13,6 +13,7 @@ import {
   responseDetails,
   sourceMarks,
 } from "../workflows/responseProvenance.mjs";
+import { usedSources } from "../workflows/claimEvidence.mjs";
 import { presentAssistantContent } from "../workflows/chatContent.mjs";
 import { generatedImageForMessage } from "../workflows/generatedImages.mjs";
 import {
@@ -208,7 +209,10 @@ export function ChatMessage({
           {assistant && detailsOpen ? <TechnicalDetails details={details || {}} /> : null}
         </div>
         {assistant ? (
-          <ResponseProvenance details={details} onOpenDetails={onOpenDetails} />
+          <>
+            <ClaimEvidence details={details} onOpenDetails={onOpenDetails} />
+            <ResponseProvenance details={details} onOpenDetails={onOpenDetails} />
+          </>
         ) : null}
         <div className="message__footer">
           {assistant ? <ResponseMetadata details={details} duration={duration} /> : <span />}
@@ -306,6 +310,46 @@ function SourceMarks({ details }) {
         </span>
       ) : null}
     </span>
+  );
+}
+
+
+
+
+
+
+
+
+function ClaimEvidence({ details, onOpenDetails }) {
+  const rows = usedSources(details);
+  if (!rows.length) return null;
+  return (
+    <div className="claim-evidence">
+      {rows.map((row) => (
+        <button
+          type="button"
+          key={row.ref}
+          className="claim-evidence__row"
+          onClick={() => onOpenDetails?.(details)}
+          title={`${row.title} — ${row.host}`}
+        >
+          <span className="claim-evidence__icon" aria-hidden="true">
+            {row.icon ? (
+              <img
+                src={row.icon}
+                alt=""
+                loading="lazy"
+                onError={(event) => {
+                  event.currentTarget.style.visibility = "hidden";
+                }}
+              />
+            ) : null}
+          </span>
+          <span className="claim-evidence__facts">{row.snippet}</span>
+          <span className="claim-evidence__host">{row.host}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 

@@ -838,6 +838,10 @@ class LiveRunners:
                             "separately and give its link; never average them. "
                             "A finding marked as a catalogue page describes a "
                             "whole shop, not any item on it. "
+                            "Write each price exactly as verified_products "
+                            "gives it, character for character. Never change "
+                            "its currency mark for another and never convert "
+                            "between currencies. "
                             "Stock is evidence, not an assumption. A product "
                             "whose stock is 'unknown' has NOT been confirmed "
                             "available and may never be called in stock, "
@@ -861,8 +865,13 @@ class LiveRunners:
                                 "verified_products": [
                                     {
                                         "product": item.get("product"),
-                                        "price": item.get("price"),
-                                        "currency": item.get("currency"),
+
+
+
+                                        "price": item.get("price_display")
+                                        or item.get("price"),
+                                        "currency": item.get("currency_code")
+                                        or item.get("currency"),
                                         "seller": item.get("seller"),
                                         "stock": item.get("stock") or "unknown",
                                         "variant": item.get("variant") or "",

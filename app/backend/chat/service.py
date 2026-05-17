@@ -11,7 +11,7 @@ import threading
 import time
 import re
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -3282,6 +3282,57 @@ class ChatService:
             sources=orchestration.get("sources") or [],
             artifacts=artifacts,
         )
+
+    def supersede_observations(
+        self, conversation_id: str, *, refs: Sequence[str], because: str
+    ) -> int:
+        """Mark evidence the conversation has since disproven.
+
+        A correction that only changes the next sentence leaves the wrong
+        observation standing as trusted, so the next question is answered from
+        it again. The record is kept rather than deleted — with why, and with
+        its original source and retrieval time — because a conversation that
+        corrected something should be able to see that the correction landed.
+        """
+
+        wanted = {str(ref).strip() for ref in refs if str(ref).strip()}
+        if not wanted:
+            return 0
+        row = self.database.fetch_one(
+            """
+            SELECT id, technical_details_json FROM messages
+            WHERE conversation_id = ? AND role = 'assistant'
+              AND technical_details_json LIKE '%"observations"%'
+            ORDER BY sequence DESC LIMIT 1
+            """,
+            (conversation_id,),
+        )
+        if not row:
+            return 0
+        details = parse_json(row["technical_details_json"], None) or {}
+        orchestration = details.get("orchestration") or {}
+        observations = list(orchestration.get("observations") or [])
+        changed = 0
+        for index, item in enumerate(observations, start=1):
+            if not isinstance(item, Mapping):
+                continue
+            if f"e{index}" not in wanted:
+                continue
+            updated = dict(item)
+            updated["status"] = "superseded"
+            updated["superseded_because"] = str(because or "")[:400]
+            updated["superseded_at"] = utc_now()
+            observations[index - 1] = updated
+            changed += 1
+        if not changed:
+            return 0
+        orchestration["observations"] = observations
+        details["orchestration"] = orchestration
+        self.database.execute(
+            "UPDATE messages SET technical_details_json = ? WHERE id = ?",
+            (json_text(details), row["id"]),
+        )
+        return changed
 
     def _last_turn_made_an_image(self, conversation_id: str) -> bool:
         """Whether the newest answer in this conversation was a picture.

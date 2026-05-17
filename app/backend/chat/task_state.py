@@ -51,15 +51,28 @@ def _entity(reference: str, item: Mapping[str, Any]) -> dict[str, Any]:
     entity = {
         "ref": reference,
         "name": _text(item.get("product") or item.get("name") or item.get("title")),
-        "price": item.get("price"),
-        "currency": _text(item.get("currency"), 8),
+
+
+        "price": item.get("price_display") or item.get("price"),
+        "currency": _text(item.get("currency_code") or item.get("currency"), 8),
         "seller": _text(item.get("seller"), 80),
         "stock": "not confirmed" if stock == "unknown" else stock,
         "variant": _text(item.get("variant"), 40),
         "url": _text(item.get("url"), 400),
     }
+    status = str(item.get("status") or ACTIVE)
+    if status != ACTIVE:
+        entity["status"] = status
+        entity["superseded_because"] = _text(item.get("superseded_because"), 160)
 
     return {key: value for key, value in entity.items() if value not in (None, "")}
+
+
+
+
+
+ACTIVE = "active"
+SUPERSEDED = "superseded"
 
 
 def build(
@@ -131,6 +144,14 @@ def project(state: Mapping[str, Any], *, can_act: bool = False) -> str:
             "Each item has a short reference. When the user refers to one of "
             "them — the cheapest, the first, that one, those — they mean an "
             "item below."
+        )
+    if any(entity.get("status") == SUPERSEDED for entity in state.get("entities") or []):
+
+
+        lines.append(
+            'An item marked "superseded" was disproven later in this '
+            "conversation. Do not use it, do not count it when comparing, and "
+            "say it was corrected if the user asks about it."
         )
     if can_act and state.get("entities"):
 

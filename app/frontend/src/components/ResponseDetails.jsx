@@ -7,6 +7,7 @@ import {
   responseDetails,
   supportFor,
 } from "../workflows/responseProvenance.mjs";
+import { usedSources } from "../workflows/claimEvidence.mjs";
 
 
 
@@ -47,6 +48,11 @@ function SourceChip({ source }) {
 export function ResponseDetails({ details, onClose, onOpenExternal }) {
   const panel = useRef(null);
   const account = responseDetails(details);
+
+
+  const evidence = new Map(
+    usedSources(details).map((entry) => [entry.url, entry]),
+  );
 
   useEffect(() => {
     panel.current?.focus();
@@ -162,6 +168,17 @@ export function ResponseDetails({ details, onClose, onOpenExternal }) {
                         {source.host}
                       </span>
                       <span className="response-source__title">{source.title}</span>
+                      {
+
+                                                             }
+                      {evidence.get(source.url) ? (
+                        <span className="response-source__evidence">
+                          {evidence.get(source.url).snippet}
+                          <span className="response-source__supports">
+                            Supports {evidence.get(source.url).supports.join(" · ")}
+                          </span>
+                        </span>
+                      ) : null}
                       {support.length ? (
                         <span className="response-source__support">{support[0]}</span>
                       ) : null}

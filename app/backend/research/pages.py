@@ -220,6 +220,64 @@ DISABLED_PURCHASE = re.compile(
 UNKNOWN_STOCK = "unknown"
 
 
+
+
+
+
+CURRENCY_CODES = {
+    "৳": "BDT",
+    "tk": "BDT",
+    "tk.": "BDT",
+    "bdt": "BDT",
+    "৳.": "BDT",
+    "₹": "INR",
+    "rs": "INR",
+    "rs.": "INR",
+    "inr": "INR",
+    "$": "USD",
+    "usd": "USD",
+    "us$": "USD",
+    "€": "EUR",
+    "eur": "EUR",
+    "£": "GBP",
+    "gbp": "GBP",
+}
+
+
+
+CURRENCY_DISPLAY = {
+    "BDT": "৳",
+    "INR": "₹",
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+}
+
+
+def currency_code(written: str) -> str:
+    """The currency a shop meant, or nothing when it cannot be told.
+
+    Never guessed from an ambiguous mark: silently deciding that one currency
+    is another turns a right number into a wrong price.
+    """
+
+    text = " ".join(str(written or "").split()).casefold()
+    return CURRENCY_CODES.get(text, "")
+
+
+def format_price(amount: float, code: str) -> str:
+    """One place decides how money is written."""
+
+    try:
+        figure = f"{float(amount):,.0f}"
+    except (TypeError, ValueError):
+        return ""
+    symbol = CURRENCY_DISPLAY.get(str(code or "").upper())
+    if symbol:
+        return f"{symbol}{figure}"
+    return f"{figure} {code}".strip() if code else figure
+
+
 def availability_of(page: Mapping[str, Any], text: str = "") -> str:
     """Whether this offer can actually be bought, from the strongest evidence.
 
@@ -418,6 +476,15 @@ def price_observation(page: Mapping[str, Any], page_type: str) -> dict[str, Any]
     currency, price = min(found, key=lambda item: item[1])
     if not currency:
         currency = next((unit for unit, _ in found if unit), "")
+    code = currency_code(currency)
+    if not code:
+
+
+
+        for unit, _ in found:
+            code = currency_code(unit)
+            if code:
+                break
 
     stock = availability_of(page, text)
     return {
@@ -425,6 +492,11 @@ def price_observation(page: Mapping[str, Any], page_type: str) -> dict[str, Any]
         "product": title,
         "price": price,
         "currency": currency or "",
+
+
+
+        "currency_code": code,
+        "price_display": format_price(price, code) if code else "",
         "url": url,
         "stock": stock,
         "page_type": page_type,
