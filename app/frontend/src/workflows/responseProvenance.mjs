@@ -11,12 +11,22 @@
 
 
 
+
+
+
+
+
+
+
+
+
 const COMPLETION_WORDS = {
-  done: "Done in",
-  cooked: "Cooked in",
-  stopped: "Stopped after",
-  failed: "Failed after",
-  partial: "Partial ·",
+  done: "Zonted",
+  cooked: "Zonted",
+  zonting: "Zonting",
+  stopped: "Stopped",
+  failed: "Couldn't finish",
+  partial: "Incomplete",
   waiting: "Waiting",
 
 
@@ -73,17 +83,21 @@ export function completionLabel(details) {
   const state = completionState(details);
   const word = COMPLETION_WORDS[state];
   if (!word) return "";
-  if (state === "waiting" || state === "rendering") return word;
+  if (state === "rendering") return word;
   const elapsed = formatElapsed(turnDuration(details));
-  return elapsed ? `${word} ${elapsed}` : word;
+
+
+  return elapsed ? `${word} · ${elapsed}` : word;
 }
 
 
+
+
+
+
 export function workingLabel(mode, milliseconds) {
-  const cooking = String(mode || "").toLowerCase() === "cooking";
-  const word = cooking ? "Cooking…" : "Working…";
   const elapsed = formatElapsed(milliseconds);
-  return elapsed ? `${word} · ${elapsed}` : word;
+  return elapsed ? `Zonting · ${elapsed}` : "Zonting";
 }
 
 function orchestrationOf(details) {

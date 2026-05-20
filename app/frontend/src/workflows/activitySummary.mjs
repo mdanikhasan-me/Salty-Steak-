@@ -131,6 +131,8 @@ export function outcomeLabel(state) {
       return "Stopped";
     case "failed":
       return "Couldn't finish";
+
+
     case "partial":
       return "Incomplete";
     case "waiting":

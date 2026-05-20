@@ -172,6 +172,18 @@ AGENT_RULES_HEAD = (
     "pixels, and looking at pixels beats moving the mouse.\n"
     "- Prefer the most direct capability that accomplishes the task. Do not add "
     "steps the task does not need.\n"
+
+
+
+
+    "- A question the computer can answer directly — free space, a path, a "
+    "version, whether something is installed, what is running — is one "
+    "terminal.execute call. Do not photograph the screen or walk an interface "
+    "tree to find something a command prints.\n"
+
+    "- Every step must change something or learn something new. If you have "
+    "just read a page or taken a screenshot, the next step acts on what you "
+    "saw; reading it again tells you nothing you do not already have.\n"
 )
 
 
@@ -714,6 +726,11 @@ class AgentLoop:
                 landed = effect_key(route.capability, route.arguments)
                 if landed is not None:
                     self._effects.add(landed)
+
+
+
+
+
 
                 self._idle = 0
 

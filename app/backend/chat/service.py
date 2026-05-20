@@ -123,6 +123,8 @@ def _turn_completion(
     if status in {"failed", "rejected", "declined"}:
         return "failed"
     if status in {"exhausted", "needs_review", "blocked"}:
+
+
         return "partial"
     if status == "waiting":
         return "waiting"
