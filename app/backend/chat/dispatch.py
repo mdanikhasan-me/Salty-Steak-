@@ -227,6 +227,29 @@ def looks_like_a_decision_attempt(reply: str) -> bool:
     return True
 
 
+
+
+
+
+
+
+
+
+
+
+EFFECT_CLAIM_INSTRUCTION = (
+    "You are checking one reply for a specific mistake, and nothing else.\n"
+    "Nothing was done to this computer on this turn. No command ran, no file "
+    "changed, no application opened, no page was visited.\n"
+    "Question: does the reply below tell the user that something WAS done — "
+    "that files were deleted, an application was opened, a page was visited, a "
+    "command was run, a setting was changed?\n"
+    'Answer with one word: "claimed" if it says or implies the work was '
+    'carried out, or "honest" if it only explains, describes, answers a '
+    "question, or says what would be done.\n"
+    "One word. Nothing else."
+)
+
 DECISION_REPAIR_INSTRUCTION = (
     "Your previous reply was JSON. The person reading it wants an answer in "
     "plain words, not a data structure. Answer their question directly, in "

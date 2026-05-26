@@ -3336,6 +3336,66 @@ class ChatService:
         )
         return changed
 
+    @staticmethod
+    def _turn_changed_something(details: Mapping[str, Any]) -> bool:
+        """Whether this turn actually did anything to the computer."""
+
+        orchestration = details.get("orchestration") or {}
+        if not isinstance(orchestration, Mapping):
+            return False
+        if orchestration.get("capability"):
+            return True
+        for step in orchestration.get("steps") or []:
+            if not isinstance(step, Mapping):
+                continue
+            if str(step.get("action") or "") in {"", "respond"}:
+                continue
+            if str(step.get("status") or "") in {"succeeded", "already_satisfied"}:
+                return True
+
+        return bool(details.get("generated_image") or orchestration.get("plan"))
+
+    def _answer_claims_work_it_did_not_do(
+        self, *, answer: str, request: str, context, generation_settings
+    ) -> bool:
+        """Whether a reply says the computer was changed when it was not.
+
+        Asked to delete some log files, the application answered that it had
+        "successfully executed a command to delete all log files" and marked
+        the turn done. Nothing had run and every file was still there. Being
+        told the work is finished is worse than being told it failed.
+
+        One bounded question, asked only on a turn that changed nothing, about
+        the sentence that was actually produced. Not a phrase list: the model
+        judges whether its own words assert a completed change, which is about
+        meaning rather than vocabulary. Any failure to decide is treated as
+        honest, because silencing a good answer is its own harm.
+        """
+
+        from .dispatch import EFFECT_CLAIM_INSTRUCTION
+
+        body = str(answer or "").strip()
+        if not body:
+            return False
+        try:
+            verdict = self._agent_generate(
+                [
+                    {"role": "system", "content": EFFECT_CLAIM_INSTRUCTION},
+                    {
+                        "role": "user",
+                        "content": f"The user asked: {str(request or '')[:600]}\n\n"
+                        f"The reply was:\n{body[:2_000]}",
+                    },
+                ],
+                context=context,
+                generation_settings=generation_settings,
+            )
+        except Exception:
+            return False
+        from .orchestrator import strip_reasoning
+
+        return "claimed" in strip_reasoning(str(verdict or "")).strip().casefold()
+
     def _last_turn_made_an_image(self, conversation_id: str) -> bool:
         """Whether the newest answer in this conversation was a picture.
 
@@ -4601,9 +4661,36 @@ class ChatService:
 
 
 
+
+
+
+
+        if (
+            bool(generation["agent_mode"])
+            and self.granted_automation_capabilities()
+            and not self._turn_changed_something(details)
+            and self._answer_claims_work_it_did_not_do(
+                answer=assistant_content,
+                request=search_query,
+                context=context,
+                generation_settings=generation,
+            )
+        ):
+            details["false_success_prevented"] = True
+            details["unperformed_claim"] = str(assistant_content)[:1_200]
+            assistant_content = (
+                "I did not actually do that — nothing ran on your computer this "
+                "turn, so nothing changed. I had started to describe it as done, "
+                "which was wrong. Ask me again and I will carry it out, or tell "
+                "me to go ahead and I will."
+            )
+            turn_status_override = "partial"
+        else:
+            turn_status_override = ""
+
         details["turn_duration_ms"] = round((time.monotonic() - turn_started) * 1000)
         details["image_render_started"] = self._image_will_render(details)
-        details["turn_completion"] = _turn_completion(
+        details["turn_completion"] = turn_status_override or _turn_completion(
             details,
             response=response,
             turn=turn,
