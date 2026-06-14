@@ -16,6 +16,9 @@ go through the one inference path; there is no planner model.
 from __future__ import annotations
 
 import json
+import re
+
+from ..automation.broker import FILES_CAPABILITY
 from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any
@@ -115,8 +118,45 @@ def _nodes_in_the_right_slots(
                 moved.append(corrected)
                 continue
 
+
+
+
+
+
+
+
+
+
+
+        if FILES_CAPABILITY in granted and _looks_like_a_path(
+            corrected.get("connector")
+        ):
+            arguments = dict(corrected.get("arguments") or {})
+            arguments.setdefault("path", str(corrected["connector"]))
+            corrected["capability"] = FILES_CAPABILITY
+            corrected["arguments"] = arguments
+            corrected.pop("connector", None)
+            corrected.pop("operation", None)
+            moved.append(corrected)
+            continue
+
         moved.append(entry)
     return {**payload, "nodes": moved}
+
+
+def _looks_like_a_path(value: Any) -> bool:
+    """Whether a value is a place on this computer rather than a service name.
+
+    Structural, not a list of drive letters: a service name has no separators
+    and no drive, and a path has one or the other.
+    """
+
+    text = str(value or "").strip()
+    if not text or "://" in text:
+        return False
+    if re.match(r"^[A-Za-z]:[\\/]", text):
+        return True
+    return text.startswith(("\\\\", "/", "~")) or ("\\" in text and " " not in text[:3])
 
 
 def validate_plan(

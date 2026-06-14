@@ -3786,6 +3786,23 @@ class ChatService:
             }
         else:
             decision = read_decision(reply_text)
+
+
+
+
+
+            if bool(generation_settings.get("agent_mode")):
+                self._route_trace = {
+                    "raw_reply": strip_reasoning(str(reply_text or ""))[:1_500],
+                    "parsed_route": (decision or {}).get("action") or "respond",
+                    "looked_like_a_decision": looks_like_a_decision_attempt(reply_text),
+                    "reply_characters": len(str(reply_text or "")),
+                    "temperature": generation_settings.get("temperature"),
+                    "top_p": generation_settings.get("top_p"),
+                    "capabilities_offered": len(
+                        self.granted_automation_capabilities()
+                    ),
+                }
         if decision is None and looks_like_a_decision_attempt(reply_text):
 
 
@@ -4593,6 +4610,7 @@ class ChatService:
 
 
         assistant_id = new_id()
+        self._route_trace = None
         turn = self._dispatch_turn(
             reply_text=response.text,
             request=search_query,
@@ -4687,6 +4705,13 @@ class ChatService:
             turn_status_override = "partial"
         else:
             turn_status_override = ""
+
+
+
+
+        if getattr(self, "_route_trace", None):
+            details["route_trace"] = self._route_trace
+            self._route_trace = None
 
         details["turn_duration_ms"] = round((time.monotonic() - turn_started) * 1000)
         details["image_render_started"] = self._image_will_render(details)

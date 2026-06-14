@@ -38,18 +38,29 @@ JOB_TYPES = (RESPOND, SINGLE_ACTION, PLAN, GENERATE_IMAGE, REVISE_IMAGE, RESEARC
 
 
 
-CAPABILITY_ACTIONS = frozenset(
-    {
-        "application.launch",
-        "browser.control",
-        "terminal.execute",
-        "screen.capture",
-        "input.control",
-        "window.control",
-        "ui.automation",
-        "image.generate",
-    }
-)
+def _capability_actions() -> frozenset[str]:
+    """Every capability name the model may write where a job type belongs.
+
+    Read from the broker rather than listed here. This was a literal, and it
+    silently went stale the moment a capability was added: asked to delete some
+    files the model replied
+    ``{"action":"files.manage","capability":"select_and_delete",...}`` — the
+    right capability, named in the slot this code explicitly supports — and
+    because "files.manage" was not in the literal it fell through to respond
+    and the user was told nothing had happened.
+    """
+
+    try:
+        from ..automation.broker import CAPABILITIES
+
+        return frozenset(CAPABILITIES) | {"image.generate"}
+    except Exception:
+
+
+        return frozenset({"image.generate"})
+
+
+CAPABILITY_ACTIONS = _capability_actions()
 
 
 
