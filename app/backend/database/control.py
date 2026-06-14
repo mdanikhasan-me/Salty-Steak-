@@ -652,7 +652,7 @@ CREATE TABLE IF NOT EXISTS automation_grants (
     id TEXT PRIMARY KEY,
     capability TEXT NOT NULL UNIQUE
         CHECK(capability IN (
-            'terminal.execute','screen.capture','input.control',
+            'terminal.execute','files.manage','screen.capture','input.control',
             'application.launch','window.control','ui.automation',
             'browser.control'
         )),
@@ -671,7 +671,7 @@ CREATE TABLE IF NOT EXISTS automation_audit_records (
     event TEXT NOT NULL CHECK(event IN ('grant','revoke','invoke')),
     capability TEXT NOT NULL
         CHECK(capability IN (
-            'terminal.execute','screen.capture','input.control',
+            'terminal.execute','files.manage','screen.capture','input.control',
             'application.launch','window.control','ui.automation',
             'browser.control'
         )),
@@ -883,6 +883,7 @@ class Database:
             self._migrate_training_policy(connection)
             self._migrate_chat_runtime_provenance(connection)
             self._migrate_conversation_organisation(connection)
+            self._migrate_files_capability(connection)
             now = utc_now()
             connection.execute(
                 "INSERT OR IGNORE INTO application_metadata(key, value) VALUES (?, ?)",
@@ -1068,6 +1069,64 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS ix_conversations_pinned "
                 "ON conversations(pinned_at DESC)"
             )
+
+    @staticmethod
+    def _migrate_files_capability(connection: sqlite3.Connection) -> None:
+        """Let the grant and audit tables name the filesystem capability.
+
+        Both tables pin their capability column with a CHECK list, and SQLite
+        cannot alter one — the table is rebuilt. Every existing grant and every
+        audit record is carried across unchanged, which matters more here than
+        anywhere else in the schema: the audit trail is the evidence that an
+        automation invocation happened, and losing a row would be losing that.
+
+        Detected by trying the new value inside a savepoint that is always
+        rolled back, so a database already carrying the wider CHECK is left
+        completely alone.
+        """
+
+        connection.execute("SAVEPOINT files_capability_probe")
+        try:
+            connection.execute(
+                "INSERT INTO automation_grants(id, capability, enabled, "
+                "constraints_json, created_at, updated_at) "
+                "VALUES ('__probe__','files.manage',0,'{}','','')"
+            )
+        except sqlite3.IntegrityError:
+            needs_rebuild = True
+        else:
+            needs_rebuild = False
+        finally:
+            connection.execute("ROLLBACK TO files_capability_probe")
+            connection.execute("RELEASE files_capability_probe")
+        if not needs_rebuild:
+            return
+
+        for table, extra in (
+            ("automation_grants", ""),
+            ("automation_audit_records", ""),
+        ):
+            columns = [
+                str(row["name"])
+                for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+            ]
+            if not columns:
+                continue
+            names = ", ".join(columns)
+
+
+
+
+            connection.execute("PRAGMA legacy_alter_table = ON")
+            try:
+                connection.execute(f"ALTER TABLE {table} RENAME TO {table}__old")
+            finally:
+                connection.execute("PRAGMA legacy_alter_table = OFF")
+            connection.executescript(_SCHEMA + _immutable_triggers())
+            connection.execute(
+                f"INSERT INTO {table}({names}) SELECT {names} FROM {table}__old{extra}"
+            )
+            connection.execute(f"DROP TABLE {table}__old")
 
     @staticmethod
     def _migrate_chat_runtime_provenance(

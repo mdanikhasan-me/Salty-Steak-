@@ -55,8 +55,16 @@ APPLICATION_LAUNCH_CAPABILITY = "application.launch"
 WINDOW_CONTROL_CAPABILITY = "window.control"
 UI_AUTOMATION_CAPABILITY = "ui.automation"
 BROWSER_CAPABILITY = "browser.control"
+
+
+
+
+
+
+FILES_CAPABILITY = "files.manage"
 CAPABILITIES = (
     TERMINAL_CAPABILITY,
+    FILES_CAPABILITY,
     SCREEN_CAPTURE_CAPABILITY,
     INPUT_CONTROL_CAPABILITY,
     APPLICATION_LAUNCH_CAPABILITY,
@@ -66,6 +74,7 @@ CAPABILITIES = (
 )
 CAPABILITY_DISPLAY_NAMES = {
     TERMINAL_CAPABILITY: "Terminal command",
+    FILES_CAPABILITY: "Files and folders",
     SCREEN_CAPTURE_CAPABILITY: "Primary-screen screenshot",
     INPUT_CONTROL_CAPABILITY: "Mouse and keyboard control",
     APPLICATION_LAUNCH_CAPABILITY: "Application and link launch",
@@ -100,9 +109,36 @@ MAX_TARGET_CHARACTERS = 2_048
 
 
 
+
+
+
+FILE_OPERATIONS = frozenset(
+    {
+        "list",
+        "inspect",
+        "stat",
+        "exists",
+        "search",
+        "read",
+        "create_directory",
+        "copy",
+        "move",
+        "rename",
+        "delete",
+    }
+)
+
+MAX_FILE_READ_CHARACTERS = 40_000
+
+
+MAX_FILE_MATCHES = 500
+
 CAPABILITY_FIELDS: dict[str, frozenset[str]] = {
     TERMINAL_CAPABILITY: frozenset(
         {"argv", "working_directory", "timeout_seconds"}
+    ),
+    FILES_CAPABILITY: frozenset(
+        {"operation", "path", "pattern", "recursive", "destination", "permanent"}
     ),
     SCREEN_CAPTURE_CAPABILITY: frozenset({"screen"}),
     INPUT_CONTROL_CAPABILITY: frozenset(
@@ -244,6 +280,7 @@ class AutomationBroker:
             TERMINAL_CAPABILITY: {
                 "working_directory_root": str(self.project_root),
             },
+            FILES_CAPABILITY: {"scope": "user_authorised_paths"},
             SCREEN_CAPTURE_CAPABILITY: {
                 "screen": "primary",
                 "output_root": str(self.artifact_root / "screenshots"),
@@ -385,6 +422,7 @@ class AutomationBroker:
             )
         constraints = {
             TERMINAL_CAPABILITY: {"working_directory_root": str(terminal_root)},
+            FILES_CAPABILITY: {"scope": "user_authorised_paths"},
             SCREEN_CAPTURE_CAPABILITY: {
                 "screen": "primary",
                 "output_root": str(self.artifact_root / "screenshots"),
@@ -537,6 +575,8 @@ class AutomationBroker:
                 result = self._invoke_ui_automation(audit_id, arguments)
             elif capability == BROWSER_CAPABILITY:
                 result = self._invoke_browser(audit_id, arguments)
+            elif capability == FILES_CAPABILITY:
+                result = self._invoke_files(audit_id, arguments, authority_mode)
             else:
                 result = self._invoke_application_launch(audit_id, arguments)
             outcome = str(result["status"])
@@ -755,6 +795,113 @@ class AutomationBroker:
             ]
         for process in processes:
             _terminate_process(process)
+
+    def _invoke_files(
+        self,
+        audit_id: str,
+        arguments: Mapping[str, Any],
+        authority_mode: str = "ask_every_time",
+    ) -> dict[str, Any]:
+        """Read and change files, and say exactly what happened to which ones.
+
+        The model had no way to name a file before this, so it put folder paths
+        into the connector slot and plans were refused for naming a service
+        that does not exist. A path is a resource and needed a capability that
+        takes one.
+
+        Every operation reports the paths it matched, the paths it changed and
+        the paths it deliberately left alone. That last one is what makes
+        "delete the logs but keep the notes" verifiable rather than hopeful:
+        the caller can see the notes in `preserved_paths` instead of inferring
+        their survival from silence.
+        """
+
+        self._only_fields(arguments, CAPABILITY_FIELDS[FILES_CAPABILITY])
+        operation = str(arguments.get("operation") or "").strip().casefold()
+        if operation not in FILE_OPERATIONS:
+            raise ValueError(
+                f"Files operation must be one of: {', '.join(sorted(FILE_OPERATIONS))}"
+            )
+        target = _existing_path(arguments.get("path"), must_exist=operation != "create_directory")
+        pattern = str(arguments.get("pattern") or "").strip()
+        recursive = bool(arguments.get("recursive"))
+
+        matched = _matching_paths(target, pattern, recursive=recursive)
+        preserved = (
+            [str(item) for item in _children(target, recursive=recursive) if item not in matched]
+            if target.is_dir()
+            else []
+        )
+        record = {
+            "schema": AUTOMATION_SCHEMA,
+            "capability": FILES_CAPABILITY,
+            "operation": operation,
+            "path": str(target),
+            "pattern": pattern,
+            "recursive": recursive,
+            "matched_paths": [str(item) for item in matched],
+            "preserved_paths": preserved,
+            "affected_paths": [],
+            "failed_paths": [],
+            "audit_record_id": audit_id,
+        }
+
+        if operation in {"list", "inspect", "stat", "search", "exists"}:
+            record["entries"] = [_describe_path(item) for item in matched]
+            record["exists"] = target.exists()
+            record["mutating"] = False
+            record["status"] = "succeeded"
+            return record
+
+        if operation == "create_directory":
+            target.mkdir(parents=True, exist_ok=True)
+            record.update(
+                {"affected_paths": [str(target)], "mutating": True, "status": "succeeded"}
+            )
+            return record
+
+        if operation == "read":
+            if not target.is_file():
+                raise ValueError(f"Not a file: {target}")
+            text = target.read_text(encoding="utf-8", errors="replace")
+            record.update(
+                {
+                    "content": text[:MAX_FILE_READ_CHARACTERS],
+                    "truncated": len(text) > MAX_FILE_READ_CHARACTERS,
+                    "mutating": False,
+                    "status": "succeeded",
+                }
+            )
+            return record
+
+
+        destination = arguments.get("destination")
+        permanent = bool(arguments.get("permanent"))
+        for item in matched:
+            try:
+                if operation == "delete":
+
+
+
+                    _remove_path(item, permanent=permanent)
+                elif operation in {"move", "rename"}:
+                    _relocate(item, destination, copy=False)
+                elif operation == "copy":
+                    _relocate(item, destination, copy=True)
+                record["affected_paths"].append(str(item))
+            except OSError as error:
+                record["failed_paths"].append({"path": str(item), "error": str(error)})
+
+
+
+        record["after_state"] = {
+            "still_present": [str(item) for item in matched if item.exists()],
+            "preserved_present": [item for item in preserved if Path(item).exists()],
+        }
+        record["mutating"] = True
+        record["permanent"] = permanent
+        record["status"] = "succeeded" if not record["failed_paths"] else "failed"
+        return record
 
     def _invoke_terminal(
         self,
@@ -1788,6 +1935,139 @@ def _public_output(capture: Mapping[str, Any]) -> dict[str, Any]:
         "truncated": bool(capture["truncated"]),
         "sha256": str(capture["sha256"]),
     }
+
+
+def _existing_path(value: object, *, must_exist: bool = True) -> Path:
+    """A filesystem path, as a path rather than as a name for something else."""
+
+    if not isinstance(value, (str, Path)) or not str(value).strip():
+        raise ValueError("A files operation needs a path")
+    text = str(value)
+    if "\0" in text or "\n" in text:
+        raise ValueError("A path must be one line without NUL characters")
+    resolved = Path(text).expanduser()
+    if not resolved.is_absolute():
+        raise ValueError(f"A files path must be absolute: {text}")
+    resolved = resolved.resolve()
+    if must_exist and not resolved.exists():
+        raise ValueError(f"No such path: {resolved}")
+    return resolved
+
+
+def _children(target: Path, *, recursive: bool) -> list[Path]:
+    if not target.is_dir():
+        return []
+    walker = target.rglob("*") if recursive else target.glob("*")
+    return sorted(item for item in walker if item.is_file())
+
+
+def _matching_paths(target: Path, pattern: str, *, recursive: bool) -> list[Path]:
+    """The files a call is about.
+
+    A pattern selects inside a folder; without one the target itself is the
+    subject, which is what makes "delete this file" and "delete the .log files
+    in this folder" the same operation with different arguments.
+    """
+
+    if not target.is_dir():
+        return [target] if target.exists() else []
+    if not pattern:
+        return _children(target, recursive=recursive)
+    walker = target.rglob(pattern) if recursive else target.glob(pattern)
+    return sorted(item for item in walker if item.exists())[:MAX_FILE_MATCHES]
+
+
+def _describe_path(item: Path) -> dict[str, Any]:
+    try:
+        stat = item.stat()
+    except OSError:
+        return {"path": str(item), "exists": False}
+    return {
+        "path": str(item),
+        "name": item.name,
+        "kind": "directory" if item.is_dir() else "file",
+        "size_bytes": stat.st_size,
+        "modified_at": stat.st_mtime,
+        "exists": True,
+    }
+
+
+def _remove_path(item: Path, *, permanent: bool) -> None:
+    """Delete a file, recoverably unless permanence was asked for.
+
+    A wrong guess about which files were meant should cost a trip to the
+    Recycle Bin rather than the files. Windows does the recoverable delete
+    through the shell; if that is unavailable the caller is told rather than
+    silently given a permanent one.
+    """
+
+    if permanent:
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+        return
+    _recycle(item)
+
+
+def _recycle(item: Path) -> None:
+    """Move one path to the Recycle Bin through SHFileOperationW."""
+
+    if os.name != "nt":
+        raise OSError("Recoverable delete is only available on Windows")
+
+    class _SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", ctypes.c_uint16),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", ctypes.c_void_p),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    FO_DELETE = 3
+    FOF_ALLOWUNDO = 0x0040
+    FOF_NOCONFIRMATION = 0x0010
+    FOF_SILENT = 0x0004
+    FOF_NOERRORUI = 0x0400
+
+    shell = ctypes.WinDLL("shell32", use_last_error=True)
+    shell.SHFileOperationW.argtypes = [ctypes.POINTER(_SHFILEOPSTRUCTW)]
+    shell.SHFileOperationW.restype = ctypes.c_int
+
+    operation = _SHFILEOPSTRUCTW(
+        None,
+        FO_DELETE,
+        str(item) + "\0\0",
+        None,
+        FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI,
+        False,
+        None,
+        None,
+    )
+    code = shell.SHFileOperationW(ctypes.byref(operation))
+    if code != 0:
+        raise OSError(f"Recycle failed for {item} with code {code}")
+
+
+def _relocate(item: Path, destination: object, *, copy: bool) -> None:
+    if not isinstance(destination, (str, Path)) or not str(destination).strip():
+        raise ValueError("A copy, move or rename needs a destination")
+    target = Path(str(destination)).expanduser()
+    if not target.is_absolute():
+        raise ValueError(f"A destination must be absolute: {destination}")
+
+
+    if target.is_dir():
+        target = target / item.name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if copy:
+        shutil.copy2(item, target)
+    else:
+        shutil.move(str(item), str(target))
 
 
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:

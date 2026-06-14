@@ -31,6 +31,7 @@ from typing import Any, Mapping, Sequence
 
 from .broker import (
     APPLICATION_LAUNCH_CAPABILITY,
+    FILES_CAPABILITY,
     INPUT_CONTROL_CAPABILITY,
     SCREEN_CAPTURE_CAPABILITY,
     TERMINAL_CAPABILITY,
@@ -78,6 +79,14 @@ class CapabilityTier:
 
 
 CAPABILITY_TIERS = (
+
+
+
+    CapabilityTier(
+        FILES_CAPABILITY,
+        TIER_NATIVE,
+        "Look at and change files and folders directly by path.",
+    ),
     CapabilityTier(
         APPLICATION_LAUNCH_CAPABILITY,
         TIER_NATIVE,

@@ -20,6 +20,7 @@ from typing import Any
 
 from ..automation.broker import (
     APPLICATION_LAUNCH_CAPABILITY,
+    FILES_CAPABILITY,
     INPUT_CONTROL_CAPABILITY,
     SCREEN_CAPTURE_CAPABILITY,
     TERMINAL_CAPABILITY,
@@ -78,6 +79,19 @@ VISION_PROMPT = (
 VISION_OUTPUT_TOKENS = 256
 
 TOOL_DESCRIPTIONS = {
+    FILES_CAPABILITY: (
+        'files.manage — Look at and change files and folders by path. Use this '
+        'for anything about files: listing, finding, reading, copying, moving, '
+        'renaming, deleting, making a folder.\n'
+        '  It reports which paths matched, which it changed, and which it left '
+        'alone, so you can confirm the right ones were affected.\n'
+        '  Arguments: {"operation": "list|search|read|stat|exists|copy|move|'
+        'rename|delete|create_directory", "path": "C:\\\\absolute\\\\path", '
+        '"pattern": "*.log", "recursive": false, "destination": '
+        '"C:\\\\absolute\\\\path", "permanent": false}\n'
+        '  path is an absolute folder or file. pattern selects inside a '
+        'folder. Deletes go to the Recycle Bin unless permanent is true.'
+    ),
     SCREEN_CAPTURE_CAPABILITY: (
         'screen.capture — Take a screenshot of the primary display. Use this to '
         'observe the current state.\n'
