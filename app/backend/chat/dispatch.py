@@ -54,6 +54,19 @@ object instead: {{"action":"<name below>","reason":"<one sentence>"}}
 Judge by intent, not wording: a logo, icon or poster request is an image request.\
 """
 
+
+
+
+AGENT_DECISION_INSTRUCTION = """\
+You are operating this computer for the user. When their request asks you to \
+change, open, run, find or fetch something, DO IT: reply with ONE JSON object \
+and nothing else. {{"action":"<name below>","reason":"<one sentence>"}}
+{jobs}
+Only answer in plain words when they asked you a question rather than for \
+something to be done. Explaining how they could do it themselves is not doing \
+it.\
+"""
+
 IMAGE_SHAPE = (
     '\ngenerate_image adds: "brief":{"subject","image_type","brand","style",'
     '"deliverables":[],"negative_constraints":[]}'
@@ -87,6 +100,22 @@ PLAN_CAPABILITY_SHAPE = (
 
 
 
+
+
+
+
+
+
+CAPABILITY_AFFORDANCES = {
+    "files.manage": "look at and change files and folders on this computer",
+    "terminal.execute": "run a command and read its output",
+    "application.launch": "open an application, a file, or a web address",
+    "browser.control": "read and operate web pages in a browser",
+    "window.control": "find, focus and close windows",
+    "ui.automation": "read and operate the controls inside an application",
+    "screen.capture": "look at the screen",
+    "input.control": "move the mouse and type",
+}
 
 ACTION_SHAPE = (
     '\naction example: {"action":"action","capability":"<one listed below>",'
@@ -138,7 +167,14 @@ def build_turn_instruction(
         return ""
 
     jobs = "\n".join(f'  "{name}" — {JOB_TYPE_MANIFEST[name]}' for name in offered)
-    text = DECISION_INSTRUCTION.format(jobs=jobs)
+
+
+
+
+
+    text = (
+        AGENT_DECISION_INSTRUCTION if (agent_mode and capabilities) else DECISION_INSTRUCTION
+    ).format(jobs=jobs)
     if SINGLE_ACTION in offered:
         text += ACTION_SHAPE
     if PLAN in offered:
@@ -148,7 +184,12 @@ def build_turn_instruction(
     if image_available:
         text += IMAGE_SHAPE + trailing
     if capabilities:
-        text += "\nActions: " + ", ".join(capabilities)
+        text += "\nActions:\n" + "\n".join(
+            f"  {name} — {CAPABILITY_AFFORDANCES[name]}"
+            if name in CAPABILITY_AFFORDANCES
+            else f"  {name}"
+            for name in capabilities
+        )
     if connectors:
         text += "\nServices: " + ", ".join(connectors)
     if agent_mode and capabilities:
@@ -161,12 +202,20 @@ def build_turn_instruction(
             "\nAgent mode is on: the user asked you to do this on their computer. "
             "If an action above can do it, return the JSON object and do it. Do "
             "not reply with instructions for doing it by hand."
+
+
+
+
+
+
             "\nTwo exceptions, and only these. If you cannot tell *what* the "
-            "request refers to, answer asking which thing they mean — never act "
-            "on a guess. If the request would delete, overwrite or send "
-            "something, answer describing exactly what you would do and wait to "
-            "be told to go ahead. If no action above can achieve the goal, say "
-            "so plainly instead of trying the nearest one."
+            "request refers to, answer asking which thing they mean — never "
+            "act on a guess. If the request would destroy or send something "
+            "and the user has not said clearly enough what, answer describing "
+            "exactly what you would do and wait to be told to go ahead — but "
+            "when they have named what to change, carry it out. If no action "
+            "above can achieve the goal, say so plainly instead of trying the "
+            "nearest one."
         )
     return text
 
