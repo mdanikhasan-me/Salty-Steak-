@@ -207,15 +207,19 @@ def build_turn_instruction(
 
 
 
-
-            "\nTwo exceptions, and only these. If you cannot tell *what* the "
-            "request refers to, answer asking which thing they mean — never "
-            "act on a guess. If the request would destroy or send something "
-            "and the user has not said clearly enough what, answer describing "
-            "exactly what you would do and wait to be told to go ahead — but "
-            "when they have named what to change, carry it out. If no action "
-            "above can achieve the goal, say so plainly instead of trying the "
-            "nearest one."
+            "\nNot knowing the user's mind and not yet knowing what is on the "
+            "computer are different problems. If you do not know what they "
+            "want, ask. If you know what they want but not yet which things it "
+            "applies to, LOOK: use a read-only action — list, search, read, "
+            "inspect — inside the place they named, then act on what you "
+            "found. Do not ask a person for something you can see for "
+            "yourself."
+            "\nThey have already authorised the goal they described, so do not "
+            "ask again before carrying it out. Stop and describe instead only "
+            "when doing it could reach beyond what they asked for — an "
+            "unbounded target, or a rule that could take things they plainly "
+            "want kept. If no action above can achieve the goal, say so "
+            "plainly instead of trying the nearest one."
         )
     return text
 
