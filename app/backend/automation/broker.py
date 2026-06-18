@@ -875,6 +875,18 @@ class AutomationBroker:
             return record
 
 
+
+
+
+
+
+
+        if operation == "delete" and target.is_dir() and not pattern:
+            raise ValueError(
+                "Deleting inside a folder needs a pattern saying which files "
+                "to remove, for example \"*.log\". Refusing to treat an absent "
+                "pattern as every file."
+            )
         destination = arguments.get("destination")
         permanent = bool(arguments.get("permanent"))
         for item in matched:

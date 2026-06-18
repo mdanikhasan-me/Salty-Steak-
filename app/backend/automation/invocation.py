@@ -92,6 +92,11 @@ def _is_schema_complaint(error: BaseException) -> bool:
 
 
 ESSENTIAL_FIELD = {
+
+
+
+
+    "files.manage": "operation",
     "browser.control": "command",
     "ui.automation": "command",
     "terminal.execute": "argv",

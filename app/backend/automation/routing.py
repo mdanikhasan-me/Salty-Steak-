@@ -229,6 +229,33 @@ _URL_PREFIXES = ("http://", "https://")
 
 
 ARGUMENT_ALIASES: dict[str, dict[str, str]] = {
+
+
+
+
+
+
+    FILES_CAPABILITY: {
+        "target_path": "path",
+        "target": "path",
+        "folder": "path",
+        "directory": "path",
+        "dir": "path",
+        "location": "path",
+        "file": "path",
+        "file_path": "path",
+        "file_pattern": "pattern",
+        "patterns": "pattern",
+        "match": "pattern",
+        "glob": "pattern",
+        "filter": "pattern",
+        "destination_path": "destination",
+        "target_directory": "destination",
+        "to": "destination",
+        "action": "operation",
+        "command": "operation",
+        "op": "operation",
+    },
     APPLICATION_LAUNCH_CAPABILITY: {
         "app": "target",
         "app_name": "target",
