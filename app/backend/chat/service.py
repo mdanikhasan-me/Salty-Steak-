@@ -3448,7 +3448,11 @@ class ChatService:
         return task_state.project(state, can_act=can_act)
 
     def _turn_instruction(
-        self, conversation_id: str, *, agent_mode: bool = False
+        self,
+        conversation_id: str,
+        *,
+        agent_mode: bool = False,
+        research_available: bool = False,
     ) -> str:
         """The routing line added to a turn, sized to what is really reachable."""
 
@@ -3488,6 +3492,9 @@ class ChatService:
             capabilities=capabilities,
             connectors=services,
             agent_mode=agent_mode,
+
+
+            research_available=research_available,
         ) + provenance
 
     def _live_runners(
@@ -3932,7 +3939,18 @@ class ChatService:
             image_store=self.image_store,
             run_agent=runners.run_action,
             run_workflow=runners.run_plan,
-            run_research=runners.run_research,
+
+
+
+
+            run_research=(
+                runners.run_research
+                if bool(
+                    generation_settings.get("research_mode")
+                    or generation_settings.get("web_search_enabled")
+                )
+                else None
+            ),
             task=task,
         )
         return dispatcher.dispatch(
@@ -4354,7 +4372,20 @@ class ChatService:
         }
         agent_mode = bool(generation_settings.get("agent_mode"))
         relationship["agent_mode"] = agent_mode
-        orchestration = self._turn_instruction(conversation_id, agent_mode=agent_mode)
+
+
+
+
+        research_available = bool(
+            generation_settings.get("research_mode")
+            or generation_settings.get("web_search_enabled")
+        )
+        relationship["research_available"] = research_available
+        orchestration = self._turn_instruction(
+            conversation_id,
+            agent_mode=agent_mode,
+            research_available=research_available,
+        )
         if orchestration:
             insertion = 0
             while insertion < len(history) and history[insertion].get("role") == "system":

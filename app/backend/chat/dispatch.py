@@ -130,6 +130,7 @@ def build_turn_instruction(
     capabilities: Sequence[str] = (),
     connectors: Sequence[str] = (),
     agent_mode: bool = False,
+    research_available: bool = False,
 ) -> str:
     """The system line that lets one generation both answer and route.
 
@@ -148,7 +149,13 @@ def build_turn_instruction(
 
 
     offered = [SINGLE_ACTION, PLAN] if capabilities else []
-    offered.append(RESEARCH)
+
+
+
+
+
+    if research_available:
+        offered.append(RESEARCH)
     trailing = ""
     if image_available:
         offered.append(GENERATE_IMAGE)
