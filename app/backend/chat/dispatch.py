@@ -394,6 +394,7 @@ class TurnDispatcher:
         run_workflow: Callable[..., Mapping[str, Any]] | None = None,
         run_research: Callable[..., Mapping[str, Any]] | None = None,
         task: Any = None,
+        permitted: Sequence[str] | frozenset[str] | None = None,
     ) -> None:
         self.images = images
         self.image_store = image_store
@@ -401,6 +402,9 @@ class TurnDispatcher:
         self.run_workflow = run_workflow
         self.run_research = run_research
         self.task = task
+
+
+        self.permitted = frozenset(permitted) if permitted is not None else None
 
     def dispatch(
         self,
@@ -426,6 +430,19 @@ class TurnDispatcher:
             return TurnOutcome(RESPOND, content=reply_text)
 
         action = str(decision.get("action"))
+
+
+
+
+
+
+
+        if self.permitted is not None and action not in self.permitted:
+            return TurnOutcome(
+                RESPOND,
+                content=reply_text,
+                details={"refused_by_authority": action},
+            )
 
         if action == RESPOND:
             return TurnOutcome(RESPOND, content=str(decision.get("answer") or reply_text))

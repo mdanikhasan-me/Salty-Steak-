@@ -3781,7 +3781,12 @@ class ChatService:
             read_decision,
         )
         from .orchestrator import (
+            GENERATE_IMAGE,
+            PLAN,
+            RESEARCH,
             RESPOND,
+            REVISE_IMAGE,
+            SINGLE_ACTION,
             conversation_request,
             latest_user_message,
             strip_reasoning,
@@ -3952,6 +3957,16 @@ class ChatService:
             conversation_id=conversation_id,
             provenance=provenance,
         )
+
+
+        research_reachable = bool(
+            generation_settings.get("research_available")
+            or generation_settings.get("research_forced")
+            or generation_settings.get("web_search_enabled")
+        )
+        computer_reachable = bool(
+            generation_settings.get("agent_mode")
+        ) and bool(self.granted_automation_capabilities())
         dispatcher = TurnDispatcher(
             images=images,
             image_store=self.image_store,
@@ -3963,13 +3978,24 @@ class ChatService:
 
             run_research=(
                 runners.run_research
-                if bool(
-                    generation_settings.get("research_mode")
-                    or generation_settings.get("web_search_enabled")
-                )
+                if research_reachable
                 else None
             ),
             task=task,
+
+
+
+
+            permitted=frozenset(
+                {RESPOND}
+                | ({SINGLE_ACTION, PLAN} if computer_reachable else set())
+                | ({RESEARCH} if research_reachable else set())
+                | (
+                    {GENERATE_IMAGE, REVISE_IMAGE}
+                    if self.image_generation_model
+                    else set()
+                )
+            ),
         )
         return dispatcher.dispatch(
             decision,
