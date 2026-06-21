@@ -57,14 +57,22 @@ Judge by intent, not wording: a logo, icon or poster request is an image request
 
 
 
+
+
+
+
+
+
+
 AGENT_DECISION_INSTRUCTION = """\
-You are operating this computer for the user. When their request asks you to \
-change, open, run, find or fetch something, DO IT: reply with ONE JSON object \
-and nothing else. {{"action":"<name below>","reason":"<one sentence>"}}
+Answer normally. If the request needs more than an answer, reply with ONE JSON \
+object instead: {{"action":"<name below>","reason":"<one sentence>"}}
 {jobs}
-Only answer in plain words when they asked you a question rather than for \
-something to be done. Explaining how they could do it themselves is not doing \
-it.\
+Decide from what THIS message asks for. The actions below are available, which \
+is not a reason to use one — a greeting, a question or an explanation is \
+answered in words, with no action at all.
+When they do want something done on this computer, do it: return the object. \
+Explaining how they could do it themselves is not doing it.\
 """
 
 IMAGE_SHAPE = (
@@ -206,9 +214,6 @@ def build_turn_instruction(
 
 
         text += (
-            "\nAgent mode is on: the user asked you to do this on their computer. "
-            "If an action above can do it, return the JSON object and do it. Do "
-            "not reply with instructions for doing it by hand."
 
 
 
@@ -221,8 +226,8 @@ def build_turn_instruction(
             "inspect — inside the place they named, then act on what you "
             "found. Do not ask a person for something you can see for "
             "yourself."
-            "\nThey have already authorised the goal they described, so do not "
-            "ask again before carrying it out. Stop and describe instead only "
+            "\nA goal they describe is already authorised, so do not ask again "
+            "before carrying it out. Stop and describe instead only "
             "when doing it could reach beyond what they asked for — an "
             "unbounded target, or a rule that could take things they plainly "
             "want kept. If no action above can achieve the goal, say so "

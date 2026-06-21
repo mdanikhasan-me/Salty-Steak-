@@ -777,7 +777,20 @@ class ChatService:
 
 
 
-            "research_mode": bool(supplied.get("research_mode", False)),
+            "research_mode": bool(
+                supplied.get("research_available", supplied.get("research_mode", False))
+                or supplied.get("research_command", False)
+            ),
+
+
+
+
+
+            "research_available": bool(
+                supplied.get("research_available", supplied.get("research_mode", False))
+                or supplied.get("research_command", False)
+            ),
+            "research_forced": bool(supplied.get("research_command", False)),
 
 
 
@@ -3780,7 +3793,12 @@ class ChatService:
 
 
 
-        if bool(generation_settings.get("research_mode")):
+
+
+
+
+
+        if bool(generation_settings.get("research_forced")):
             decision = {"action": "research", "question": request}
         elif bool(generation_settings.get("image_mode")):
 
@@ -4377,7 +4395,8 @@ class ChatService:
 
 
         research_available = bool(
-            generation_settings.get("research_mode")
+            generation_settings.get("research_available")
+            or generation_settings.get("research_forced")
             or generation_settings.get("web_search_enabled")
         )
         relationship["research_available"] = research_available

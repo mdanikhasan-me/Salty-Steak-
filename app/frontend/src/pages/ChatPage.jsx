@@ -756,9 +756,15 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               DEFAULT_GENERATION_SETTINGS,
             ),
             agent_mode: Boolean(agentModeRef.current),
-            research_mode:
+
+
+
+
+
+            research_available:
               Boolean(researchModeRef.current) ||
               Boolean(commandModes.research_mode),
+            research_command: Boolean(commandModes.research_mode) || undefined,
             image_mode: Boolean(commandModes.image_mode) || undefined,
 
             web_search_enabled:
