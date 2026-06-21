@@ -73,6 +73,12 @@ export function completionState(details) {
   const stored = String(details?.turn_completion || "").toLowerCase();
   if (stored) return stored;
   if (String(details?.generation_state || "") === "stopped") return "stopped";
+
+
+
+
+
+  if (details?.decision_unparsable) return "failed";
   if (String(details?.finish_reason || "") === "maximum_output") return "partial";
   const mode = String(details?.reasoning_mode_effective || "").toLowerCase();
   return mode === "cooking" ? "cooked" : "done";
@@ -102,6 +108,31 @@ export function workingLabel(mode, milliseconds) {
 
 function orchestrationOf(details) {
   return details?.orchestration || {};
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+export function visibleOutputTokens(details) {
+  const measured = Number(details?.visible_output_tokens);
+  if (Number.isFinite(measured) && measured >= 0) return measured;
+  const kind = String(orchestrationOf(details).kind || "respond");
+  if (kind !== "respond") return null;
+  const generated = Number(details?.generated_output_tokens);
+  return Number.isFinite(generated) && generated >= 0 ? generated : null;
 }
 
 
@@ -287,7 +318,7 @@ export function activityOf(details) {
         ? `Answered from ${model}${mode ? ` in ${mode} mode` : ""}`
         : "Answered from the local model",
     });
-    const tokens = Number(details?.generated_output_tokens);
+    const tokens = Number(visibleOutputTokens(details));
     const rate = Number(details?.decode_tokens_per_second);
     if (Number.isFinite(tokens) && tokens > 0) {
       events.push({

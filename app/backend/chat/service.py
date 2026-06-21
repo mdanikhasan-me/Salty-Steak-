@@ -97,6 +97,34 @@ def _separate_reasoning(text: Any) -> tuple[str, str]:
     return body.strip(), "\n\n".join(part for part in thoughts if part).strip()
 
 
+def _visible_output_tokens(
+    answer: str, generations: Sequence[tuple[str, int]]
+) -> int | None:
+    """The measured token count for the text the reader was actually shown.
+
+    A multi-paragraph research answer was labelled "1 output tokens". The count
+    was `generated_output_tokens` from the routing generation, whose reply was
+    discarded the moment the turn routed; the visible answer came from the
+    research finaliser several generations later. A number measured on text
+    nobody saw, printed under text it does not describe.
+
+    A turn can run several generations, so the count reported is the one
+    belonging to the answer that was delivered. When no generation produced it —
+    because the application composed the sentence itself — there is nothing to
+    measure and ``None`` is returned. Nothing is estimated: a wrong number is
+    worse than an absent one, which is the whole lesson of the original defect.
+    """
+
+    wanted = str(answer or "").strip()
+    if not wanted:
+        return None
+
+    for text, tokens in reversed(list(generations)):
+        if str(text or "").strip() == wanted:
+            return max(0, int(tokens))
+    return None
+
+
 def _turn_completion(
     details: Mapping[str, Any],
     *,
@@ -118,6 +146,15 @@ def _turn_completion(
 
 
         return "rendering" if details.get("image_render_started") else "waiting"
+
+
+
+
+
+
+
+    if details.get("decision_unparsable"):
+        return "failed"
 
     status = str((getattr(turn, "details", {}) or {}).get("status") or "")
     if status in {"failed", "rejected", "declined"}:
@@ -1600,7 +1637,25 @@ class ChatService:
                 reasoning_mode="instant",
                 maximum_output_mode="manual",
             )
+
+
+
+        self._record_generation(response)
         return str(response.text)
+
+    def _record_generation(self, response: Any) -> None:
+        """Remember what one generation produced, for this turn only."""
+
+        recorded = getattr(self, "_turn_generations", None)
+        if recorded is None:
+            return
+        try:
+            tokens = len(response.token_ids)
+        except (AttributeError, TypeError):
+            return
+        recorded.append((str(getattr(response, "text", "") or ""), int(tokens)))
+
+        del recorded[:-16]
 
     def _describe_screenshot(self, path: str, *, conversation_id: str) -> str:
         """Describe one agent screenshot with the local vision runtime.
@@ -3871,13 +3926,18 @@ class ChatService:
                             "unreadable_decision": unread,
                         },
                     )
+
+
+
+
+
+
                 return TurnOutcome(
                     "respond",
                     content=(
-                        "I started answering that in a machine format by "
-                        "mistake and could not correct it, so I stopped rather "
-                        "than show you a data dump. Ask me again and I will "
-                        "answer properly."
+                        "I could not finish that one. Nothing was changed on "
+                        "your computer. Ask me again and I will answer it "
+                        "properly."
                     ),
                     details={
                         "decision_unparsable": True,
@@ -4687,6 +4747,11 @@ class ChatService:
 
         assistant_id = new_id()
         self._route_trace = None
+
+
+
+
+        self._turn_generations = [(str(response.text or ""), len(response.token_ids))]
         turn = self._dispatch_turn(
             reply_text=response.text,
             request=search_query,
@@ -4788,6 +4853,16 @@ class ChatService:
         if getattr(self, "_route_trace", None):
             details["route_trace"] = self._route_trace
             self._route_trace = None
+
+
+
+
+        visible_tokens = _visible_output_tokens(
+            assistant_content, getattr(self, "_turn_generations", []) or []
+        )
+        if visible_tokens is not None:
+            details["visible_output_tokens"] = visible_tokens
+        self._turn_generations = []
 
         details["turn_duration_ms"] = round((time.monotonic() - turn_started) * 1000)
         details["image_render_started"] = self._image_will_render(details)

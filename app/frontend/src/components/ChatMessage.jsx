@@ -12,6 +12,7 @@ import {
   completionState,
   responseDetails,
   sourceMarks,
+  visibleOutputTokens,
 } from "../workflows/responseProvenance.mjs";
 import { usedSources } from "../workflows/claimEvidence.mjs";
 import { presentAssistantContent } from "../workflows/chatContent.mjs";
@@ -384,7 +385,10 @@ function ResponseProvenance({ details, onOpenDetails }) {
 function ResponseMetadata({ details, duration }) {
   const entries = [
     duration ? `Generated in ${duration}` : null,
-    finiteCount(details?.generated_output_tokens, "output tokens"),
+
+
+
+    finiteCount(visibleOutputTokens(details), "output tokens"),
     finiteRate(details?.decode_tokens_per_second || details?.tokens_per_second),
     details?.execution_device || details?.device || null,
   ].filter(Boolean);
@@ -439,7 +443,13 @@ function TechnicalDetails({ details }) {
     ]],
     ["Context and generation", [
       ["Input context tokens", formatNumber(details.input_context_tokens)],
-      ["Generated output tokens", formatNumber(details.generated_output_tokens)],
+
+
+
+
+
+      ["Answer output tokens", formatNumber(visibleOutputTokens(details))],
+      ["Routing generation tokens", formatNumber(details.generated_output_tokens)],
       ["Total processed tokens", formatNumber(details.total_processed_tokens)],
       ["Architectural context limit", formatNumber(details.architectural_context_limit)],
       ["Reserved output tokens", formatNumber(details.reserved_output_tokens)],
