@@ -281,6 +281,110 @@ _PROCESS_PHRASES = (
 )
 
 
+
+
+FINALISER_BASE_RULES = (
+    "Answer the user's question using only the findings below. Write the "
+    "answer itself in plain prose — do not describe the search, do not count "
+    "sources, do not mention findings or claims. "
+    "Never combine parts of two different findings: if one finding names a "
+    "thing and another names a number, they are not about each other unless a "
+    "single finding says so. "
+    "Do not estimate, round or fill a gap. If the findings do not give "
+    "something that was asked for, say that they do not. "
+    "If the findings disagree, say what the disagreement is. If they do not "
+    "answer the question, say so plainly."
+)
+
+
+
+
+
+
+FINALISER_COMMERCE_RULES = (
+    " A figure a finding gives as a range across a page or a catalogue is a "
+    "range and must be reported as one, never as the price of a particular "
+    "item. "
+    "A price for a named item may only come from verified_products, which is "
+    "the only place a product, its price and its seller were bound together "
+    "by one page. Quote each seller's price separately and give its link; "
+    "never average them. "
+    "A finding marked as a catalogue page describes a whole shop, not any item "
+    "on it. "
+    "Write each price exactly as verified_products gives it, character for "
+    "character. Never change its currency mark for another and never convert "
+    "between currencies. "
+    "Stock is evidence, not an assumption. A product whose stock is 'unknown' "
+    "has NOT been confirmed available and may never be called in stock, "
+    "available, or the cheapest one currently in stock — say its availability "
+    "was not confirmed. "
+    "Obey evidence_limits."
+)
+
+
+def _has_priced_evidence(observations: Sequence[Mapping[str, Any]]) -> bool:
+    """Whether any observation actually bound an offer.
+
+    A page can be observed without a price being established on it, and an
+    observation with no price is not commerce evidence.
+    """
+
+    return any(
+        str(item.get("price_display") or item.get("price") or "").strip()
+        for item in observations
+        if isinstance(item, Mapping)
+    )
+
+
+def finaliser_instruction(*, observations: Sequence[Mapping[str, Any]]) -> str:
+    """The rules the answering pass is held to, for the evidence it actually has.
+
+    Evidence-driven, never keyword-driven. The commerce block appears because
+    priced observations exist, not because the question contained a word — a
+    word list would be wrong about somebody's question sooner or later, and
+    would reintroduce exactly the contamination it was meant to prevent.
+    """
+
+    if _has_priced_evidence(observations):
+        return FINALISER_BASE_RULES + FINALISER_COMMERCE_RULES
+    return FINALISER_BASE_RULES
+
+
+def finaliser_payload(
+    *,
+    question: str,
+    observations: Sequence[Mapping[str, Any]],
+    evidence_limits: Mapping[str, Any],
+    findings: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """What the answering pass is shown.
+
+    An empty ``verified_products`` list is not neutral: a shopping-shaped field
+    still tells the model the answer is about shopping, so it is left out
+    entirely rather than sent empty.
+    """
+
+    payload: dict[str, Any] = {"question": question, "findings": list(findings)}
+    if not _has_priced_evidence(observations):
+        return payload
+    payload["verified_products"] = [
+        {
+            "product": item.get("product"),
+
+
+            "price": item.get("price_display") or item.get("price"),
+            "currency": item.get("currency_code") or item.get("currency"),
+            "seller": item.get("seller"),
+            "stock": item.get("stock") or "unknown",
+            "variant": item.get("variant") or "",
+            "url": item.get("url"),
+        }
+        for item in observations
+    ]
+    payload["evidence_limits"] = dict(evidence_limits)
+    return payload
+
+
 def _evidence_limits(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """What the gathered evidence settles, and what it does not.
 
@@ -851,78 +955,25 @@ class LiveRunners:
         if self.generate is not None:
             if self.task is not None:
                 self.task.metrics.model_calls += 1
+
+
+
+
+            observations = list(report.get("observations") or [])
             reply = self.generate(
                 [
                     {
                         "role": "system",
-                        "content": (
-                            "Answer the user's question using only the findings "
-                            "below. Write the answer itself in plain prose — do "
-                            "not describe the search, do not count sources, do "
-                            "not mention findings or claims. "
-                            "Never combine parts of two different findings. If "
-                            "one finding names a product and another names a "
-                            "price, they are not about each other unless a "
-                            "single finding says so; do not pair them. "
-                            "A figure that a finding gives as a range across a "
-                            "page or a catalogue is a range, and must be "
-                            "reported as one — never as the price of a "
-                            "particular item. "
-                            "Do not estimate, round or fill a gap. If the "
-                            "findings do not give a specific figure that was "
-                            "asked for, say that they do not. "
-                            "A price for a named item may only come from "
-                            "verified_products, which is the only place a "
-                            "product, its price and its seller were bound "
-                            "together by one page. Quote each seller's price "
-                            "separately and give its link; never average them. "
-                            "A finding marked as a catalogue page describes a "
-                            "whole shop, not any item on it. "
-                            "Write each price exactly as verified_products "
-                            "gives it, character for character. Never change "
-                            "its currency mark for another and never convert "
-                            "between currencies. "
-                            "Stock is evidence, not an assumption. A product "
-                            "whose stock is 'unknown' has NOT been confirmed "
-                            "available and may never be called in stock, "
-                            "available, or the cheapest one currently in "
-                            "stock — say its availability was not confirmed. "
-                            "Obey evidence_limits. "
-                            "If the findings disagree, say what the "
-                            "disagreement is. If they do not answer the "
-                            "question, say so plainly."
-                        ),
+                        "content": finaliser_instruction(observations=observations),
                     },
                     {
                         "role": "user",
                         "content": json.dumps(
-                            {
-                                "question": question,
-
-
-
-
-                                "verified_products": [
-                                    {
-                                        "product": item.get("product"),
-
-
-
-                                        "price": item.get("price_display")
-                                        or item.get("price"),
-                                        "currency": item.get("currency_code")
-                                        or item.get("currency"),
-                                        "seller": item.get("seller"),
-                                        "stock": item.get("stock") or "unknown",
-                                        "variant": item.get("variant") or "",
-                                        "url": item.get("url"),
-                                    }
-                                    for item in (report.get("observations") or [])
-                                ],
-                                "evidence_limits": _evidence_limits(
-                                    report.get("observations") or []
-                                ),
-                                "findings": [
+                            finaliser_payload(
+                                question=question,
+                                observations=observations,
+                                evidence_limits=_evidence_limits(observations),
+                                findings=[
                                     {
                                         "text": claim.get("text"),
                                         "sources": int(claim.get("source_count") or 0),
@@ -930,7 +981,7 @@ class LiveRunners:
                                     }
                                     for claim in ordered
                                 ],
-                            },
+                            ),
                             default=str,
                         ),
                     },
@@ -965,10 +1016,14 @@ class LiveRunners:
 
 
 __all__ = [
+    "FINALISER_BASE_RULES",
+    "FINALISER_COMMERCE_RULES",
     "LiveRunners",
     "MAX_LIVE_NODES",
     "PlanRejected",
     "RUNNER_SCHEMA",
+    "finaliser_instruction",
+    "finaliser_payload",
     "replan_packet",
     "validate_plan",
 ]
