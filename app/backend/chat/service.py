@@ -153,7 +153,13 @@ def _turn_completion(
 
 
 
-    if details.get("decision_unparsable"):
+
+
+
+
+
+
+    if (details.get("orchestration") or {}).get("decision_unparsable"):
         return "failed"
 
     status = str((getattr(turn, "details", {}) or {}).get("status") or "")

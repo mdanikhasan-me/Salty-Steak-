@@ -78,7 +78,13 @@ export function completionState(details) {
 
 
 
-  if (details?.decision_unparsable) return "failed";
+
+
+
+
+  if (details?.orchestration?.decision_unparsable || details?.decision_unparsable) {
+    return "failed";
+  }
   if (String(details?.finish_reason || "") === "maximum_output") return "partial";
   const mode = String(details?.reasoning_mode_effective || "").toLowerCase();
   return mode === "cooking" ? "cooked" : "done";
