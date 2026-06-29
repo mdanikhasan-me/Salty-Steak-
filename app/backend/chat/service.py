@@ -97,6 +97,25 @@ def _separate_reasoning(text: Any) -> tuple[str, str]:
     return body.strip(), "\n\n".join(part for part in thoughts if part).strip()
 
 
+def _reads_as_unnecessary(reply: Any) -> bool:
+    """Whether the necessity check clearly said the request needs no capability.
+
+    Fails open in every direction. Getting the model to route at all took four
+    recorded sessions of work, so a check that swallows good routes when it
+    errors, times out or waffles would cost far more than the restraint it
+    buys. Only an explicit verdict stops a route; anything else lets it run.
+    """
+
+    text = str(reply or "").strip().casefold()
+    if not text:
+        return False
+
+
+
+    first = text.split()[0].strip(".,:;!\"'`*-")
+    return first == "conversation"
+
+
 def _visible_output_tokens(
     answer: str, generations: Sequence[tuple[str, int]]
 ) -> int | None:
@@ -3829,6 +3848,80 @@ class ChatService:
             "summary": str(page.get("text") or page.get("summary") or ""),
         }
 
+    def _route_the_request_actually_needs(
+        self,
+        decision: Mapping[str, Any],
+        *,
+        request: str,
+        context: OperationContext,
+        generation_settings: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Keep a route only when the request genuinely needs it.
+
+        A switch being on means a capability *may* be used. The turn decides
+        whether it *should* be, and it decides that in the same generation that
+        writes prose, at the sampling settings prose wants. Measured on the
+        installed application, "hi" under Cooking with Research available
+        answered normally on one trial, researched the word over six sources on
+        another, and began rendering a greeting card on a third.
+
+        So the decision is checked once, on its own, before it runs. Returning
+        ``None`` sends the turn down the ordinary answering path.
+
+        Deliberately not a keyword gate. The check is asked about *this*
+        request and *this* route, and a list of words that means "no tool
+        needed" would be wrong about somebody's request — which is the whole
+        reason the routing is semantic in the first place.
+        """
+
+        from .dispatch import ROUTE_DESCRIPTIONS, ROUTE_NECESSITY_INSTRUCTION
+
+        action = str(decision.get("action") or "")
+        described = ROUTE_DESCRIPTIONS.get(action)
+        if described is None:
+
+            return dict(decision)
+        if not str(request or "").strip():
+            return dict(decision)
+
+        try:
+            verdict = self._agent_generate(
+                [
+                    {"role": "system", "content": ROUTE_NECESSITY_INSTRUCTION},
+
+
+
+
+                    {"role": "user", "content": str(request)[:1_500]},
+                ],
+                context=context,
+
+
+
+                generation_settings={
+                    **dict(generation_settings),
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                    "top_k": 1,
+                    "maximum_output_tokens": 6,
+                },
+            )
+        except Exception:
+
+            return dict(decision)
+
+
+
+
+        if isinstance(getattr(self, "_route_trace", None), dict):
+            self._route_trace["necessity_verdict"] = str(verdict or "")[:80]
+            self._route_trace["necessity_route"] = action
+
+        if not _reads_as_unnecessary(verdict):
+            return dict(decision)
+        self._route_vetoed = {"route": action, "verdict": str(verdict)[:80]}
+        return None
+
     def _dispatch_turn(
         self,
         *,
@@ -3909,6 +4002,59 @@ class ChatService:
                 "top_p": generation_settings.get("top_p"),
                 "capabilities_offered": len(self.granted_automation_capabilities()),
             }
+
+
+
+
+            if decision is not None:
+                self._route_vetoed = None
+                decision = self._route_the_request_actually_needs(
+                    decision,
+                    request=latest_user_message(history) or request,
+                    context=context,
+                    generation_settings=generation_settings,
+                )
+                if decision is None:
+
+
+
+
+                    from .dispatch import TurnOutcome
+
+                    vetoed = dict(self._route_vetoed or {})
+                    self._route_vetoed = None
+                    try:
+                        answer = strip_reasoning(
+                            str(
+                                self._agent_generate(
+                                    [
+                                        {
+                                            "role": "system",
+                                            "content": DECISION_REPAIR_INSTRUCTION,
+                                        },
+                                        {"role": "user", "content": str(reply_text)[:4_000]},
+                                    ],
+                                    context=context,
+                                    generation_settings=generation_settings,
+                                )
+                                or ""
+                            )
+                        ).strip()
+                    except Exception:
+                        answer = ""
+                    if not answer or looks_like_a_decision_attempt(answer):
+
+
+
+                        answer = (
+                            "I could not finish that one. Ask me again and I "
+                            "will answer it properly."
+                        )
+                    return TurnOutcome(
+                        RESPOND,
+                        content=answer,
+                        details={"route_not_needed": vetoed.get("route") or True},
+                    )
         if decision is None and looks_like_a_decision_attempt(reply_text):
 
 

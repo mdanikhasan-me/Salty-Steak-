@@ -315,6 +315,49 @@ EFFECT_CLAIM_INSTRUCTION = (
     "One word. Nothing else."
 )
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ROUTE_NECESSITY_INSTRUCTION = (
+    "You are sorting one message into one of two kinds, and doing nothing "
+    "else.\n"
+    "The message was sent to an assistant that can also operate the computer, "
+    "search the web and draw pictures.\n"
+    '"task" — they want something done, found out, opened, run, changed, '
+    "looked up or made.\n"
+    '"conversation" — a greeting, a thank-you, small talk, or a question that '
+    "words alone answer.\n"
+    "Reply with one word: task or conversation."
+)
+
+
+
+ROUTE_DESCRIPTIONS = {
+    SINGLE_ACTION: "operate this computer",
+    PLAN: "carry out several steps on this computer",
+    RESEARCH: "search the web and read several pages",
+    GENERATE_IMAGE: "generate a picture",
+    REVISE_IMAGE: "redraw the picture from earlier in the conversation",
+}
+
 DECISION_REPAIR_INSTRUCTION = (
     "Your previous reply was JSON. The person reading it wants an answer in "
     "plain words, not a data structure. Answer their question directly, in "
@@ -582,6 +625,8 @@ class TurnDispatcher:
 
 __all__ = [
     "DISPATCH_SCHEMA",
+    "ROUTE_DESCRIPTIONS",
+    "ROUTE_NECESSITY_INSTRUCTION",
     "TurnDispatcher",
     "TurnOutcome",
     "build_turn_instruction",
