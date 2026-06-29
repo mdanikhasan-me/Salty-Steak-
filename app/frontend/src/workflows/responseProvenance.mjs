@@ -21,8 +21,14 @@
 
 
 const COMPLETION_WORDS = {
-  done: "Zonted",
-  cooked: "Zonted",
+
+
+
+
+
+  done: "Done in",
+  cooked: "Cooked in",
+  zonted: "Zonted",
   zonting: "Zonting",
   stopped: "Stopped",
   failed: "Couldn't finish",
@@ -33,6 +39,10 @@ const COMPLETION_WORDS = {
 
   rendering: "Creating the image",
 };
+
+
+
+const PHRASE_COMPLETIONS = new Set(["done", "cooked"]);
 
 
 export function formatElapsed(milliseconds) {
@@ -97,9 +107,14 @@ export function completionLabel(details) {
   if (!word) return "";
   if (state === "rendering") return word;
   const elapsed = formatElapsed(turnDuration(details));
+  if (!elapsed) {
 
 
-  return elapsed ? `${word} · ${elapsed}` : word;
+    return PHRASE_COMPLETIONS.has(state) ? "" : word;
+  }
+
+
+  return PHRASE_COMPLETIONS.has(state) ? `${word} ${elapsed}` : `${word} · ${elapsed}`;
 }
 
 

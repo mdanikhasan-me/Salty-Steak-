@@ -194,7 +194,40 @@ def _turn_completion(
         return "partial"
 
     cooking = str(details.get("reasoning_mode_effective") or "").strip().lower()
-    return "cooked" if cooking == "cooking" else "done"
+    ordinary = "cooked" if cooking == "cooking" else "done"
+
+
+
+
+
+
+
+
+    if not _turn_reached_outside(details):
+        return ordinary
+
+
+
+
+    return "zonted" if details.get("goal_verified") is True else "partial"
+
+
+def _turn_reached_outside(details: Mapping[str, Any]) -> bool:
+    """Whether this turn did anything beyond composing a reply.
+
+    Research, a capability invocation, a plan and a rendered image all reach
+    past the conversation. An ordinary answer does not, and is not making a
+    claim about the world that needs verifying.
+    """
+
+    orchestration = details.get("orchestration") or {}
+    if not isinstance(orchestration, Mapping):
+        return False
+    if str(orchestration.get("kind") or "") in {"research", "action", "plan"}:
+        return True
+    if orchestration.get("capability") or orchestration.get("steps"):
+        return True
+    return bool(details.get("generated_image"))
 
 
 def _checked_label_name(name: Any) -> str:
@@ -5031,6 +5064,17 @@ class ChatService:
         if visible_tokens is not None:
             details["visible_output_tokens"] = visible_tokens
         self._turn_generations = []
+
+
+
+
+
+        if _turn_reached_outside(details):
+            from .verification import verify_goal
+
+            verified, goal_evidence = verify_goal(details.get("orchestration") or {})
+            details["goal_verified"] = verified
+            details["goal_evidence"] = goal_evidence
 
         details["turn_duration_ms"] = round((time.monotonic() - turn_started) * 1000)
         details["image_render_started"] = self._image_will_render(details)
