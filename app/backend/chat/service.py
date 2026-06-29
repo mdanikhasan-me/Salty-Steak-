@@ -1659,7 +1659,15 @@ class ChatService:
             tokens = len(response.token_ids)
         except (AttributeError, TypeError):
             return
-        recorded.append((str(getattr(response, "text", "") or ""), int(tokens)))
+        raw = str(getattr(response, "text", "") or "")
+        recorded.append((raw, int(tokens)))
+
+
+
+
+        body, _ = _separate_reasoning(raw)
+        if body and body != raw:
+            recorded.append((body, int(tokens)))
 
         del recorded[:-16]
 
@@ -3882,18 +3890,25 @@ class ChatService:
 
 
 
-            if bool(generation_settings.get("agent_mode")):
-                self._route_trace = {
-                    "raw_reply": strip_reasoning(str(reply_text or ""))[:1_500],
-                    "parsed_route": (decision or {}).get("action") or "respond",
-                    "looked_like_a_decision": looks_like_a_decision_attempt(reply_text),
-                    "reply_characters": len(str(reply_text or "")),
-                    "temperature": generation_settings.get("temperature"),
-                    "top_p": generation_settings.get("top_p"),
-                    "capabilities_offered": len(
-                        self.granted_automation_capabilities()
-                    ),
-                }
+
+
+
+
+
+            self._route_trace = {
+                "raw_reply": strip_reasoning(str(reply_text or ""))[:1_500],
+                "parsed_route": (decision or {}).get("action") or "respond",
+                "looked_like_a_decision": looks_like_a_decision_attempt(reply_text),
+                "reply_characters": len(str(reply_text or "")),
+                "reasoning_mode": generation_settings.get("reasoning_mode"),
+                "research_available": bool(
+                    generation_settings.get("research_available")
+                ),
+                "agent_mode": bool(generation_settings.get("agent_mode")),
+                "temperature": generation_settings.get("temperature"),
+                "top_p": generation_settings.get("top_p"),
+                "capabilities_offered": len(self.granted_automation_capabilities()),
+            }
         if decision is None and looks_like_a_decision_attempt(reply_text):
 
 
@@ -4757,7 +4772,8 @@ class ChatService:
 
 
 
-        self._turn_generations = [(str(response.text or ""), len(response.token_ids))]
+        self._turn_generations = []
+        self._record_generation(response)
         turn = self._dispatch_turn(
             reply_text=response.text,
             request=search_query,
