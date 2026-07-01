@@ -97,6 +97,45 @@ def _separate_reasoning(text: Any) -> tuple[str, str]:
     return body.strip(), "\n\n".join(part for part in thoughts if part).strip()
 
 
+_CONTROL_TOKEN = re.compile(r"/(?:no_)?think\b", re.IGNORECASE)
+
+
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _without_control_token_echo(text: str) -> str:
+    """Remove any sentence in which the model quoted our own reasoning switch.
+
+    ``/think`` and ``/no_think`` are appended to the user's own message to
+    select the reasoning lane — that is how the model's soft switch works, and
+    the template boundary depends on it. On a short message the directive is a
+    large fraction of what the model sees, and it sometimes reads it as
+    something the person typed. Observed on the installed application, Cooking,
+    to the message "hi":
+
+        Since you included `/think`, did you have a specific image in mind?
+
+    The token is ours and must never reach the reader. Removing just the token
+    would leave "Since you included ``, did you have", so the clause goes with
+    it. Every answer that does not mention one is returned untouched, which is
+    almost all of them.
+    """
+
+    body = str(text or "")
+    if not _CONTROL_TOKEN.search(body):
+        return body
+
+    kept = [
+        part
+        for part in _SENTENCE.split(body)
+        if part.strip() and not _CONTROL_TOKEN.search(part)
+    ]
+    cleaned = " ".join(part.strip() for part in kept).strip()
+
+
+    return cleaned or _CONTROL_TOKEN.sub("that", body).strip()
+
+
 def _reads_as_unnecessary(reply: Any) -> bool:
     """Whether the necessity check clearly said the request needs no capability.
 
@@ -5064,6 +5103,10 @@ class ChatService:
         if visible_tokens is not None:
             details["visible_output_tokens"] = visible_tokens
         self._turn_generations = []
+
+
+
+        assistant_content = _without_control_token_echo(assistant_content)
 
 
 
