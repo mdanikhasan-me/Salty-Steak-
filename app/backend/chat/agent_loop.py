@@ -412,6 +412,16 @@ def is_destructive(action: str, arguments: Mapping[str, Any]) -> bool:
     return _looks_destructive([str(item) for item in argv])
 
 
+
+
+
+MAX_LISTED_PATHS = 40
+
+
+def _bounded_paths(value: Any) -> list[str]:
+    return [str(item) for item in (value or [])][:MAX_LISTED_PATHS]
+
+
 def summarise_observation(
     action: str,
     result: Mapping[str, Any],
@@ -462,6 +472,30 @@ def summarise_observation(
                 ],
             }
         )
+    elif action == FILES_CAPABILITY:
+
+
+
+
+
+
+
+        observation.update(
+            {
+                "operation": result.get("operation"),
+                "mutating": bool(result.get("mutating")),
+                "matched_paths": _bounded_paths(result.get("matched_paths")),
+                "affected_paths": _bounded_paths(result.get("affected_paths")),
+                "preserved_paths": _bounded_paths(result.get("preserved_paths")),
+                "failed_paths": list(result.get("failed_paths") or [])[:MAX_LISTED_PATHS],
+            }
+        )
+        after = result.get("after_state")
+        if isinstance(after, Mapping):
+            observation["after_state"] = {
+                "still_present": _bounded_paths(after.get("still_present")),
+                "preserved_present": _bounded_paths(after.get("preserved_present")),
+            }
     elif action == APPLICATION_LAUNCH_CAPABILITY:
         observation["target"] = result.get("target")
     elif action == INPUT_CONTROL_CAPABILITY:

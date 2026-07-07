@@ -61,8 +61,8 @@ def verify_goal(orchestration: Mapping[str, Any]) -> tuple[bool | None, dict[str
         return _verify_every_step(steps)
 
     return _verify_capability(
-        str(orchestration.get("capability") or ""),
-        orchestration.get("result") or {},
+        str(orchestration.get("capability") or orchestration.get("action") or ""),
+        orchestration.get("result") or orchestration.get("observation") or {},
     )
 
 
@@ -106,10 +106,15 @@ def _verify_every_step(
     for step in steps:
         if not isinstance(step, Mapping):
             continue
-        capability = str(step.get("capability") or "")
-        if not capability:
+
+
+
+
+        capability = str(step.get("capability") or step.get("action") or "")
+        if not capability or capability == "respond":
             continue
-        verdict, evidence = _verify_capability(capability, step.get("result") or {})
+        outcome = step.get("result") or step.get("observation") or {}
+        verdict, evidence = _verify_capability(capability, outcome)
         verdicts.append(verdict)
         details.append({"capability": capability, "verified": verdict, **evidence})
 
