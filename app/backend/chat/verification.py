@@ -43,8 +43,29 @@ MUTATING_FILE_OPERATIONS = frozenset(
 )
 
 
-def verify_goal(orchestration: Mapping[str, Any]) -> tuple[bool | None, dict[str, Any]]:
-    """Whether this turn's own evidence shows its goal reached."""
+def verify_goal(
+    orchestration: Mapping[str, Any],
+    *,
+    spec: Any = None,
+    observe: Any = None,
+) -> tuple[bool | None, dict[str, Any]]:
+    """Whether what the user asked for is now true.
+
+    Two sources, and they are not symmetric.
+
+    The **goal's own predicates** are the only thing that can grant success.
+    They are declared from the request before the work runs and checked
+    afterwards by re-observing the world, so a requirement nobody acted on is
+    still checked. Without them there is nothing to be right about, and the
+    verdict is unknown.
+
+    The **steps** may only veto. Summing verified steps was the whole defect:
+    asked to delete some logs and keep the notes, a run that deleted the notes
+    as its own perfectly successful step returned True, because a requirement
+    that was never executed is one no step can miss. Their remaining job is to
+    catch a contradiction the predicates might not cover — a protected path
+    that vanished, a path that failed to move.
+    """
 
     if not isinstance(orchestration, Mapping):
         return None, {"reason": "no_orchestration"}
@@ -53,28 +74,70 @@ def verify_goal(orchestration: Mapping[str, Any]) -> tuple[bool | None, dict[str
     if kind not in OUTWARD_KINDS:
         return None, {"reason": "nothing_reached_outside"}
 
+    contradiction = _step_contradiction(orchestration)
+    if contradiction is not None:
+        return False, {"reason": "a_step_contradicted_the_goal", **contradiction}
+
     if kind == "research":
-        return _verify_research(orchestration)
+        return _verify_research(orchestration, spec)
+
+    from .goal_state import filesystem_observer, verify_predicates
+
+    return verify_predicates(spec, observe or filesystem_observer())
+
+
+def _step_contradiction(
+    orchestration: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """A step whose own report already disproves the goal.
+
+    Deliberately one-directional. Nothing here can make a turn succeed.
+    """
 
     steps = orchestration.get("steps")
-    if isinstance(steps, Sequence) and steps:
-        return _verify_every_step(steps)
+    if not isinstance(steps, Sequence):
+        steps = []
+    records = [step for step in steps if isinstance(step, Mapping)] or [orchestration]
 
-    return _verify_capability(
-        str(orchestration.get("capability") or orchestration.get("action") or ""),
-        orchestration.get("result") or orchestration.get("observation") or {},
-    )
+    for step in records:
+        capability = str(step.get("capability") or step.get("action") or "")
+        if capability != "files.manage":
+            continue
+        outcome = step.get("result") or step.get("observation") or {}
+        if not isinstance(outcome, Mapping):
+            continue
+        preserved = [str(item) for item in (outcome.get("preserved_paths") or [])]
+        if not preserved:
+            continue
+        after = outcome.get("after_state")
+        if not isinstance(after, Mapping):
+            continue
+        present = {str(item) for item in (after.get("preserved_present") or [])}
+        lost = [item for item in preserved if item not in present]
+        if lost:
+
+
+
+            return {"capability": capability, "protected_lost": lost[:10]}
+    return None
 
 
 def _verify_research(
-    orchestration: Mapping[str, Any]
+    orchestration: Mapping[str, Any], spec: Any = None
 ) -> tuple[bool | None, dict[str, Any]]:
-    """Research is finished when it has evidence, not when it stops searching.
+    """Having gathered evidence is not having answered the question.
 
-    The runner used to report "I read 6 sources and kept 145 findings" as the
-    answer. Reading six sources is not the goal; the goal is knowing something,
-    and an observation is the smallest unit of knowing that has a page behind
-    it.
+    Those were one concept and they are two. "Find the cheapest currently
+    in-stock 2TB Gen4 SSD in Bangladesh and give me the exact product link"
+    carries the capacity, the region, current stock, an exact offer page,
+    freshness, and *cheapest among validated candidates*. An observation about
+    the wrong capacity, or about a seller who turns out to be out of stock, is
+    real evidence and is not that goal.
+
+    So observation count, claim count and source count decide nothing on their
+    own. They measure how much was read. Whether the question was answered is
+    a question about the requirements the asker actually stated, and those have
+    to be declared and bound before anything can say yes.
     """
 
     observations = list(orchestration.get("observations") or [])
@@ -82,14 +145,56 @@ def _verify_research(
     report = orchestration.get("research") or {}
     claim_count = int((report or {}).get("claim_count") or len(claims) or 0)
 
-    evidence = {
+    gathered = {
         "observations": len(observations),
         "claims": claim_count,
         "stop_reason": str((report or {}).get("stop_reason") or ""),
     }
-    if observations or claim_count:
-        return True, evidence
-    return False, {**evidence, "reason": "no_evidence_gathered"}
+
+
+    if not observations and not claim_count:
+        return False, {**gathered, "reason": "no_evidence_gathered"}
+
+    from .goal_state import verify_predicates
+
+    verdict, evidence = verify_predicates(spec, _research_observer(orchestration))
+    return verdict, {**gathered, **evidence}
+
+
+def _research_observer(orchestration: Mapping[str, Any]):
+    """Answers the research predicates that bound evidence can settle.
+
+    Only kinds where a single page bound the claim together count. Everything
+    else — freshness windows, "cheapest among validated candidates", variant
+    matching — is unknown until it has an observer of its own, which is the
+    next piece of work rather than a reason to widen this one.
+    """
+
+    observations = [
+        item for item in (orchestration.get("observations") or []) if isinstance(item, Mapping)
+    ]
+
+    def observe(predicate: Any) -> bool | None:
+        kind = str(getattr(predicate, "kind", ""))
+        subject = str(getattr(predicate, "subject", "")).strip().casefold()
+        if kind == "exact_page":
+
+
+            return any(
+                subject and subject == str(item.get("url") or "").strip().casefold()
+                for item in observations
+            )
+        if kind == "stock_confirmed":
+
+
+            return any(
+                str(item.get("stock") or "unknown").strip().casefold() == "in_stock"
+                and (not subject or subject in str(item.get("product") or "").casefold())
+                for item in observations
+            )
+        return None
+
+    return observe
 
 
 def _verify_every_step(

@@ -358,6 +358,30 @@ ROUTE_DESCRIPTIONS = {
     REVISE_IMAGE: "redraw the picture from earlier in the conversation",
 }
 
+
+
+
+
+
+
+
+
+GOAL_SPEC_INSTRUCTION = (
+    "You are writing down what must be TRUE once this request is finished, and "
+    "nothing else. Not the steps — the result.\n"
+    "Reply with ONE JSON object and nothing else:\n"
+    '{"outcomes":[{"kind":"absent","target":"..."},'
+    '{"kind":"present","target":"..."}],"protected":["..."]}\n'
+    '"absent" means that thing must no longer exist. "present" means it must '
+    "still exist.\n"
+    '"target" is an exact absolute path, or a path with a * wildcard when they '
+    "described a kind of file rather than naming one.\n"
+    '"protected" is anything they said to keep, leave alone, preserve or not '
+    "touch — list it even if they only mentioned it in passing.\n"
+    "Use the paths and names exactly as they wrote them. Invent nothing. Leave "
+    "a list empty when the request says nothing about it."
+)
+
 DECISION_REPAIR_INSTRUCTION = (
     "Your previous reply was JSON. The person reading it wants an answer in "
     "plain words, not a data structure. Answer their question directly, in "

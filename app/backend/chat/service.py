@@ -3920,6 +3920,67 @@ class ChatService:
             "summary": str(page.get("text") or page.get("summary") or ""),
         }
 
+    def _goal_spec_for(
+        self,
+        *,
+        request: str,
+        context: OperationContext,
+        generation_settings: Mapping[str, Any],
+    ) -> Any:
+        """What must be true when this request is finished.
+
+        Declared before the work runs, from the request rather than from the
+        plan, so a requirement the model never acts on is still checked. That
+        is the whole point: a run that deleted the file it had been told to
+        keep passed verification because every step it executed had worked, and
+        the requirement it skipped was not represented anywhere.
+
+        Returns ``None`` when nothing checkable could be read out of the
+        request, and ``None`` means the turn cannot be verified — never that it
+        succeeded.
+        """
+
+        from .dispatch import GOAL_SPEC_INSTRUCTION
+        from .goal_state import GoalSpec
+        from .orchestrator import strip_reasoning
+
+        if not str(request or "").strip():
+            return None
+        try:
+            reply = self._agent_generate(
+                [
+                    {"role": "system", "content": GOAL_SPEC_INSTRUCTION},
+                    {"role": "user", "content": str(request)[:2_000]},
+                ],
+                context=context,
+                generation_settings={
+                    **dict(generation_settings),
+
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                    "top_k": 1,
+                    "maximum_output_tokens": 400,
+                },
+            )
+        except Exception:
+            return None
+
+        from .actions import _whole_json_object
+
+        parsed = _whole_json_object(strip_reasoning(str(reply or "")))
+        if not isinstance(parsed, Mapping):
+            return None
+        spec = GoalSpec.from_outcomes(
+            goal=str(request)[:400],
+            outcomes=[
+                item for item in (parsed.get("outcomes") or []) if isinstance(item, Mapping)
+            ],
+            protected=[
+                str(item) for item in (parsed.get("protected") or []) if str(item).strip()
+            ],
+        )
+        return spec if spec.required else None
+
     def _route_the_request_actually_needs(
         self,
         decision: Mapping[str, Any],
@@ -4185,6 +4246,17 @@ class ChatService:
                 )
         if decision is None or decision.get("action") == RESPOND:
             return None
+
+
+
+
+        self._goal_spec = None
+        if str(decision.get("action") or "") in {SINGLE_ACTION, PLAN, RESEARCH}:
+            self._goal_spec = self._goal_spec_for(
+                request=latest_user_message(history) or request,
+                context=context,
+                generation_settings=generation_settings,
+            )
 
 
 
@@ -5115,9 +5187,17 @@ class ChatService:
         if _turn_reached_outside(details):
             from .verification import verify_goal
 
-            verified, goal_evidence = verify_goal(details.get("orchestration") or {})
+            spec = getattr(self, "_goal_spec", None)
+            verified, goal_evidence = verify_goal(
+                details.get("orchestration") or {}, spec=spec
+            )
             details["goal_verified"] = verified
             details["goal_evidence"] = goal_evidence
+            if spec is not None:
+
+
+                details["goal_spec"] = spec.describe()
+            self._goal_spec = None
 
         details["turn_duration_ms"] = round((time.monotonic() - turn_started) * 1000)
         details["image_render_started"] = self._image_will_render(details)
