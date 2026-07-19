@@ -114,10 +114,16 @@ export function ResponseDetails({ details, onClose, onOpenExternal }) {
           </section>
         ) : null}
 
-        {account.reasoning ? (
+        {
+
+
+                                                                               }
+        {account.reasoningSummary?.reasoned ? (
           <section className="response-section">
             <h3>Working</h3>
-            <p className="response-reasoning">{account.reasoning}</p>
+            <p className="response-reasoning">
+              {`Reasoned before answering · ${account.reasoningSummary.characters.toLocaleString()} characters`}
+            </p>
           </section>
         ) : null}
 

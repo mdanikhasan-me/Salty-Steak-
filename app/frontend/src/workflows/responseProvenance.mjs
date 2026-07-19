@@ -243,8 +243,17 @@ export function supportFor(details, sourceId) {
 
 
 
-export function reasoningOf(details) {
-  return String(details?.reasoning_text || "").trim();
+
+
+
+
+
+export function reasoningSummaryOf(details) {
+  const characters = Number(details?.reasoning_characters);
+  return {
+    reasoned: Boolean(details?.reasoned),
+    characters: Number.isFinite(characters) && characters > 0 ? characters : 0,
+  };
 }
 
 
@@ -391,7 +400,10 @@ export function responseDetails(details) {
     sources,
     memories,
     activity,
-    reasoning: reasoningOf(details),
+
+
+    reasoning: null,
+    reasoningSummary: reasoningSummaryOf(details),
 
 
     hasDetails: Boolean(activity.length || sources.length || memories.length),

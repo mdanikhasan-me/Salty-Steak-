@@ -136,6 +136,57 @@ def _without_control_token_echo(text: str) -> str:
     return cleaned or _CONTROL_TOKEN.sub("that", body).strip()
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+PRIVATE_DETAIL_FIELDS = frozenset(
+    {"reasoning_text", "unperformed_claim", "route_trace"}
+)
+PRIVATE_ORCHESTRATION_FIELDS = frozenset({"unreadable_decision"})
+
+
+def public_technical_details(details: Any) -> Any:
+    """The turn's record with its private channels withheld.
+
+    Drawn at the API rather than in the interface. Reasoning stays in the
+    database, where it is legitimate diagnostics, and simply never enters the
+    payload — so no later frontend change can render it back, and reopening a
+    conversation written before this existed is covered too.
+
+    What replaces it is a fact rather than a quotation: that reasoning
+    happened, and how much of it. Telemetry is not the thing being removed.
+    """
+
+    if not isinstance(details, Mapping):
+        return details
+
+    public = {
+        key: value for key, value in details.items() if key not in PRIVATE_DETAIL_FIELDS
+    }
+    orchestration = public.get("orchestration")
+    if isinstance(orchestration, Mapping):
+        public["orchestration"] = {
+            key: value
+            for key, value in orchestration.items()
+            if key not in PRIVATE_ORCHESTRATION_FIELDS
+        }
+
+    reasoning = str(details.get("reasoning_text") or "")
+    public["reasoned"] = bool(reasoning.strip())
+    public["reasoning_characters"] = len(reasoning)
+    return public
+
+
 def _reads_as_unnecessary(reply: Any) -> bool:
     """Whether the necessity check clearly said the request needs no capability.
 
@@ -1143,7 +1194,9 @@ class ChatService:
         )
         for message in messages:
             details = parse_json(message.pop("technical_details_json", None), None)
-            message["technical_details"] = details
+
+
+            message["technical_details"] = public_technical_details(details)
             message["context_omitted"] = bool(
                 isinstance(details, dict) and details.get("context_omitted")
             )

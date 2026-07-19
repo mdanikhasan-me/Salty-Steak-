@@ -2,7 +2,6 @@ import { Globe2, X } from "lucide-react";
 import { splitAssistantContent } from "../workflows/chatContent.mjs";
 import { formatDuration } from "../workflows/formatters.js";
 import { CookingGlyph, CookingStatus } from "./CookingStatus.jsx";
-import { RichText } from "./RichText.jsx";
 
 export function CookingActivityPanel({
   message,
@@ -57,21 +56,20 @@ export function CookingActivityPanel({
           <div className="cooking-activity__live">
             <CookingStatus label={stage} busy />
             <ActivityMetrics items={activity} />
-            {reasoning ? (
+
+
+
+
+
+            {reasoning || activeContent ? (
               <section className="cooking-activity__trace">
                 <div className="cooking-activity__section-title">
                   <CookingGlyph />
-                  <span>Live cooking trace</span>
+                  <span>{reasoning ? "Reasoning" : "Preparing answer"}</span>
                 </div>
-                <RichText className="cooking-activity__content">{reasoning}</RichText>
-              </section>
-            ) : activeContent ? (
-              <section className="cooking-activity__trace">
-                <div className="cooking-activity__section-title">
-                  <CookingGlyph />
-                  <span>Live model output</span>
-                </div>
-                <RichText className="cooking-activity__content">{activeContent}</RichText>
+                <p className="cooking-activity__content">
+                  {`${(reasoning || activeContent).length.toLocaleString()} characters so far`}
+                </p>
               </section>
             ) : (
               <p>Waiting for model output.</p>
@@ -97,9 +95,11 @@ export function CookingActivityPanel({
               <section className="cooking-activity__trace">
                 <div className="cooking-activity__section-title">
                   <CookingGlyph />
-                  <span>Model reasoning</span>
+                  <span>Reasoning</span>
                 </div>
-                <RichText className="cooking-activity__content">{reasoning}</RichText>
+                <p className="cooking-activity__content">
+                  {`${reasoning.length.toLocaleString()} characters, not shown`}
+                </p>
               </section>
             ) : null}
           </>
