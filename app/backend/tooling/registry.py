@@ -692,7 +692,7 @@ class PluginRegistry:
             "connected_apps": self.connected_apps(),
             "execution_policy": "deny_unregistered_and_require_declared_permission",
             "network_default": "off_except_built_in_read_only_web_search",
-            "automatic_invocation_default": "host_intent_gated_read_only",
+            "automatic_invocation_default": "model_selected_when_available",
             "plugins": plugins,
 
             "capabilities": plugins,

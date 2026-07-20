@@ -333,7 +333,7 @@ internal sealed class BrowserTab
 internal sealed class BrowserSession
 {
     private readonly string profileDirectory;
-    private readonly bool visible;
+    private bool surfaceVisible;
     private readonly List<BrowserTab> tabs = new();
     private Form? window;
     private CoreWebView2Environment? environment;
@@ -343,7 +343,7 @@ internal sealed class BrowserSession
     public BrowserSession(string profileDirectory, bool visible)
     {
         this.profileDirectory = profileDirectory;
-        this.visible = visible;
+        surfaceVisible = visible;
     }
 
     public async Task<JsonObject> Dispatch(string command, JsonObject payload)
@@ -380,6 +380,11 @@ internal sealed class BrowserSession
             case "get_active_tab":
                 return Describe(active!);
 
+            case "get_session_state":
+                var state = Describe(active!);
+                state["visible"] = IsSurfacePresented();
+                return state;
+
             case "new_tab":
                 var created = await CreateTab().ConfigureAwait(true);
                 Activate(created);
@@ -412,6 +417,10 @@ internal sealed class BrowserSession
 
             case "read_page":
                 return await tab.Bridge($"window.__salty.read({payload.ToJsonString()})")
+                    .ConfigureAwait(true);
+
+            case "get_media":
+                return await tab.Bridge("window.__salty.media()")
                     .ConfigureAwait(true);
 
             case "query":
@@ -447,6 +456,19 @@ internal sealed class BrowserSession
 
                 return result;
 
+            case "play_media":
+            case "pause_media":
+                var mediaHandle = payload["element"] is null
+                    ? ""
+                    : LocalHandle(payload);
+                await tab.Bridge(
+                    $"window.__salty.mediaAct({JsonSerializer.Serialize(mediaHandle)}, "
+                    + $"{JsonSerializer.Serialize(command == "play_media" ? "play" : "pause")})")
+                    .ConfigureAwait(true);
+                await Task.Delay(600).ConfigureAwait(true);
+                return await tab.Bridge("window.__salty.media()")
+                    .ConfigureAwait(true);
+
             case "back":
                 if (core.CanGoBack) { core.GoBack(); await tab.Settle().ConfigureAwait(true); }
                 return await tab.Page().ConfigureAwait(true);
@@ -472,6 +494,7 @@ internal sealed class BrowserSession
                 window.Show();
                 window.Activate();
                 window.BringToFront();
+                surfaceVisible = true;
                 return new JsonObject { ["visible"] = true };
 
             case "hide_window":
@@ -479,6 +502,7 @@ internal sealed class BrowserSession
 
                 window!.ShowInTaskbar = false;
                 window.Location = new Point(-32000, -32000);
+                surfaceVisible = false;
                 return new JsonObject { ["visible"] = false };
 
             default:
@@ -565,6 +589,17 @@ internal sealed class BrowserSession
             ["url"] = core.Source,
             ["title"] = core.DocumentTitle,
         };
+    }
+
+    private bool IsSurfacePresented()
+    {
+        if (window is null || !surfaceVisible || !window.Visible || !window.ShowInTaskbar
+            || window.WindowState == FormWindowState.Minimized)
+        {
+            return false;
+        }
+
+        return Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(window.Bounds));
     }
 
     private void Activate(BrowserTab tab)
@@ -679,9 +714,9 @@ internal sealed class BrowserSession
             Text = "Salty Steak Browser",
             ClientSize = new Size(1280, 900),
             StartPosition = FormStartPosition.CenterScreen,
-            ShowInTaskbar = visible,
+            ShowInTaskbar = surfaceVisible,
         };
-        if (!visible)
+        if (!surfaceVisible)
         {
 
 

@@ -58,6 +58,7 @@ ALWAYS_CONFIRMED = frozenset({RISK_SEND_EXTERNAL, RISK_FINANCIAL})
 
 
 CAPABILITY_RISK = {
+    "files.manage": RISK_READ,
     "screen.capture": RISK_READ,
     "browser.control": RISK_READ,
     "ui.automation": RISK_READ,
@@ -123,6 +124,17 @@ def classify(capability: str, arguments: Mapping[str, Any]) -> str:
     command = str(arguments.get("command") or arguments.get("action") or "").casefold()
 
     mutating = command in _mutating_commands()
+    if capability == "files.manage":
+        operation = str(arguments.get("operation") or "").strip().casefold()
+        if operation in {"copy", "move", "rename", "create_directory"}:
+            risk = _raise(risk, RISK_WRITE_LOCAL)
+        elif operation == "delete":
+            risk = _raise(
+                risk,
+                RISK_DESTRUCTIVE
+                if arguments.get("permanent") is True
+                else RISK_WRITE_LOCAL,
+            )
     if mutating:
         risk = _raise(risk, RISK_WRITE_LOCAL)
     if capability == "terminal.execute":

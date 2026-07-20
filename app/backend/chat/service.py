@@ -43,7 +43,7 @@ from ..imaging.store import ImageJobStore
 from ..memory import SemanticMemory
 from ..system.config import AppConfig
 from ..system.environment import HostEnvironmentRegistry, seed_world_state
-from ..tooling.web_search import WebSearchClient, should_search_web, web_results_prompt
+from ..tooling.web_search import WebSearchClient
 from ..versions.tokenizer import CHAT_TEMPLATE_VERSION
 from .actions import (
     FILE_TRASH_ACTION,
@@ -1392,7 +1392,14 @@ class ChatService:
 
 
             agent_mode = bool(checked_settings.get("agent_mode"))
-            if agent_mode and extract_file_trash_target(exact):
+
+
+
+
+            legacy_review = (
+                checked_settings["computer_authority_mode"] != "full_access"
+            )
+            if agent_mode and legacy_review and extract_file_trash_target(exact):
                 return self.operations.submit(
                     "chat_host_action",
                     lambda context: self._prepare_file_trash_action(
@@ -1417,7 +1424,11 @@ class ChatService:
                         None,
                     ),
                 )
-            if agent_mode and detect_host_action_intent(exact) == TEMP_CLEANUP_ACTION:
+            if (
+                agent_mode
+                and legacy_review
+                and detect_host_action_intent(exact) == TEMP_CLEANUP_ACTION
+            ):
                 return self.operations.submit(
                     "chat_host_action",
                     lambda context: self._prepare_temp_cleanup_action(
@@ -3848,6 +3859,13 @@ class ChatService:
 
 
 
+
+            checkpoint_path=(
+                self.database.path.parent / "missions" / f"{task.task_id}.json"
+            ),
+
+
+
             describe_screenshot=(
                 (
                     lambda path: self._describe_screenshot(
@@ -3977,6 +3995,7 @@ class ChatService:
         self,
         *,
         request: str,
+        permission_scope: str,
         context: OperationContext,
         generation_settings: Mapping[str, Any],
     ) -> Any:
@@ -4023,14 +4042,11 @@ class ChatService:
         parsed = _whole_json_object(strip_reasoning(str(reply or "")))
         if not isinstance(parsed, Mapping):
             return None
-        spec = GoalSpec.from_outcomes(
-            goal=str(request)[:400],
-            outcomes=[
-                item for item in (parsed.get("outcomes") or []) if isinstance(item, Mapping)
-            ],
-            protected=[
-                str(item) for item in (parsed.get("protected") or []) if str(item).strip()
-            ],
+        spec = GoalSpec.from_compilation(
+            parsed,
+            fallback_goal=str(request)[:400],
+
+            permission_scope=permission_scope,
         )
         return spec if spec.required else None
 
@@ -4303,10 +4319,18 @@ class ChatService:
 
 
 
-        self._goal_spec = None
+        goal_spec = None
         if str(decision.get("action") or "") in {SINGLE_ACTION, PLAN, RESEARCH}:
-            self._goal_spec = self._goal_spec_for(
+            action = str(decision.get("action") or "")
+            permission_scope = (
+                "research:enabled"
+                if action == RESEARCH
+                else "computer:"
+                + str(generation_settings.get("computer_authority_mode") or "ask_every_time")
+            )
+            goal_spec = self._goal_spec_for(
                 request=latest_user_message(history) or request,
+                permission_scope=permission_scope,
                 context=context,
                 generation_settings=generation_settings,
             )
@@ -4421,7 +4445,7 @@ class ChatService:
                 )
             ),
         )
-        return dispatcher.dispatch(
+        turn = dispatcher.dispatch(
             decision,
             reply_text=reply_text,
 
@@ -4434,6 +4458,8 @@ class ChatService:
             conversation_id=conversation_id,
             message_id=message_id,
         )
+        turn.goal_spec = goal_spec
+        return turn
 
     @staticmethod
     def _capture_path_in(turn) -> str | None:
@@ -4821,8 +4847,12 @@ class ChatService:
 
 
 
+        agent_mode = bool(generation_settings.get("agent_mode"))
         action_intent = detect_host_action_intent(search_query)
-        if action_intent == IMAGE_ACTION:
+        if action_intent == IMAGE_ACTION or (
+            agent_mode
+            and generation_settings.get("computer_authority_mode") == "full_access"
+        ):
             action_intent = None
 
 
@@ -4838,7 +4868,6 @@ class ChatService:
             "execution_requested": False,
             "execution_performed": False,
         }
-        agent_mode = bool(generation_settings.get("agent_mode"))
         relationship["agent_mode"] = agent_mode
 
 
@@ -4875,47 +4904,13 @@ class ChatService:
             )
         relationship["web_search"] = {
             "enabled": search_enabled,
-            "state": "not_needed",
+
+
+
+            "state": "available" if search_enabled else "disabled",
             "query": None,
             "result_count": 0,
         }
-        if search_enabled and action_intent is None and should_search_web(search_query):
-            context.update(phase="Searching the web", details=relationship)
-            relationship["web_search"] = {
-                "enabled": True,
-                "state": "searching",
-                "query": search_query[:500],
-                "result_count": 0,
-            }
-            try:
-                results = self._search_web(search_query, limit=6)
-            except Exception as error:
-                relationship["web_search"] = {
-                    "enabled": True,
-                    "state": "failed",
-                    "query": search_query[:500],
-                    "result_count": 0,
-                    "error": type(error).__name__,
-                }
-            else:
-                relationship["web_search"] = {
-                    "enabled": True,
-                    "state": "completed",
-                    "query": search_query[:500],
-                    "result_count": len(results),
-                    "sources": [item["url"] for item in results],
-                }
-                if results:
-                    insertion = 0
-                    while insertion < len(history) and history[insertion].get("role") == "system":
-                        insertion += 1
-                    history.insert(
-                        insertion,
-                        {
-                            "role": "system",
-                            "content": web_results_prompt(search_query, results),
-                        },
-                    )
         context.update(phase="Preparing Chat runtime", details=relationship)
         legacy_identity = None
         generation = generation_settings
@@ -5240,9 +5235,16 @@ class ChatService:
         if _turn_reached_outside(details):
             from .verification import verify_goal
 
-            spec = getattr(self, "_goal_spec", None)
+            spec = getattr(turn, "goal_spec", None)
+            from .goal_state import runtime_observer
+
             verified, goal_evidence = verify_goal(
-                details.get("orchestration") or {}, spec=spec
+                details.get("orchestration") or {},
+                spec=spec,
+                observe=runtime_observer(
+                    broker=self.automation,
+                    orchestration=details.get("orchestration") or {},
+                ),
             )
             details["goal_verified"] = verified
             details["goal_evidence"] = goal_evidence
@@ -5250,7 +5252,6 @@ class ChatService:
 
 
                 details["goal_spec"] = spec.describe()
-            self._goal_spec = None
 
         details["turn_duration_ms"] = round((time.monotonic() - turn_started) * 1000)
         details["image_render_started"] = self._image_will_render(details)

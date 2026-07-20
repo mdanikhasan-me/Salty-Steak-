@@ -32,7 +32,7 @@ import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from .broker import CAPABILITY_FIELDS
+from .capability_registry import CAPABILITY_FIELDS, get_capability_descriptor
 from .routing import resolve_execution
 
 
@@ -73,10 +73,13 @@ class CapabilityCallFailed(RuntimeError):
 def capability_contract(capability: str) -> dict[str, Any]:
     """The compact, machine-readable shape of one capability's arguments."""
 
-    return {
-        "capability": capability,
-        "accepts": sorted(CAPABILITY_FIELDS.get(capability, frozenset())),
-    }
+    try:
+        return get_capability_descriptor(capability).contract()
+    except KeyError:
+        return {
+            "capability": capability,
+            "accepts": sorted(CAPABILITY_FIELDS.get(capability, frozenset())),
+        }
 
 
 def _is_schema_complaint(error: BaseException) -> bool:

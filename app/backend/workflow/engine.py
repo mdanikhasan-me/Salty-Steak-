@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..automation.credentials import redact
 from ..chat.task_runtime import (
     COMPLETED,
     EXECUTING,
@@ -317,6 +318,7 @@ class WorkflowEngine:
                 fresh.verified = done[key].verified
         replacement.version = plan.version + 1
         replacement.variables.update(plan.variables)
+        replacement.observations.update(plan.observations)
         self.task.record_event(
             "replanned", version=replacement.version, nodes=len(replacement.nodes)
         )
@@ -379,13 +381,23 @@ class WorkflowEngine:
             "version": plan.version,
             "replans": self.replans,
             "saved_at": time.time(),
-            "variables": plan.variables,
+            "variables": redact(plan.variables),
+
+
+
+            "observations": redact(plan.observations),
             "nodes": [
                 {
                     **node.to_dict(),
-                    "arguments": node.arguments,
+
+
+
+
+                    "arguments": redact(node.arguments),
                     "result_as": node.result_as,
-                    "verify": node.verify,
+                    "verify": redact(node.verify),
+                    "max_attempts": node.max_attempts,
+                    "fallback": redact(node.fallback),
                 }
                 for node in plan.nodes
             ],
@@ -442,6 +454,12 @@ def resume(
             arguments=dict(entry.get("arguments") or {}),
             depends_on=tuple(entry.get("depends_on") or ()),
             verify=entry.get("verify"),
+            max_attempts=max(1, min(int(entry.get("max_attempts") or 2), 5)),
+            fallback=(
+                dict(entry["fallback"])
+                if isinstance(entry.get("fallback"), Mapping)
+                else None
+            ),
             result_as=entry.get("result_as"),
         )
         node.state = entry.get("state", NODE_PENDING)
@@ -458,8 +476,12 @@ def resume(
         goal=str(checkpoint.get("goal") or ""),
         nodes=nodes,
         variables=dict(checkpoint.get("variables") or {}),
+        observations=dict(checkpoint.get("observations") or {}),
     )
     plan.version = int(checkpoint.get("version") or 1)
+    for node in plan.nodes:
+        if node.node_id in plan.observations:
+            node.result = plan.observations[node.node_id]
 
     if reverify:
         for node in plan.nodes:

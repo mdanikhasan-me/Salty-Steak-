@@ -38,6 +38,11 @@ BROWSER_READ_COMMANDS = frozenset(
 
         "list_tabs",
         "get_active_tab",
+
+
+
+        "get_session_state",
+        "get_media",
     }
 )
 
@@ -59,6 +64,8 @@ BROWSER_MUTATING_COMMANDS = frozenset(
 
         "show_window",
         "hide_window",
+        "play_media",
+        "pause_media",
 
         "new_tab",
         "switch_tab",

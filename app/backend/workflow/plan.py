@@ -17,6 +17,8 @@ without re-deriving what was already true.
 
 from __future__ import annotations
 
+import copy
+import re
 import time
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
@@ -128,6 +130,10 @@ class Plan:
     plan_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     version: int = 1
     variables: dict[str, Any] = field(default_factory=dict)
+
+
+
+    observations: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
 
     def __post_init__(self) -> None:
@@ -239,8 +245,9 @@ class Plan:
         """Substitute earlier results into a node's arguments.
 
         A value written as ``{"$from": "name"}`` is replaced by that workflow
-        variable. This is how one node's output reaches the next without the
-        model having to see it and copy it across.
+        variable. ``{"$ref": "find.output.items[0].id"}`` addresses a field in
+        an earlier node's structured observation. Both preserve the value's
+        native type; neither asks the model to see, copy, or guess runtime data.
         """
 
         def substitute(value: Any) -> Any:
@@ -252,12 +259,72 @@ class Plan:
                             f"Nothing has produced a value called {key!r} yet."
                         )
                     return self.variables[key]
+                if set(value) == {"$ref"}:
+                    return self._resolve_reference(value["$ref"])
                 return {key: substitute(item) for key, item in value.items()}
             if isinstance(value, list):
                 return [substitute(item) for item in value]
             return value
 
         return {key: substitute(item) for key, item in dict(arguments).items()}
+
+    def _resolve_reference(self, value: Any) -> Any:
+        reference = str(value or "").strip()
+        if not reference:
+            raise PlanError("A runtime reference cannot be empty.")
+        if len(reference) > 2_048:
+            raise PlanError("A runtime reference is too long.")
+
+
+
+        node_id = next(
+            (
+                candidate
+                for candidate in sorted(self.observations, key=len, reverse=True)
+                if reference == f"{candidate}.output"
+                or reference.startswith((f"{candidate}.output.", f"{candidate}.output["))
+            ),
+            None,
+        )
+        if node_id is None:
+            raise PlanError(
+                f"Runtime reference {reference!r} could not resolve: no completed "
+                "node has produced that output."
+            )
+
+        current = self.observations[node_id]
+        suffix = reference[len(f"{node_id}.output") :]
+        position = 0
+        segment = re.compile(r"(?:\.([^\.\[\]]+)|\[(\d+)\])")
+        while position < len(suffix):
+            match = segment.match(suffix, position)
+            if match is None:
+                raise PlanError(
+                    f"Runtime reference {reference!r} could not resolve: invalid path syntax."
+                )
+            field_name, index_text = match.groups()
+            if field_name is not None:
+                if not isinstance(current, Mapping) or field_name not in current:
+                    raise PlanError(
+                        f"Runtime reference {reference!r} could not resolve field "
+                        f"{field_name!r}."
+                    )
+                current = current[field_name]
+            else:
+                index = int(index_text)
+                if (
+                    not isinstance(current, Sequence)
+                    or isinstance(current, (str, bytes, bytearray))
+                    or index >= len(current)
+                ):
+                    raise PlanError(
+                        f"Runtime reference {reference!r} could not resolve index {index}."
+                    )
+                current = current[index]
+            position = match.end()
+
+
+        return copy.deepcopy(current)
 
 
 
@@ -272,6 +339,7 @@ class Plan:
             "finished": self.finished,
             "succeeded": self.succeeded,
             "variables": sorted(self.variables),
+            "observations": sorted(self.observations),
         }
         if include_nodes:
             payload["nodes"] = [node.to_dict() for node in self.nodes]

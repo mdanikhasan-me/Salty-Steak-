@@ -21,6 +21,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from ..automation.capability_registry import get_capability_descriptor
 from .orchestrator import (
     GENERATE_IMAGE,
     JOB_TYPE_MANIFEST,
@@ -92,7 +93,11 @@ PLAN_SHAPE = (
     '\nplan example: {"action":"plan","nodes":[{"node":"find","connector":'
     '"mail.local","operation":"search","arguments":{}},{"node":"tag","connector":'
     '"mail.local","operation":"apply_label","arguments":{},"depends_on":["find"]}]}'
-    "\nUse plan for anything needing more than one step; action is a single step."
+    "\nUse plan only when every later input binds from earlier output. If a "
+    "fresh result needs model judgment, choose action; the Agent loop "
+    "continues from it."
+    '\nUse {"$ref":"find.output.items[0].id"} with depends_on; never guess '
+    "observed values."
 )
 
 
@@ -113,17 +118,6 @@ PLAN_CAPABILITY_SHAPE = (
 
 
 
-
-CAPABILITY_AFFORDANCES = {
-    "files.manage": "look at and change files and folders on this computer",
-    "terminal.execute": "run a command and read its output",
-    "application.launch": "open an application, a file, or a web address",
-    "browser.control": "read and operate web pages in a browser",
-    "window.control": "find, focus and close windows",
-    "ui.automation": "read and operate the controls inside an application",
-    "screen.capture": "look at the screen",
-    "input.control": "move the mouse and type",
-}
 
 ACTION_SHAPE = (
     '\naction example: {"action":"action","capability":"<one listed below>",'
@@ -199,12 +193,15 @@ def build_turn_instruction(
     if image_available:
         text += IMAGE_SHAPE + trailing
     if capabilities:
-        text += "\nActions:\n" + "\n".join(
-            f"  {name} — {CAPABILITY_AFFORDANCES[name]}"
-            if name in CAPABILITY_AFFORDANCES
-            else f"  {name}"
-            for name in capabilities
-        )
+        actions = []
+        for name in capabilities:
+            try:
+                affordance = get_capability_descriptor(name).affordance
+            except KeyError:
+                actions.append(f"  {name}")
+            else:
+                actions.append(f"  {name} — {affordance}")
+        text += "\nActions:\n" + "\n".join(actions)
     if connectors:
         text += "\nServices: " + ", ".join(connectors)
     if agent_mode and capabilities:
@@ -251,6 +248,9 @@ class TurnOutcome:
         self.content = content
         self.details = dict(details or {})
         self.artifact = artifact
+
+
+        self.goal_spec: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -367,19 +367,27 @@ ROUTE_DESCRIPTIONS = {
 
 
 GOAL_SPEC_INSTRUCTION = (
-    "You are writing down what must be TRUE once this request is finished, and "
-    "nothing else. Not the steps — the result.\n"
+    "Compile the request into structured operational state: what must be TRUE "
+    "when it finishes, not private reasoning and not a list of steps.\n"
     "Reply with ONE JSON object and nothing else:\n"
-    '{"outcomes":[{"kind":"absent","target":"..."},'
-    '{"kind":"present","target":"..."}],"protected":["..."]}\n'
-    '"absent" means that thing must no longer exist. "present" means it must '
-    "still exist.\n"
-    '"target" is an exact absolute path, or a path with a * wildcard when they '
-    "described a kind of file rather than naming one.\n"
-    '"protected" is anything they said to keep, leave alone, preserve or not '
-    "touch — list it even if they only mentioned it in passing.\n"
-    "Use the paths and names exactly as they wrote them. Invent nothing. Leave "
-    "a list empty when the request says nothing about it."
+    '{"objective":"...","current_turn_intent":"...","constraints":[],'
+    '"protected_resources":[],"permission_scope":"runtime supplied",'
+    '"required_outcomes":[{"kind":"...","subject":"...","detail":""}],'
+    '"unknowns":[],"future_dependencies":[],"stopping_conditions":[]}\n'
+    "Observable outcome kinds: present, absent, window_present, window_absent, "
+    "window_focused, active_url, browser_visible, media_playing, artifact_valid, "
+    "exact_page, stock_confirmed. Use only kinds needed by this request.\n"
+    "present/absent subjects are exact absolute paths or an absolute path with "
+    "a wildcard. artifact_valid uses $artifact when the path will only exist at "
+    "runtime. active_url uses an exact URL the user supplied, or $selected_url "
+    "when an earlier observation must select it. browser_visible subject is true. "
+    "media_playing uses $active_media unless the user named a specific item.\n"
+    "When the user asks to watch or see media, require both browser_visible and "
+    "media_playing; playback in an off-screen surface does not satisfy the goal.\n"
+    "List every resource they said to keep, leave alone, preserve, or not touch. "
+    "Do not guess runtime identifiers, paths, URLs, names, or state. Record such "
+    "facts in unknowns/future_dependencies and bind them from observations later. "
+    "Invent nothing; use empty lists when the request says nothing about a field."
 )
 
 DECISION_REPAIR_INSTRUCTION = (

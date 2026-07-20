@@ -18,15 +18,16 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from ..automation.broker import (
+from ..automation.capability_registry import (
     APPLICATION_LAUNCH_CAPABILITY,
+    BROWSER_CAPABILITY,
     FILES_CAPABILITY,
     INPUT_CONTROL_CAPABILITY,
     SCREEN_CAPTURE_CAPABILITY,
     TERMINAL_CAPABILITY,
-    WINDOW_CONTROL_CAPABILITY,
     UI_AUTOMATION_CAPABILITY,
-    BROWSER_CAPABILITY,
+    WINDOW_CONTROL_CAPABILITY,
+    get_capability_descriptor,
 )
 from ..automation.routing import (
     execution_route_record,
@@ -78,107 +79,6 @@ VISION_PROMPT = (
 )
 VISION_OUTPUT_TOKENS = 256
 
-TOOL_DESCRIPTIONS = {
-    FILES_CAPABILITY: (
-        'files.manage — Look at and change files and folders by path. Use this '
-        'for anything about files: listing, finding, reading, copying, moving, '
-        'renaming, deleting, making a folder.\n'
-        '  It reports which paths matched, which it changed, and which it left '
-        'alone, so you can confirm the right ones were affected.\n'
-        '  Arguments: {"operation": "list|search|read|stat|exists|copy|move|'
-        'rename|delete|create_directory", "path": "C:\\\\absolute\\\\path", '
-        '"pattern": "*.log", "recursive": false, "destination": '
-        '"C:\\\\absolute\\\\path", "permanent": false}\n'
-        '  path is an absolute folder or file. pattern selects inside a '
-        'folder. Deletes go to the Recycle Bin unless permanent is true.'
-    ),
-    SCREEN_CAPTURE_CAPABILITY: (
-        'screen.capture — Take a screenshot of the primary display. Use this to '
-        'observe the current state.\n'
-        '  Arguments: {}'
-    ),
-    INPUT_CONTROL_CAPABILITY: (
-        'input.control — Control the mouse and keyboard.\n'
-        '  Arguments: {"action": "mouse_move"|"mouse_click"|"mouse_scroll"|'
-        '"key_press"|"type_text"|"key_combo", ...action-specific arguments}\n'
-        '  mouse_move/mouse_click/mouse_scroll take "x" and "y" in real screen '
-        'pixels. mouse_click also takes "button" and optional "double". '
-        'mouse_scroll takes "clicks" (negative scrolls down). key_press takes '
-        '"key". type_text takes "text". key_combo takes "combo" such as "Ctrl+S".'
-    ),
-    APPLICATION_LAUNCH_CAPABILITY: (
-        'application.launch — Launch an installed application or open a link.\n'
-        '  Arguments: {"target": "app name, https URL, or absolute file path", '
-        '"wait_ms": optional milliseconds to wait after launching}'
-    ),
-    TERMINAL_CAPABILITY: (
-        'terminal.execute — Run a terminal command and capture its output.\n'
-        '  Arguments: {"argv": ["executable", "arg1"], "timeout_seconds": 10}'
-    ),
-    BROWSER_CAPABILITY: (
-        'browser.control — Read and operate web pages structurally in a browser '
-        'session Salty Steak owns. Use this for anything on the web: it reads '
-        'the page as elements rather than pixels.\n'
-        '  This session is OFF-SCREEN: the user cannot see it. Call '
-        '"show_window" to bring it onto their monitor whenever the point of the '
-        'task is for them to watch or use the page, and whenever they ask to '
-        'see something. Playing a video they cannot see is not playing it.\n'
-        '  Arguments: {"command": "open_url"|"read_page"|"query"|"get_element"|'
-        '"click"|"set_value"|"select"|"submit"|"scroll"|"back"|"forward"|'
-        '"reload"|"get_page"|"show_window"|"hide_window", ...}\n'
-        '  open_url takes "url". query finds elements by "role" (button, link, '
-        'textbox, checkbox), "name", "text", "href", or "editable": true, and '
-        'returns an "element" handle for each match. Pass that handle to click '
-        'or set_value. read_page gives a summary plus the visible controls.'
-    ),
-    UI_AUTOMATION_CAPABILITY: (
-        'ui.automation — Read and operate the controls inside an application '
-        'through Windows accessibility: buttons, text boxes, lists and menus '
-        'as real controls rather than pixels. Prefer this over looking at the '
-        'screen.\n'
-        '  Arguments: {"command": "get_active_window"|"get_windows"|"get_tree"|'
-        '"find_control"|"get_text"|"get_properties"|"focus"|"invoke"|'
-        '"set_value"|"select"|"toggle"|"expand"|"collapse"|"scroll", ...}\n'
-        '  Scope a query with "process_id" (exact) or "window" (title text). '
-        'Search with "name", "control_type", "automation_id", or "pattern" '
-        '("Value" finds something you can type into, "Invoke" something you '
-        'can press). find_control returns an "element" handle; pass that '
-        'handle to act on it.'
-    ),
-    WINDOW_CONTROL_CAPABILITY: (
-        'window.control — List, focus, or close real windows by their titles. '
-        'Windows already knows what is open, so use this instead of hunting for '
-        'a window in a screenshot.\n'
-        '  Arguments: {"action": "list"|"focus"|"close", "title": "part of the '
-        'window title"}'
-    ),
-}
-
-AGENT_RULES_BY_CAPABILITY_EXTRA = {
-    BROWSER_CAPABILITY: (
-        "- For anything on a website, use browser.control. Find elements with "
-        "query and act on the handle it returns; never look for a link in a "
-        "screenshot.\n"
-        "- If query reports ambiguous with several matches, refine it with more "
-        "of the name or surrounding text rather than picking one.\n"
-        "- The browser session is off-screen. If the user asked to watch, play, "
-        "read or see anything, call show_window so it is actually in front of "
-        "them, and say that you have done so.\n"
-    ),
-    UI_AUTOMATION_CAPABILITY: (
-        "- To press a button or fill a field inside an application, find it "
-        "with ui.automation find_control and act on the handle it returns. "
-        "Only look at the screen if the control is genuinely not exposed.\n"
-        "- If ui.automation reports unsupported_pattern or the control is not "
-        "found, that route is exhausted for this element: try a different "
-        "control, or escalate to the screen.\n"
-    ),
-    WINDOW_CONTROL_CAPABILITY: (
-        "- To reach an application that is already open, use window.control "
-        "focus. Do not screenshot the desktop looking for it.\n"
-    ),
-}
-
 AGENT_RULES_HEAD = (
     "Rules:\n"
     "- The tools above are listed best route first. Always take the highest one "
@@ -199,31 +99,6 @@ AGENT_RULES_HEAD = (
     "just read a page or taken a screenshot, the next step acts on what you "
     "saw; reading it again tells you nothing you do not already have.\n"
 )
-
-
-
-
-AGENT_RULES_BY_CAPABILITY = {
-    APPLICATION_LAUNCH_CAPABILITY: (
-        "- Opening a website or an application is a single application.launch "
-        "call. Do it straight away, without observing the screen first.\n"
-    ),
-    INPUT_CONTROL_CAPABILITY: (
-        "- Take a screenshot before input.control, and only then. You need to "
-        "see the screen to know where to click or type; you do not need to see "
-        "it to launch something or to run a command.\n"
-        "- After a click or keystroke changes the screen, take one screenshot "
-        "to confirm the result, then continue.\n"
-    ),
-    SCREEN_CAPTURE_CAPABILITY: (
-        "- A screenshot observation carries a visual_analysis field describing "
-        "what is on screen. Read it before deciding where to click; it is your "
-        "sight.\n"
-        "- Screen coordinates are real screen pixels. If a screenshot reports a "
-        "scale_divisor above 1, multiply the coordinates you read off the image "
-        "by that number before using them.\n"
-    ),
-}
 
 AGENT_RULES_TAIL = (
     "- Use respond only when the task is fully complete or you have confirmed "
@@ -260,9 +135,11 @@ def build_system_prompt(capabilities: Sequence[str]) -> str:
         "You have these tools, best route first:",
     ]
     for capability in ordered:
-        description = TOOL_DESCRIPTIONS.get(capability)
-        if description:
-            lines.append(description)
+        try:
+            description = get_capability_descriptor(capability).model_instructions
+        except KeyError:
+            continue
+        lines.append(description)
     lines.append(
         "respond — Give your final answer when the task is complete or "
         "confirmed impossible.\n"
@@ -270,8 +147,10 @@ def build_system_prompt(capabilities: Sequence[str]) -> str:
     )
     rules = AGENT_RULES_HEAD
     for capability in ordered:
-        rules += AGENT_RULES_BY_CAPABILITY.get(capability, "")
-        rules += AGENT_RULES_BY_CAPABILITY_EXTRA.get(capability, "")
+        try:
+            rules += get_capability_descriptor(capability).agent_rules
+        except KeyError:
+            continue
     rules += AGENT_RULES_TAIL
     lines.extend(["", rules])
     return "\n".join(lines)
@@ -416,10 +295,36 @@ def is_destructive(action: str, arguments: Mapping[str, Any]) -> bool:
 
 
 MAX_LISTED_PATHS = 40
+MAX_OBSERVATION_ITEMS = 40
+MAX_OBSERVATION_FIELDS = 50
+MAX_OBSERVATION_DEPTH = 6
 
 
 def _bounded_paths(value: Any) -> list[str]:
     return [str(item) for item in (value or [])][:MAX_LISTED_PATHS]
+
+
+def _bounded_observation_value(value: Any, *, depth: int = 0) -> Any:
+    """Keep structured tool data useful without turning it into a context dump."""
+
+    value = redact(value)
+    if depth >= MAX_OBSERVATION_DEPTH:
+        return "[nested value omitted]"
+    if isinstance(value, Mapping):
+        return {
+            str(key): _bounded_observation_value(item, depth=depth + 1)
+            for key, item in list(value.items())[:MAX_OBSERVATION_FIELDS]
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [
+            _bounded_observation_value(item, depth=depth + 1)
+            for item in list(value)[:MAX_OBSERVATION_ITEMS]
+        ]
+    if isinstance(value, str):
+        return value[:MAX_OBSERVATION_CHARACTERS]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:MAX_OBSERVATION_CHARACTERS]
 
 
 def summarise_observation(
@@ -500,6 +405,27 @@ def summarise_observation(
         observation["target"] = result.get("target")
     elif action == INPUT_CONTROL_CAPABILITY:
         observation["performed"] = result.get("action")
+
+
+
+
+
+
+    try:
+        descriptor = get_capability_descriptor(action)
+    except KeyError:
+        descriptor = None
+    if descriptor is not None:
+        for field_name in descriptor.observation_fields:
+
+
+
+            if action == SCREEN_CAPTURE_CAPABILITY and field_name == "artifact":
+                continue
+            if field_name in result and field_name not in observation:
+                observation[field_name] = _bounded_observation_value(
+                    result[field_name]
+                )
     return observation
 
 

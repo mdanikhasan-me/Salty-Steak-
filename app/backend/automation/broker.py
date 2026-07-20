@@ -45,43 +45,24 @@ from .filesystem import (
     snapshot_regular_file,
     windows_temp_roots,
 )
+from .capability_registry import (
+    APPLICATION_LAUNCH_CAPABILITY,
+    BROWSER_CAPABILITY,
+    CAPABILITIES,
+    CAPABILITY_DISPLAY_NAMES,
+    CAPABILITY_FIELDS,
+    FILES_CAPABILITY,
+    FILE_OPERATIONS,
+    INPUT_CONTROL_CAPABILITY,
+    SCREEN_CAPTURE_CAPABILITY,
+    TERMINAL_CAPABILITY,
+    UI_AUTOMATION_CAPABILITY,
+    WINDOW_CONTROL_CAPABILITY,
+    get_capability_descriptor,
+)
 
 
 AUTOMATION_SCHEMA = "salty-steak-windows-automation-v1"
-TERMINAL_CAPABILITY = "terminal.execute"
-SCREEN_CAPTURE_CAPABILITY = "screen.capture"
-INPUT_CONTROL_CAPABILITY = "input.control"
-APPLICATION_LAUNCH_CAPABILITY = "application.launch"
-WINDOW_CONTROL_CAPABILITY = "window.control"
-UI_AUTOMATION_CAPABILITY = "ui.automation"
-BROWSER_CAPABILITY = "browser.control"
-
-
-
-
-
-
-FILES_CAPABILITY = "files.manage"
-CAPABILITIES = (
-    TERMINAL_CAPABILITY,
-    FILES_CAPABILITY,
-    SCREEN_CAPTURE_CAPABILITY,
-    INPUT_CONTROL_CAPABILITY,
-    APPLICATION_LAUNCH_CAPABILITY,
-    WINDOW_CONTROL_CAPABILITY,
-    UI_AUTOMATION_CAPABILITY,
-    BROWSER_CAPABILITY,
-)
-CAPABILITY_DISPLAY_NAMES = {
-    TERMINAL_CAPABILITY: "Terminal command",
-    FILES_CAPABILITY: "Files and folders",
-    SCREEN_CAPTURE_CAPABILITY: "Primary-screen screenshot",
-    INPUT_CONTROL_CAPABILITY: "Mouse and keyboard control",
-    APPLICATION_LAUNCH_CAPABILITY: "Application and link launch",
-    WINDOW_CONTROL_CAPABILITY: "Window listing and focus",
-    UI_AUTOMATION_CAPABILITY: "Semantic control of application interfaces",
-    BROWSER_CAPABILITY: "Structured web page reading and interaction",
-}
 MAX_WINDOW_TITLE_CHARACTERS = 512
 MAX_ENUMERATED_WINDOWS = 400
 DEFAULT_TIMEOUT_SECONDS = 10.0
@@ -102,105 +83,10 @@ DEFAULT_LAUNCH_WAIT_MS = 0
 MAX_LAUNCH_WAIT_MS = 10_000
 MAX_TARGET_CHARACTERS = 2_048
 
-
-
-
-
-
-
-
-
-
-
-FILE_OPERATIONS = frozenset(
-    {
-        "list",
-        "inspect",
-        "stat",
-        "exists",
-        "search",
-        "read",
-        "create_directory",
-        "copy",
-        "move",
-        "rename",
-        "delete",
-    }
-)
-
 MAX_FILE_READ_CHARACTERS = 40_000
 
 
 MAX_FILE_MATCHES = 500
-
-CAPABILITY_FIELDS: dict[str, frozenset[str]] = {
-    TERMINAL_CAPABILITY: frozenset(
-        {"argv", "working_directory", "timeout_seconds"}
-    ),
-    FILES_CAPABILITY: frozenset(
-        {"operation", "path", "pattern", "recursive", "destination", "permanent"}
-    ),
-    SCREEN_CAPTURE_CAPABILITY: frozenset({"screen"}),
-    INPUT_CONTROL_CAPABILITY: frozenset(
-        {
-            "action",
-            "x",
-            "y",
-            "button",
-            "double",
-            "clicks",
-            "key",
-            "text",
-            "combo",
-            "post_action_delay_ms",
-        }
-    ),
-    APPLICATION_LAUNCH_CAPABILITY: frozenset({"target", "arguments", "wait_ms"}),
-    WINDOW_CONTROL_CAPABILITY: frozenset({"action", "title", "handle"}),
-    BROWSER_CAPABILITY: frozenset(
-        {
-            "command",
-            "url",
-            "element",
-            "role",
-            "name",
-            "text",
-            "href",
-            "selector",
-            "value",
-            "exact",
-            "editable",
-            "visible",
-            "enabled",
-            "limit",
-            "text_limit",
-        }
-    ),
-    UI_AUTOMATION_CAPABILITY: frozenset(
-        {
-            "command",
-            "window",
-            "process_id",
-            "window_handle",
-            "element",
-            "name",
-            "automation_id",
-            "control_type",
-            "class_name",
-            "pattern",
-            "exact",
-            "enabled_only",
-            "visible_only",
-            "limit",
-            "depth",
-            "max_nodes",
-            "value",
-            "amount",
-            "horizontal",
-        }
-    ),
-}
-
 
 class AutomationBroker:
     """Persist explicit grants and execute only the two local capabilities."""
@@ -342,6 +228,7 @@ class AutomationBroker:
                 {
                     **grant,
                     "display_name": CAPABILITY_DISPLAY_NAMES[capability],
+                    "descriptor": get_capability_descriptor(capability).contract(),
                     "platform_supported": supported,
                     "runtime_available": bool(supported and not helper_missing),
                     "runtime_unavailable_reason": (
@@ -825,8 +712,17 @@ class AutomationBroker:
         target = _existing_path(arguments.get("path"), must_exist=operation != "create_directory")
         pattern = str(arguments.get("pattern") or "").strip()
         recursive = bool(arguments.get("recursive"))
-
-        matched = _matching_paths(target, pattern, recursive=recursive)
+        explicit_paths = arguments.get("paths")
+        if explicit_paths is not None:
+            if operation not in {"copy", "move", "delete"}:
+                raise ValueError(
+                    "An explicit paths set is only valid for copy, move, or delete"
+                )
+            if pattern:
+                raise ValueError("Use either pattern or paths, not both")
+            matched = _explicit_paths(target, explicit_paths)
+        else:
+            matched = _matching_paths(target, pattern, recursive=recursive)
         preserved = (
             [str(item) for item in _children(target, recursive=recursive) if item not in matched]
             if target.is_dir()
@@ -881,13 +777,25 @@ class AutomationBroker:
 
 
 
-        if operation == "delete" and target.is_dir() and not pattern:
+        if (
+            operation == "delete"
+            and target.is_dir()
+            and not pattern
+            and explicit_paths is None
+        ):
             raise ValueError(
-                "Deleting inside a folder needs a pattern saying which files "
-                "to remove, for example \"*.log\". Refusing to treat an absent "
-                "pattern as every file."
+                "Deleting inside a folder needs a pattern or an explicit paths "
+                "set saying which files to remove. Refusing to treat an absent "
+                "selection as every file."
             )
         destination = arguments.get("destination")
+        if operation in {"copy", "move"} and len(matched) > 1:
+            destination_path = _existing_path(destination)
+            if not destination_path.is_dir():
+                raise ValueError(
+                    "Copying or moving more than one path needs an existing "
+                    "destination folder"
+                )
         permanent = bool(arguments.get("permanent"))
         for item in matched:
             try:
@@ -1987,6 +1895,49 @@ def _matching_paths(target: Path, pattern: str, *, recursive: bool) -> list[Path
         return _children(target, recursive=recursive)
     walker = target.rglob(pattern) if recursive else target.glob(pattern)
     return sorted(item for item in walker if item.exists())[:MAX_FILE_MATCHES]
+
+
+def _explicit_paths(target: Path, values: object) -> list[Path]:
+    """Validate an exact, previously observed selection under one root.
+
+    A runtime reference may carry a list into this boundary, but authority still
+    comes from the declared root. Every member is resolved independently and the
+    whole set is rejected before mutation if one item escapes or overlaps.
+    """
+
+    if not isinstance(values, (list, tuple)) or isinstance(values, (str, bytes)):
+        raise ValueError("Files paths must be a non-empty list of absolute paths")
+    if not values:
+        raise ValueError("Files paths must be a non-empty list of absolute paths")
+    if len(values) > MAX_FILE_MATCHES:
+        raise ValueError(f"Files paths may contain at most {MAX_FILE_MATCHES} items")
+
+    selected: list[Path] = []
+    for value in values:
+        item = _existing_path(value)
+        inside = (
+            item != target and item.is_relative_to(target)
+            if target.is_dir()
+            else item == target
+        )
+        if not inside:
+            raise ValueError(
+                f"Every explicit path must be inside the declared path: {target}"
+            )
+        if item in selected:
+            raise ValueError(f"Files paths contains the same item twice: {item}")
+        selected.append(item)
+
+    for index, item in enumerate(selected):
+        if any(
+            item != other and item.is_relative_to(other)
+            for other_index, other in enumerate(selected)
+            if other_index != index and other.is_dir()
+        ):
+            raise ValueError(
+                "Files paths cannot contain both a folder and its descendant"
+            )
+    return selected
 
 
 def _describe_path(item: Path) -> dict[str, Any]:

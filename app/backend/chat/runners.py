@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import json
 import re
-
-from ..automation.broker import FILES_CAPABILITY
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+from ..automation.capability_registry import FILE_OPERATIONS, FILES_CAPABILITY
+from ..automation.credentials import redact
+from ..automation.routing import apply_argument_aliases
 
 from ..research import Budget, ResearchLoop
 from ..workflow import Executor, WorkflowEngine, build_plan
@@ -33,6 +36,11 @@ RUNNER_SCHEMA = "salty-steak-live-runner-v1"
 
 
 MAX_LIVE_NODES = 40
+MAX_REPLAN_OBSERVATIONS = 12
+MAX_REPLAN_ITEMS = 20
+MAX_REPLAN_FIELDS = 30
+MAX_REPLAN_TEXT = 800
+MAX_REPLAN_DEPTH = 5
 
 
 class PlanRejected(ValueError):
@@ -122,6 +130,30 @@ def _nodes_in_the_right_slots(
 
 
 
+        if (
+            FILES_CAPABILITY in granted
+            and str(corrected.get("connector") or "") not in configured
+        ):
+            arguments, _notes = apply_argument_aliases(
+                FILES_CAPABILITY, dict(corrected.get("arguments") or {})
+            )
+            if _looks_like_a_path(arguments.get("path")):
+                operation = str(
+                    arguments.get("operation") or corrected.get("operation") or ""
+                ).strip().casefold()
+                if operation in FILE_OPERATIONS:
+                    arguments["operation"] = operation
+                    corrected["capability"] = FILES_CAPABILITY
+                    corrected["arguments"] = arguments
+                    corrected.pop("connector", None)
+                    corrected.pop("operation", None)
+                    moved.append(corrected)
+                    continue
+
+
+
+
+
 
 
 
@@ -133,6 +165,9 @@ def _nodes_in_the_right_slots(
         ):
             arguments = dict(corrected.get("arguments") or {})
             arguments.setdefault("path", str(corrected["connector"]))
+            operation = str(corrected.get("operation") or "").strip().casefold()
+            if operation in FILE_OPERATIONS:
+                arguments.setdefault("operation", operation)
             corrected["capability"] = FILES_CAPABILITY
             corrected["arguments"] = arguments
             corrected.pop("connector", None)
@@ -203,7 +238,30 @@ def validate_plan(
     return plan
 
 
-def replan_packet(plan: Plan, outcome: Any, *, world: Mapping[str, Any] | None = None) -> str:
+def _bounded_replan_value(value: Any, *, depth: int = 0) -> Any:
+    value = redact(value)
+    if depth >= MAX_REPLAN_DEPTH:
+        return "[nested value omitted]"
+    if isinstance(value, Mapping):
+        return {
+            str(key): _bounded_replan_value(item, depth=depth + 1)
+            for key, item in list(value.items())[:MAX_REPLAN_FIELDS]
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [
+            _bounded_replan_value(item, depth=depth + 1)
+            for item in list(value)[:MAX_REPLAN_ITEMS]
+        ]
+    if isinstance(value, str):
+        return value[:MAX_REPLAN_TEXT]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:MAX_REPLAN_TEXT]
+
+
+def replan_packet(
+    plan: Plan, outcome: Any, *, world: Mapping[str, Any] | None = None
+) -> str:
     """The compact brief handed back to Base Steak when a plan needs repair.
 
     Deliberately small. Resending the conversation and every tool event would
@@ -224,12 +282,23 @@ def replan_packet(plan: Plan, outcome: Any, *, world: Mapping[str, Any] | None =
             for node in plan.nodes
             if node.state not in {"completed", "failed", "skipped"}
         ],
+
+
+
+        "observations": {
+            node_id: _bounded_replan_value(value)
+            for node_id, value in list(plan.observations.items())[
+                -MAX_REPLAN_OBSERVATIONS:
+            ]
+        },
         "known": dict(world or {}),
     }
     return (
         "A step failed and retrying it will not help. Produce a corrected plan "
         "as one JSON object with the same shape. Keep the completed steps as "
-        "they are and change only what is left.\n" + json.dumps(packet, default=str)
+        "they are and change only what is left. Use {$ref: "
+        '"node.output.field"} for values supplied by existing observations; '
+        "do not copy or guess them.\n" + json.dumps(packet, default=str)
     )
 
 
@@ -472,6 +541,7 @@ class LiveRunners:
         continue_until_satisfied: bool = False,
         follow_through_steps: int = 10,
         established: str = "",
+        checkpoint_path: str | Path | None = None,
     ) -> None:
         self.broker = broker
         self.connectors = connectors
@@ -504,6 +574,7 @@ class LiveRunners:
 
 
         self.established = str(established or "")
+        self.checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
 
 
 
@@ -662,6 +733,7 @@ class LiveRunners:
                 capabilities=self.capabilities,
                 connectors=connectors,
             ),
+            checkpoint_path=self.checkpoint_path,
         )
         result = engine.run(plan)
         return {

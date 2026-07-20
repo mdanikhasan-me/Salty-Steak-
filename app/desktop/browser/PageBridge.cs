@@ -18,6 +18,7 @@ internal static class PageBridge
   if (window.__salty) { return; }
 
   const registry = new Map();
+  const handles = new WeakMap();
   let sequence = 0;
 
 
@@ -109,8 +110,11 @@ internal static class PageBridge
   };
 
   const register = (node) => {
+    const existing = handles.get(node);
+    if (existing && registry.get(existing) === node && node.isConnected) return existing;
     const handle = 'web-el-' + (++sequence);
     registry.set(handle, node);
+    handles.set(node, handle);
     return handle;
   };
 
@@ -122,12 +126,37 @@ internal static class PageBridge
     if (!node) throw { kind: 'stale_element', message: 'Unknown element ' + handle };
     if (!node.isConnected) {
       registry.delete(handle);
+      handles.delete(node);
       throw { kind: 'stale_element', message: 'Element ' + handle + ' left the page' };
     }
     return node;
   };
 
   const INTERESTING = 'a,button,input,select,textarea,[role],[onclick],[contenteditable],summary,h1,h2,h3';
+
+  const describeMedia = (node) => {
+    const duration = Number(node.duration);
+    const error = node.error;
+    return {
+      element: register(node),
+      kind: node.tagName.toLowerCase(),
+      name: accessibleName(node) || document.title,
+      visible: visible(node),
+      src: String(node.currentSrc || node.src || '').slice(0, 2000),
+      paused: !!node.paused,
+      ended: !!node.ended,
+      playing: !node.paused && !node.ended && node.readyState >= 2,
+      current_time: Number(node.currentTime || 0),
+      duration: Number.isFinite(duration) ? duration : null,
+      ready_state: Number(node.readyState || 0),
+      network_state: Number(node.networkState || 0),
+      muted: !!node.muted,
+      volume: Number(node.volume ?? 1),
+      error: error ? { code: Number(error.code || 0), message: String(error.message || '') } : null
+    };
+  };
+
+  const mediaNodes = () => Array.from(document.querySelectorAll('video,audio'));
 
   window.__salty = {
     page: () => ({
@@ -180,6 +209,37 @@ internal static class PageBridge
     },
 
     get: (handle) => describe(resolve(handle), handle),
+
+    media: () => {
+      const media = mediaNodes().map(describeMedia);
+      return { media, count: media.length, url: location.href, title: document.title };
+    },
+
+    mediaAct: (handle, action) => {
+      let node;
+      if (handle) {
+        node = resolve(handle);
+        if (!['video', 'audio'].includes(node.tagName.toLowerCase())) {
+          throw { kind: 'invalid_target', message: 'That element is not media' };
+        }
+      } else {
+        const candidates = mediaNodes().filter(visible);
+        if (!candidates.length) throw { kind: 'not_found', message: 'No visible media exists' };
+        if (candidates.length > 1) {
+          throw { kind: 'ambiguous', message: 'More than one visible media element exists' };
+        }
+        node = candidates[0];
+      }
+      if (action === 'play') {
+        const attempt = node.play();
+        if (attempt?.catch) attempt.catch(() => {});
+      } else if (action === 'pause') {
+        node.pause();
+      } else {
+        throw { kind: 'invalid_request', message: 'Unknown media action ' + action };
+      }
+      return describeMedia(node);
+    },
 
     act: (handle, action, payload) => {
       const node = resolve(handle);
