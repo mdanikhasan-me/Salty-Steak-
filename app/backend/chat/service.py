@@ -3998,7 +3998,7 @@ class ChatService:
         permission_scope: str,
         context: OperationContext,
         generation_settings: Mapping[str, Any],
-    ) -> Any:
+    ) -> tuple[Any, dict[str, Any]]:
         """What must be true when this request is finished.
 
         Declared before the work runs, from the request rather than from the
@@ -4012,43 +4012,100 @@ class ChatService:
         succeeded.
         """
 
-        from .dispatch import GOAL_SPEC_INSTRUCTION
+        from .dispatch import GOAL_SPEC_INSTRUCTION, GOAL_SPEC_REPAIR_INSTRUCTION
         from .goal_state import GoalSpec
         from .orchestrator import strip_reasoning
 
         if not str(request or "").strip():
-            return None
-        try:
-            reply = self._agent_generate(
-                [
-                    {"role": "system", "content": GOAL_SPEC_INSTRUCTION},
-                    {"role": "user", "content": str(request)[:2_000]},
-                ],
-                context=context,
-                generation_settings={
-                    **dict(generation_settings),
-
-                    "temperature": 0.0,
-                    "top_p": 1.0,
-                    "top_k": 1,
-                    "maximum_output_tokens": 400,
-                },
-            )
-        except Exception:
-            return None
+            return None, {"status": "not_requested", "attempts": []}
 
         from .actions import _whole_json_object
 
-        parsed = _whole_json_object(strip_reasoning(str(reply or "")))
-        if not isinstance(parsed, Mapping):
-            return None
-        spec = GoalSpec.from_compilation(
-            parsed,
-            fallback_goal=str(request)[:400],
+        messages = [
+            {"role": "system", "content": GOAL_SPEC_INSTRUCTION},
+            {"role": "user", "content": str(request)[:2_000]},
+        ]
+        attempts: list[dict[str, Any]] = []
+        for number in range(1, 3):
+            try:
+                reply = self._agent_generate(
+                    messages,
+                    context=context,
+                    generation_settings={
+                        **dict(generation_settings),
 
-            permission_scope=permission_scope,
-        )
-        return spec if spec.required else None
+                        "temperature": 0.0,
+                        "top_p": 1.0,
+                        "top_k": 1,
+                        "maximum_output_tokens": 400,
+                    },
+                )
+            except Exception as error:
+                attempts.append(
+                    {
+                        "attempt": number,
+                        "status": "generation_failed",
+                        "error_type": type(error).__name__,
+                    }
+                )
+                reason = "the generation failed before producing an object"
+                reply_text = ""
+            else:
+                reply_text = strip_reasoning(str(reply or ""))
+                parsed = _whole_json_object(reply_text)
+                if isinstance(parsed, Mapping):
+                    spec = GoalSpec.from_compilation(
+                        parsed,
+                        fallback_goal=str(request)[:400],
+
+                        permission_scope=permission_scope,
+                    )
+                    if spec.required:
+                        attempts.append(
+                            {
+                                "attempt": number,
+                                "status": "compiled",
+                                "required_count": len(spec.required),
+                            }
+                        )
+                        return spec, {
+                            "status": "compiled",
+                            "attempt_count": number,
+                            "attempts": attempts,
+                        }
+                    reason = "it declared no observable required outcomes"
+                    attempts.append(
+                        {
+                            "attempt": number,
+                            "status": "no_required_predicates",
+                            "parsed_keys": sorted(str(key) for key in parsed)[:20],
+                        }
+                    )
+                else:
+                    reason = "it was not one valid whole JSON object"
+                    attempts.append(
+                        {
+                            "attempt": number,
+                            "status": "invalid_json",
+                            "reply_characters": len(reply_text),
+                        }
+                    )
+
+            if number == 1:
+                if reply_text:
+                    messages.append({"role": "assistant", "content": reply_text[:2_000]})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": GOAL_SPEC_REPAIR_INSTRUCTION.format(reason=reason),
+                    }
+                )
+
+        return None, {
+            "status": "failed",
+            "attempt_count": len(attempts),
+            "attempts": attempts,
+        }
 
     def _route_the_request_actually_needs(
         self,
@@ -4320,6 +4377,10 @@ class ChatService:
 
 
         goal_spec = None
+        goal_compilation: dict[str, Any] = {
+            "status": "not_requested",
+            "attempts": [],
+        }
         if str(decision.get("action") or "") in {SINGLE_ACTION, PLAN, RESEARCH}:
             action = str(decision.get("action") or "")
             permission_scope = (
@@ -4328,7 +4389,7 @@ class ChatService:
                 else "computer:"
                 + str(generation_settings.get("computer_authority_mode") or "ask_every_time")
             )
-            goal_spec = self._goal_spec_for(
+            goal_spec, goal_compilation = self._goal_spec_for(
                 request=latest_user_message(history) or request,
                 permission_scope=permission_scope,
                 context=context,
@@ -4459,6 +4520,7 @@ class ChatService:
             message_id=message_id,
         )
         turn.goal_spec = goal_spec
+        turn.details["goal_compilation"] = goal_compilation
         return turn
 
     @staticmethod

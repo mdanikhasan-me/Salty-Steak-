@@ -32,6 +32,7 @@ thing.
 
 from __future__ import annotations
 
+import glob
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -273,13 +274,16 @@ def filesystem_observer() -> Observer:
         try:
             if any(character in subject for character in "*?["):
 
-                parent = Path(subject).parent
-                pattern = Path(subject).name
-                if not parent.exists():
 
-                    return predicate.kind == "absent"
-                matches = list(parent.glob(pattern))
-                return not matches if predicate.kind == "absent" else bool(matches)
+
+
+
+
+                found = next(
+                    glob.iglob(subject, recursive=True, include_hidden=True),
+                    None,
+                )
+                return found is None if predicate.kind == "absent" else found is not None
             exists = Path(subject).exists()
         except OSError:
             return None

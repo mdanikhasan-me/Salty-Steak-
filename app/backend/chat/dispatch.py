@@ -378,7 +378,10 @@ GOAL_SPEC_INSTRUCTION = (
     "window_focused, active_url, browser_visible, media_playing, artifact_valid, "
     "exact_page, stock_confirmed. Use only kinds needed by this request.\n"
     "present/absent subjects are exact absolute paths or an absolute path with "
-    "a wildcard. artifact_valid uses $artifact when the path will only exist at "
+    "a wildcard. Use **\\*.ext when the request explicitly includes nested "
+    "folders. When a named protected file is relative to an absolute folder in "
+    "the request, combine them into its exact absolute path. artifact_valid uses "
+    "$artifact when the path will only exist at "
     "runtime. active_url uses an exact URL the user supplied, or $selected_url "
     "when an earlier observation must select it. browser_visible subject is true. "
     "media_playing uses $active_media unless the user named a specific item.\n"
@@ -388,6 +391,14 @@ GOAL_SPEC_INSTRUCTION = (
     "Do not guess runtime identifiers, paths, URLs, names, or state. Record such "
     "facts in unknowns/future_dependencies and bind them from observations later. "
     "Invent nothing; use empty lists when the request says nothing about a field."
+)
+
+GOAL_SPEC_REPAIR_INSTRUCTION = (
+    "Your previous objective object could not be used: {reason}. Return one "
+    "corrected JSON object now, with at least one item in required_outcomes "
+    "for every externally checkable result and one present outcome for each "
+    "absolute protected path. Use the schema and predicate kinds already given. "
+    "JSON strings must escape every Windows backslash as \\\\. No prose or fence."
 )
 
 DECISION_REPAIR_INSTRUCTION = (
