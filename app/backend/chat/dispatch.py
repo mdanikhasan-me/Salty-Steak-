@@ -292,6 +292,37 @@ def looks_like_a_decision_attempt(reply: str) -> bool:
     return True
 
 
+def recover_agent_route(
+    reply: str,
+    *,
+    agent_mode: bool,
+    capabilities: Sequence[str],
+) -> dict[str, Any] | None:
+    """Hand an unreadable computer decision to the capability-aware loop.
+
+    A long model-authored plan can be cut off at the output boundary even when
+    the intent to operate the computer is unambiguous.  Asking the same model
+    to turn that partial object into prose discards the task.  AgentLoop already
+    owns capability discovery, argument validation, observation, and bounded
+    repair, so recover only the route and let that runtime choose the first
+    concrete action from the live registry.
+
+    This is deliberately unavailable outside Agent mode or without a grant.
+    The caller still runs the independent semantic necessity check before this
+    route may execute, so a malformed object on a conversational turn cannot
+    become computer control.
+    """
+
+    if not agent_mode or not tuple(capabilities):
+        return None
+    if not looks_like_a_decision_attempt(reply):
+        return None
+    return {
+        "action": SINGLE_ACTION,
+        "reason": "Recover the requested computer task through the capability-aware agent loop.",
+    }
+
+
 
 
 

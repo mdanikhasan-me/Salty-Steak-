@@ -4200,6 +4200,7 @@ class ChatService:
             TurnDispatcher,
             looks_like_a_decision_attempt,
             read_decision,
+            recover_agent_route,
         )
         from .orchestrator import (
             GENERATE_IMAGE,
@@ -4314,6 +4315,35 @@ class ChatService:
                         content=answer,
                         details={"route_not_needed": vetoed.get("route") or True},
                     )
+        decision_recovery: dict[str, Any] = {}
+        if decision is None and looks_like_a_decision_attempt(reply_text):
+
+
+
+
+
+
+            recovered = recover_agent_route(
+                reply_text,
+                agent_mode=bool(generation_settings.get("agent_mode")),
+                capabilities=self.granted_automation_capabilities(),
+            )
+            if recovered is not None:
+                recovered = self._route_the_request_actually_needs(
+                    recovered,
+                    request=latest_user_message(history) or request,
+                    context=context,
+                    generation_settings=generation_settings,
+                )
+            if recovered is not None:
+                decision = recovered
+                decision_recovery = {
+                    "decision_recovered_to_agent": True,
+                    "unreadable_decision": str(
+                        strip_reasoning(str(reply_text or ""))
+                    )[:1_200],
+                }
+
         if decision is None and looks_like_a_decision_attempt(reply_text):
 
 
@@ -4519,6 +4549,7 @@ class ChatService:
             conversation_id=conversation_id,
             message_id=message_id,
         )
+        turn.details.update(decision_recovery)
         turn.goal_spec = goal_spec
         turn.details["goal_compilation"] = goal_compilation
         return turn
