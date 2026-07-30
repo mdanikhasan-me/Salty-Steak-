@@ -16,13 +16,22 @@ export function CookingActivityPanel({
     : (message?.content || "");
   const parsedContent = splitAssistantContent(activeContent);
   const previewKind = String(preview?.kind || "").toLowerCase();
-  const reasoning = mode === "instant"
-    ? ""
-    : active
-      ? (previewKind === "reasoning" ? activeContent : "")
-      : (parsedContent.reasoning || "");
-  const cookingIncomplete = mode === "cooking" && Boolean(parsedContent.reasoningIncomplete);
   const details = message?.technical_details || message?.details || {};
+  const liveDetails = operation?.result || operation?.progress || {};
+  const reasoningVisibility = String(
+    liveDetails?.reasoning_visibility_effective
+      || details?.reasoning_visibility_effective
+      || "summaries",
+  ).toLowerCase();
+  const rawTraceEnabled = reasoningVisibility === "raw_local";
+  const reasoning = rawTraceEnabled && mode === "cooking"
+    ? active
+      ? (previewKind === "reasoning" ? activeContent : "")
+      : String(details?.reasoning_text || parsedContent.reasoning || "")
+    : "";
+  const answerDraft = active && previewKind === "output" ? activeContent : "";
+  const journal = activityJournal(operation, details);
+  const cookingIncomplete = mode === "cooking" && Boolean(parsedContent.reasoningIncomplete);
   const webSearch = details?.web_search || {};
   const sources = Array.isArray(webSearch.sources) ? webSearch.sources : [];
   const durationSeconds = finiteDurationSeconds(details);
@@ -56,28 +65,25 @@ export function CookingActivityPanel({
           <div className="cooking-activity__live">
             <CookingStatus label={stage} busy />
             <ActivityMetrics items={activity} />
-
-
-
-
-
-            {reasoning || activeContent ? (
+            <ActivityJournal entries={journal} />
+            {
+                                                                   }
+            {answerDraft ? (
               <section className="cooking-activity__trace">
                 <div className="cooking-activity__section-title">
                   <CookingGlyph />
-                  <span>{reasoning ? "Reasoning" : "Preparing answer"}</span>
+                  <span>Answer draft</span>
                 </div>
-                <p className="cooking-activity__content">
-                  {`${(reasoning || activeContent).length.toLocaleString()} characters so far`}
-                </p>
+                <p className="cooking-activity__content cooking-activity__draft">{answerDraft}</p>
               </section>
-            ) : (
-              <p>Waiting for model output.</p>
-            )}
+            ) : null}
+            {reasoning ? <RawTrace text={reasoning} active /> : null}
+            {!journal.length && !preview ? <p>Waiting for model output.</p> : null}
           </div>
-        ) : reasoning || sources.length || activity.length ? (
+        ) : reasoning || sources.length || activity.length || journal.length ? (
           <>
             <ActivityMetrics items={activity} />
+            <ActivityJournal entries={journal} />
             {sources.length ? (
               <section className="cooking-activity__research">
                 <div className="cooking-activity__section-title">
@@ -91,17 +97,7 @@ export function CookingActivityPanel({
                 </ol>
               </section>
             ) : null}
-            {reasoning ? (
-              <section className="cooking-activity__trace">
-                <div className="cooking-activity__section-title">
-                  <CookingGlyph />
-                  <span>Reasoning</span>
-                </div>
-                <p className="cooking-activity__content">
-                  {`${reasoning.length.toLocaleString()} characters, not shown`}
-                </p>
-              </section>
-            ) : null}
+            {reasoning ? <RawTrace text={reasoning} /> : null}
           </>
         ) : (
           <p className="cooking-activity__empty">No model-produced reasoning was saved for this response.</p>
@@ -109,6 +105,79 @@ export function CookingActivityPanel({
       </div>
     </aside>
   );
+}
+
+function ActivityJournal({ entries }) {
+  if (!entries.length) return null;
+  return (
+    <section className="cooking-activity__journal" aria-label="Activity journal">
+      <div className="cooking-activity__section-title">
+        <CookingGlyph />
+        <span>Activity</span>
+      </div>
+      <ol>
+        {entries.map((entry) => (
+          <li key={entry.id || `${entry.label}-${entry.sequence}`} data-state={entry.state}>
+            <span className="cooking-activity__journal-marker" aria-hidden="true" />
+            <div>
+              <strong>{entry.label}</strong>
+              {entry.detail ? <p>{entry.detail}</p> : null}
+              <small>{activityEntryTelemetry(entry)}</small>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function RawTrace({ text, active = false }) {
+  return (
+    <section className="cooking-activity__trace cooking-activity__trace--raw">
+      <div className="cooking-activity__section-title">
+        <CookingGlyph />
+        <span>Raw local trace (developer)</span>
+      </div>
+      <p className="cooking-activity__content cooking-activity__raw">{text}</p>
+      <small>{`${text.length.toLocaleString()} characters${active ? " so far" : ""}`}</small>
+    </section>
+  );
+}
+
+function activityJournal(operation, details) {
+  const candidates = [
+    operation?.result?.activity_journal,
+    operation?.progress?.activity_journal,
+    details?.activity_journal,
+    details?.orchestration?.activity_journal,
+  ];
+  const value = candidates.find(Array.isArray) || [];
+  return value
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry, index) => ({
+      id: String(entry.id || `activity-${index + 1}`),
+      sequence: Number(entry.sequence) || index + 1,
+      label: String(entry.label || "Working").slice(0, 120),
+      detail: String(entry.detail || "").slice(0, 400),
+      state: ["running", "completed", "failed"].includes(String(entry.state))
+        ? String(entry.state)
+        : "completed",
+      token_count: Number(entry.token_count),
+      character_count: Number(entry.character_count),
+    }))
+    .sort((left, right) => left.sequence - right.sequence);
+}
+
+function activityEntryTelemetry(entry) {
+  const parts = [];
+  if (Number.isFinite(entry.token_count) && entry.token_count >= 0) {
+    parts.push(`${Math.round(entry.token_count).toLocaleString()} tokens`);
+  }
+  if (Number.isFinite(entry.character_count) && entry.character_count >= 0) {
+    parts.push(`${Math.round(entry.character_count).toLocaleString()} characters`);
+  }
+  if (!parts.length) return entry.state === "running" ? "In progress" : "Complete";
+  return `${entry.state === "running" ? "In progress" : "Complete"} · ${parts.join(" · ")}`;
 }
 
 function finiteDurationSeconds(details) {

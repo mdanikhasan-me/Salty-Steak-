@@ -21,12 +21,12 @@ from __future__ import annotations
 
 import re
 import time
-import uuid
+from urllib.parse import urlsplit
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-LEDGER_SCHEMA = "salty-steak-research-ledger-v1"
+LEDGER_SCHEMA = "salty-steak-research-ledger-v2"
 
 
 DUPLICATE_THRESHOLD = 0.72
@@ -92,6 +92,14 @@ class Source:
 
 
     page_type: str = "unknown"
+    requested_url: str = ""
+    validation: str = "validated"
+    content_sha256: str = ""
+    content_characters: int = 0
+
+    @property
+    def domain(self) -> str:
+        return (urlsplit(self.url).hostname or "").casefold()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -100,6 +108,11 @@ class Source:
             "title": self.title,
             "retrieved_at": self.retrieved_at,
             "page_type": self.page_type,
+            "requested_url": self.requested_url or self.url,
+            "validation": self.validation,
+            "domain": self.domain,
+            "content_sha256": self.content_sha256,
+            "content_characters": self.content_characters,
         }
 
 
@@ -147,6 +160,48 @@ class Budget:
 
     barren_limit: int = 2
 
+    min_independent_sources: int = 2
+
+
+    validation_rounds: int = 0
+    profile: str = "instant"
+
+    @classmethod
+    def for_profile(cls, profile: str) -> "Budget":
+        selected = str(profile or "verification").strip().casefold()
+        if selected == "cooking":
+            return cls(
+                max_sources=4096,
+                max_queries=1024,
+                max_seconds=14_400.0,
+                coverage_target=12,
+                barren_limit=12,
+                min_independent_sources=2,
+                validation_rounds=2,
+                profile="cooking",
+            )
+        if selected == "instant":
+            return cls(
+                max_sources=64,
+                max_queries=24,
+                max_seconds=300.0,
+                coverage_target=6,
+                barren_limit=5,
+                min_independent_sources=2,
+                validation_rounds=1,
+                profile="instant",
+            )
+        return cls(
+            max_sources=16,
+            max_queries=8,
+            max_seconds=180.0,
+            coverage_target=2,
+            barren_limit=3,
+            min_independent_sources=2,
+            validation_rounds=1,
+            profile="verification",
+        )
+
 
 class ResearchLedger:
     """Accumulate evidence, keep its provenance, and know when to stop."""
@@ -158,11 +213,14 @@ class ResearchLedger:
         self.claims: dict[str, Claim] = {}
 
         self.observations: list[dict[str, Any]] = []
+        self.rejected_sources: list[dict[str, Any]] = []
         self.queries: list[str] = []
         self.open_questions: list[str] = []
         self.started_at = time.monotonic()
+        self._elapsed_before_resume = 0.0
         self._barren = 0
         self._seen_urls: set[str] = set()
+        self.validation_rounds_completed = 0
 
 
 
@@ -175,7 +233,16 @@ class ResearchLedger:
         self.queries.append(text)
         return True
 
-    def add_source(self, url: str, title: str = "") -> Source | None:
+    def add_source(
+        self,
+        url: str,
+        title: str = "",
+        *,
+        requested_url: str = "",
+        validation: str = "validated",
+        content_sha256: str = "",
+        content_characters: int = 0,
+    ) -> Source | None:
         """Register a source. None when it was already read."""
 
         clean = str(url).split("#", 1)[0].rstrip("/")
@@ -183,10 +250,28 @@ class ResearchLedger:
             return None
         self._seen_urls.add(clean)
         source = Source(
-            source_id=f"src-{len(self.sources) + 1}", url=clean, title=str(title)
+            source_id=f"src-{len(self.sources) + 1}",
+            url=clean,
+            title=str(title),
+            requested_url=str(requested_url or clean),
+            validation=str(validation or "validated"),
+            content_sha256=str(content_sha256 or ""),
+            content_characters=max(0, int(content_characters or 0)),
         )
         self.sources[source.source_id] = source
         return source
+
+    def reject_source(self, url: str, reason: str, *, title: str = "") -> None:
+        clean = str(url).split("#", 1)[0].rstrip("/")
+        if not clean:
+            return
+        self.rejected_sources.append(
+            {
+                "url": clean,
+                "title": str(title or "")[:240],
+                "reason": str(reason or "unreadable")[:240],
+            }
+        )
 
     def add_claim(self, text: str, source_id: str) -> Claim:
         """Add a statement, merging duplicates and flagging disagreements.
@@ -278,11 +363,24 @@ class ResearchLedger:
 
     @property
     def elapsed_seconds(self) -> float:
-        return time.monotonic() - self.started_at
+        return self._elapsed_before_resume + time.monotonic() - self.started_at
+
+    def independent_source_count(self, claim: Claim) -> int:
+        domains = {
+            self.sources[source_id].domain
+            for source_id in claim.sources
+            if source_id in self.sources and self.sources[source_id].domain
+        }
+        return len(domains)
 
     @property
     def corroborated_claims(self) -> list[Claim]:
-        return [claim for claim in self.claims.values() if claim.corroborated]
+        required = max(2, int(self.budget.min_independent_sources))
+        return [
+            claim
+            for claim in self.claims.values()
+            if self.independent_source_count(claim) >= required
+        ]
 
     @property
     def disputed_claims(self) -> list[Claim]:
@@ -291,14 +389,19 @@ class ResearchLedger:
     def should_stop(self) -> tuple[bool, str]:
         """Whether to stop, and the named reason why."""
 
+
+
+        if self.elapsed_seconds >= self.budget.max_seconds:
+            return True, "time_budget"
+        if (
+            len(self.corroborated_claims) >= self.budget.coverage_target
+            and self.validation_rounds_completed >= self.budget.validation_rounds
+        ):
+            return True, "evidence_sufficient"
         if len(self.sources) >= self.budget.max_sources:
             return True, "source_budget"
         if len(self.queries) >= self.budget.max_queries:
             return True, "query_budget"
-        if self.elapsed_seconds >= self.budget.max_seconds:
-            return True, "time_budget"
-        if len(self.corroborated_claims) >= self.budget.coverage_target:
-            return True, "coverage_reached"
         if self._barren >= self.budget.barren_limit:
             return True, "no_new_information"
         return False, ""
@@ -316,7 +419,21 @@ class ResearchLedger:
             self.claims.values(),
             key=lambda claim: (not claim.disputed, -len(claim.sources), claim.claim_id),
         )
-        return [claim.to_dict() for claim in ranked[:limit]]
+        return [self._claim_record(claim) for claim in ranked[:limit]]
+
+    def _claim_record(self, claim: Claim) -> dict[str, Any]:
+        record = claim.to_dict()
+        evidence = self.provenance(claim.claim_id)
+        independent = self.independent_source_count(claim)
+        record["evidence"] = evidence
+        record["independent_source_count"] = independent
+        record["corroborated"] = independent >= max(
+            2, int(self.budget.min_independent_sources)
+        )
+        record["validated"] = bool(evidence) and all(
+            source.get("validation") == "validated" for source in evidence
+        )
+        return record
 
     def report(self) -> dict[str, Any]:
         stop, reason = self.should_stop()
@@ -325,8 +442,9 @@ class ResearchLedger:
             "question": self.question,
             "queries": list(self.queries),
             "sources": [source.to_dict() for source in self.sources.values()],
-            "claims": [claim.to_dict() for claim in self.claims.values()],
+            "claims": [self._claim_record(claim) for claim in self.claims.values()],
             "observations": [dict(item) for item in self.observations],
+            "rejected_sources": [dict(item) for item in self.rejected_sources],
             "source_count": len(self.sources),
             "claim_count": len(self.claims),
             "corroborated": len(self.corroborated_claims),
@@ -335,6 +453,9 @@ class ResearchLedger:
             "stopped": stop,
             "stop_reason": reason,
             "seconds": round(self.elapsed_seconds, 2),
+            "profile": self.budget.profile,
+            "hard_ceiling_seconds": self.budget.max_seconds,
+            "validation_rounds_completed": self.validation_rounds_completed,
         }
 
     def provenance(self, claim_id: str) -> list[dict[str, Any]]:
@@ -342,6 +463,94 @@ class ResearchLedger:
 
         claim = self.claims[claim_id]
         return [self.sources[source].to_dict() for source in claim.sources]
+
+    def checkpoint(self) -> dict[str, Any]:
+        """A complete, JSON-safe ledger snapshot for restart recovery."""
+
+        return {
+            "schema": LEDGER_SCHEMA,
+            "question": self.question,
+            "budget": {
+                name: getattr(self.budget, name)
+                for name in Budget.__dataclass_fields__
+            },
+            "sources": [source.to_dict() for source in self.sources.values()],
+            "claims": [claim.to_dict() for claim in self.claims.values()],
+            "observations": [dict(item) for item in self.observations],
+            "rejected_sources": [dict(item) for item in self.rejected_sources],
+            "queries": list(self.queries),
+            "open_questions": list(self.open_questions),
+            "elapsed_seconds": self.elapsed_seconds,
+            "barren": self._barren,
+            "seen_urls": sorted(self._seen_urls),
+            "validation_rounds_completed": self.validation_rounds_completed,
+        }
+
+    @classmethod
+    def from_checkpoint(cls, payload: Mapping[str, Any]) -> "ResearchLedger":
+        if payload.get("schema") != LEDGER_SCHEMA:
+            raise ValueError("Unsupported research checkpoint schema")
+        budget_payload = dict(payload.get("budget") or {})
+        budget = Budget(
+            **{
+                name: budget_payload[name]
+                for name in Budget.__dataclass_fields__
+                if name in budget_payload
+            }
+        )
+        ledger = cls(str(payload.get("question") or ""), budget=budget)
+        ledger.sources = {}
+        for item in payload.get("sources") or []:
+            if not isinstance(item, Mapping):
+                continue
+            source = Source(
+                source_id=str(item.get("source") or f"src-{len(ledger.sources) + 1}"),
+                url=str(item.get("url") or ""),
+                title=str(item.get("title") or ""),
+                retrieved_at=float(item.get("retrieved_at") or time.time()),
+                page_type=str(item.get("page_type") or "unknown"),
+                requested_url=str(item.get("requested_url") or item.get("url") or ""),
+                validation=str(item.get("validation") or "validated"),
+                content_sha256=str(item.get("content_sha256") or ""),
+                content_characters=max(0, int(item.get("content_characters") or 0)),
+            )
+            ledger.sources[source.source_id] = source
+        ledger.claims = {}
+        for item in payload.get("claims") or []:
+            if not isinstance(item, Mapping):
+                continue
+            claim = Claim(
+                claim_id=str(item.get("claim") or f"clm-{len(ledger.claims) + 1}"),
+                text=str(item.get("text") or ""),
+                sources=[str(value) for value in item.get("sources") or []],
+                contradicts=[str(value) for value in item.get("contradicts") or []],
+                confidence=float(item.get("confidence") or 0.5),
+            )
+            ledger.claims[claim.claim_id] = claim
+        ledger.observations = [
+            dict(item) for item in payload.get("observations") or []
+            if isinstance(item, Mapping)
+        ]
+        ledger.rejected_sources = [
+            dict(item) for item in payload.get("rejected_sources") or []
+            if isinstance(item, Mapping)
+        ]
+        ledger.queries = [str(value) for value in payload.get("queries") or []]
+        ledger.open_questions = [
+            str(value) for value in payload.get("open_questions") or []
+        ]
+        ledger._elapsed_before_resume = max(
+            0.0, float(payload.get("elapsed_seconds") or 0.0)
+        )
+        ledger.started_at = time.monotonic()
+        ledger._barren = max(0, int(payload.get("barren") or 0))
+        ledger._seen_urls = {
+            str(value) for value in payload.get("seen_urls") or []
+        } | {source.url for source in ledger.sources.values()}
+        ledger.validation_rounds_completed = max(
+            0, int(payload.get("validation_rounds_completed") or 0)
+        )
+        return ledger
 
 
 __all__ = [

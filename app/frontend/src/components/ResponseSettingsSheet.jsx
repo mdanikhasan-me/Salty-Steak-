@@ -163,6 +163,20 @@ export function ResponseSettingsSheet({
               <NumericSetting label="Repeat penalty" value={settings.repetition_penalty} min={0.8} max={2} step={0.05} onChange={(event) => updateNumber("repetition_penalty", 0.8, 2, event)} />
               <NumericSetting label="Seed" value={settings.seed} min={-1} max={2_147_483_647} step={1} onChange={(event) => updateNumber("seed", -1, 2_147_483_647, event)} />
 
+              <label className="response-settings-sheet__trace-toggle">
+                <span>
+                  <strong>Raw local trace</strong>
+                  <small>Developer view of this model's local &lt;think&gt; text. Activity summaries remain the default.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.reasoning_visibility === "raw_local"}
+                  onChange={(event) => update({
+                    reasoning_visibility: event.currentTarget.checked ? "raw_local" : "summaries",
+                  })}
+                />
+              </label>
+
               <label className="response-settings-sheet__instruction">
                 <span>System instruction</span>
                 <textarea

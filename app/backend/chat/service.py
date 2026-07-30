@@ -147,8 +147,6 @@ def _without_control_token_echo(text: str) -> str:
 
 
 
-
-
 PRIVATE_DETAIL_FIELDS = frozenset(
     {"reasoning_text", "unperformed_claim", "route_trace"}
 )
@@ -182,6 +180,12 @@ def public_technical_details(details: Any) -> Any:
         }
 
     reasoning = str(details.get("reasoning_text") or "")
+    if (
+        reasoning
+        and str(details.get("reasoning_visibility_effective") or "").casefold()
+        == "raw_local"
+    ):
+        public["reasoning_text"] = reasoning
     public["reasoned"] = bool(reasoning.strip())
     public["reasoning_characters"] = len(reasoning)
     return public
@@ -348,6 +352,7 @@ GENERATION_LIMITS = {
     "seed": {"minimum": -1, "maximum": 2_147_483_647},
 }
 REASONING_MODES = ("instant", "cooking")
+REASONING_VISIBILITIES = ("summaries", "raw_local")
 REASONING_MODE_ALIASES = {
     "instant": "instant",
     "off": "instant",
@@ -436,6 +441,7 @@ def _generation_control_provenance(settings: dict[str, Any]) -> dict[str, Any]:
     return {
         "reasoning_mode_requested": settings["reasoning_mode_requested"],
         "reasoning_mode_effective": settings["reasoning_mode"],
+        "reasoning_visibility_effective": settings["reasoning_visibility"],
         "context_window_tokens_requested": settings[
             "context_window_tokens_requested"
         ],
@@ -449,25 +455,45 @@ def _generation_control_provenance(settings: dict[str, Any]) -> dict[str, Any]:
         ],
         "maximum_output_tokens_effective": settings["maximum_output_tokens"],
         "computer_authority_mode": settings["computer_authority_mode"],
+        "research_profile": settings.get("research_profile", "verification"),
     }
 
 
-def _bounded_generation_preview(value: Any) -> dict[str, Any] | None:
-    """Validate the private worker's optional, ephemeral preview event."""
+def _bounded_generation_preview(
+    value: Any,
+    *,
+    include_reasoning_text: bool = False,
+) -> dict[str, Any] | None:
+    """Validate and privacy-filter the worker's ephemeral preview event."""
 
     if not isinstance(value, dict):
         return None
-    text = str(value.get("tail_text") or "")[-1200:]
-    if not text:
+    raw_text = str(value.get("tail_text") or "")
+    text = raw_text[-1200:]
+    if not raw_text:
         return None
     try:
         token_count = max(0, int(value.get("token_count") or 0))
     except (TypeError, ValueError):
         token_count = 0
+    kind = "reasoning" if value.get("kind") == "reasoning" else "output"
+    try:
+        character_count = max(
+            len(raw_text),
+            int(value.get("character_count") or 0),
+        )
+    except (TypeError, ValueError):
+        character_count = len(raw_text)
     return {
-        "kind": "reasoning" if value.get("kind") == "reasoning" else "output",
-        "tail_text": text,
+        "kind": kind,
+        "tail_text": text if kind == "output" or include_reasoning_text else "",
         "token_count": token_count,
+        "character_count": character_count,
+        "summary": (
+            "Writing the answer for you."
+            if kind == "output"
+            else "Analyzing the request, conversation context, and constraints."
+        ),
     }
 
 
@@ -897,6 +923,13 @@ class ChatService:
                 ),
             )
         )
+        reasoning_visibility = str(
+            supplied.get("reasoning_visibility") or "summaries"
+        ).strip().casefold()
+        if reasoning_visibility not in REASONING_VISIBILITIES:
+            raise ValueError(
+                "reasoning_visibility must be summaries or raw_local"
+            )
         raw_stops = supplied.get("stop_sequences") or []
         if not isinstance(raw_stops, list):
             raise ValueError("stop_sequences must be a list")
@@ -918,6 +951,19 @@ class ChatService:
             raise ValueError(
                 "computer_authority_mode must be ask_every_time or full_access"
             )
+        web_search_enabled = bool(supplied.get("web_search_enabled", False))
+        research_requested = bool(
+            supplied.get("research_available", supplied.get("research_mode", False))
+            or supplied.get("research_command", False)
+            or web_search_enabled
+        )
+        research_profile = (
+            "cooking"
+            if research_requested and reasoning_mode == "cooking"
+            else "instant"
+            if research_requested
+            else "verification"
+        )
 
         def default_number(
             name: str,
@@ -950,7 +996,8 @@ class ChatService:
             "seed": default_number("seed", int(defaults["seed"]), int),
             "reasoning_mode_requested": requested_reasoning,
             "reasoning_mode": reasoning_mode,
-            "web_search_enabled": bool(supplied.get("web_search_enabled", False)),
+            "reasoning_visibility": reasoning_visibility,
+            "web_search_enabled": web_search_enabled,
             "system_prompt": prompt,
             "stop_sequences": stops,
             "computer_authority_mode": computer_authority_mode,
@@ -962,19 +1009,14 @@ class ChatService:
 
 
 
-            "research_mode": bool(
-                supplied.get("research_available", supplied.get("research_mode", False))
-                or supplied.get("research_command", False)
-            ),
+            "research_mode": research_requested,
+            "research_profile": research_profile,
 
 
 
 
 
-            "research_available": bool(
-                supplied.get("research_available", supplied.get("research_mode", False))
-                or supplied.get("research_command", False)
-            ),
+            "research_available": research_requested,
             "research_forced": bool(supplied.get("research_command", False)),
 
 
@@ -1728,6 +1770,16 @@ class ChatService:
             for item in self.automation.status()["capabilities"]
             if item.get("effective_enabled")
         ]
+
+    def _research_runtime_available(self) -> bool:
+        """Whether a turn can search and then read its evidence right now."""
+
+        from ..automation.broker import BROWSER_CAPABILITY
+
+        return (
+            self.web_search is not None
+            and BROWSER_CAPABILITY in self.granted_automation_capabilities()
+        )
 
     def start_agent_task(
         self,
@@ -3760,9 +3812,18 @@ class ChatService:
                 messages, context=context, generation_settings=generation_settings
             )
 
+        research_profile = str(
+            generation_settings.get("research_profile") or "verification"
+        )
+        search_limit = {
+            "verification": 8,
+            "instant": 14,
+            "cooking": 24,
+        }.get(research_profile, 8)
+
         def search(query: str):
             try:
-                return self._search_web(query, limit=6)
+                return self._search_web(query, limit=search_limit)
             except Exception:
                 return []
 
@@ -3815,6 +3876,54 @@ class ChatService:
 
             waves = list(progress.get("waves") or [])
             sites = sum(len(wave.get("sites") or []) for wave in waves)
+            journal = [
+                dict(item)
+                for item in (provenance or {}).get("activity_journal", [])
+                if isinstance(item, Mapping)
+            ]
+            for index, wave in enumerate(waves, start=1):
+                validated = int(wave.get("verified") or 0)
+                rejected = int(wave.get("rejected") or 0)
+                query = str(wave.get("query") or "")[:180]
+                journal.append(
+                    {
+                        "id": f"research-wave-{index}",
+                        "kind": "verification" if wave.get("validation") else "research",
+                        "label": (
+                            f"Validating: {query}"
+                            if wave.get("validation")
+                            else f"Searching: {query}"
+                        ),
+                        "detail": (
+                            f"{len(wave.get('sites') or [])} candidates · "
+                            f"{validated} validated · {rejected} rejected"
+                        ),
+                        "state": (
+                            "completed"
+                            if wave.get("state") == "done"
+                            else "running"
+                        ),
+                        "sequence": len(journal) + 1,
+                    }
+                )
+            journal.append(
+                {
+                    "id": "research-evidence",
+                    "kind": "verification",
+                    "label": "Comparing evidence",
+                    "detail": (
+                        f"{int(progress.get('corroborated') or 0)} corroborated · "
+                        f"{int(progress.get('disputed') or 0)} disputed · "
+                        f"{int(progress.get('rejected_source_count') or 0)} rejected links"
+                    ),
+                    "state": (
+                        "completed"
+                        if str(progress.get("phase")) == "completed"
+                        else "running"
+                    ),
+                    "sequence": len(journal) + 1,
+                }
+            )
             context.update(
                 phase=(
                     f"Searching {sites} websites"
@@ -3825,6 +3934,7 @@ class ChatService:
                     **dict(provenance or {}),
                     "conversation_id": conversation_id,
                     "research_progress": dict(progress),
+                    "activity_journal": journal,
                 },
             )
 
@@ -3861,8 +3971,11 @@ class ChatService:
 
 
             checkpoint_path=(
-                self.database.path.parent / "missions" / f"{task.task_id}.json"
+                self.database.path.parent
+                / "missions"
+                / f"{context.operation_id}.json"
             ),
+            research_profile=research_profile,
 
 
 
@@ -4037,7 +4150,13 @@ class ChatService:
                         "temperature": 0.0,
                         "top_p": 1.0,
                         "top_k": 1,
-                        "maximum_output_tokens": 400,
+
+
+
+
+
+
+                        "maximum_output_tokens": 1024,
                     },
                 )
             except Exception as error:
@@ -4499,9 +4618,10 @@ class ChatService:
 
 
         research_reachable = bool(
-            generation_settings.get("research_available")
-            or generation_settings.get("research_forced")
+            generation_settings.get("research_forced")
+            or generation_settings.get("research_available")
             or generation_settings.get("web_search_enabled")
+            or self._research_runtime_available()
         )
         computer_reachable = bool(
             generation_settings.get("agent_mode")
@@ -4511,8 +4631,6 @@ class ChatService:
             image_store=self.image_store,
             run_agent=runners.run_action,
             run_workflow=runners.run_plan,
-
-
 
 
             run_research=(
@@ -4546,6 +4664,11 @@ class ChatService:
             request=conversation_request(history) or request,
 
             latest_request=latest_user_message(history) or request,
+
+
+
+
+            reference_context=established,
             conversation_id=conversation_id,
             message_id=message_id,
         )
@@ -4687,11 +4810,12 @@ class ChatService:
         }
 
     def _image_proposal_from_turn(self, turn) -> dict[str, Any] | None:
-        """Turn a prepared image job into the reviewable proposal shape.
+        """Turn a prepared image job into the persisted execution shape.
 
-        The render brief becomes the prompt. Everything downstream — review,
-        confirmation, generation, artifact persistence, cancellation — is the
-        path that already existed and is already proven.
+        The render brief becomes the prompt. The user's explicit image request
+        is the authorization, so this proposal starts without a redundant
+        second confirmation. Generation, artifact persistence, cancellation and
+        retry still use the proven persisted-proposal path.
         """
 
         from .orchestrator import GENERATE_IMAGE, REVISE_IMAGE
@@ -4717,8 +4841,9 @@ class ChatService:
                 "negative_prompt": str(turn.details.get("render_negative") or "")[:4_000],
             },
             "state": "pending_review" if ready else "blocked_runtime_unavailable",
-            "requires_confirmation": True,
-            "execution_allowed": False,
+            "requires_confirmation": False,
+            "execution_allowed": ready,
+            "authorization_source": "explicit_conversation_image_request",
             "runtime_reason": None if ready else _image_runtime_reason(
                 self.image_generation_model
             ),
@@ -4924,6 +5049,46 @@ class ChatService:
             "cancellation_state": "active",
             **_generation_control_provenance(generation_settings),
         }
+        activity_journal: list[dict[str, Any]] = [
+            {
+                "id": "understanding",
+                "kind": "thinking",
+                "label": "Understanding the request",
+                "detail": "Reviewing the conversation, requested outcome, and active modes.",
+                "state": "running",
+                "sequence": 1,
+            }
+        ]
+        relationship["activity_journal"] = activity_journal
+
+        def update_generation_activity(
+            entry_id: str,
+            *,
+            kind: str,
+            label: str,
+            detail: str,
+            state: str,
+            token_count: int | None = None,
+            character_count: int | None = None,
+        ) -> None:
+            entry = {
+                "id": entry_id,
+                "kind": kind,
+                "label": label,
+                "detail": detail,
+                "state": state,
+            }
+            if token_count is not None:
+                entry["token_count"] = max(0, int(token_count))
+            if character_count is not None:
+                entry["character_count"] = max(0, int(character_count))
+            for index, current in enumerate(activity_journal):
+                if current.get("id") == entry_id:
+                    entry["sequence"] = current.get("sequence", index + 1)
+                    activity_journal[index] = entry
+                    return
+            entry["sequence"] = len(activity_journal) + 1
+            activity_journal.append(entry)
         if previous_response_id:
             relationship["retry_of_assistant_message_id"] = previous_response_id
         search_enabled = bool(generation_settings["web_search_enabled"])
@@ -4966,12 +5131,17 @@ class ChatService:
 
 
 
+
         research_available = bool(
-            generation_settings.get("research_available")
-            or generation_settings.get("research_forced")
+            generation_settings.get("research_forced")
+            or generation_settings.get("research_available")
             or generation_settings.get("web_search_enabled")
+            or self._research_runtime_available()
         )
         relationship["research_available"] = research_available
+        relationship["research_requested"] = bool(
+            generation_settings.get("research_mode")
+        )
         orchestration = self._turn_instruction(
             conversation_id,
             agent_mode=agent_mode,
@@ -5000,7 +5170,13 @@ class ChatService:
 
 
 
-            "state": "available" if search_enabled else "disabled",
+            "state": (
+                "available"
+                if search_enabled
+                else "automatic_verification"
+                if research_available
+                else "unavailable"
+            ),
             "query": None,
             "result_count": 0,
         }
@@ -5059,7 +5235,12 @@ class ChatService:
                 }
 
                 def publish_preview(value: dict[str, Any]) -> None:
-                    preview = _bounded_generation_preview(value)
+                    preview = _bounded_generation_preview(
+                        value,
+                        include_reasoning_text=(
+                            generation["reasoning_visibility"] == "raw_local"
+                        ),
+                    )
                     if preview is None:
                         return
                     if (
@@ -5069,6 +5250,41 @@ class ChatService:
                         return
                     preview_state["last_text"] = preview["tail_text"]
                     preview_state["last_tokens"] = preview["token_count"]
+                    update_generation_activity(
+                        "understanding",
+                        kind="thinking",
+                        label="Understanding the request",
+                        detail="Conversation context and response constraints are prepared.",
+                        state="completed",
+                    )
+                    if preview["kind"] == "reasoning":
+                        update_generation_activity(
+                            "reasoning",
+                            kind="thinking",
+                            label="Reasoning through the answer",
+                            detail=preview["summary"],
+                            state="running",
+                            token_count=preview["token_count"],
+                            character_count=preview["character_count"],
+                        )
+                    else:
+                        if any(item.get("id") == "reasoning" for item in activity_journal):
+                            update_generation_activity(
+                                "reasoning",
+                                kind="thinking",
+                                label="Reasoning through the answer",
+                                detail="The reasoning pass is complete.",
+                                state="completed",
+                            )
+                        update_generation_activity(
+                            "drafting",
+                            kind="writing",
+                            label="Writing the answer",
+                            detail=preview["summary"],
+                            state="running",
+                            token_count=preview["token_count"],
+                            character_count=preview["character_count"],
+                        )
                     context.update(
                         phase="Generating response",
                         details={
@@ -5130,6 +5346,36 @@ class ChatService:
             raise OperationInterrupted(
                 "Generation stopped; uncommitted output was discarded"
             )
+        update_generation_activity(
+            "understanding",
+            kind="thinking",
+            label="Understanding the request",
+            detail="Conversation context and response constraints are prepared.",
+            state="completed",
+        )
+        if any(item.get("id") == "reasoning" for item in activity_journal):
+            update_generation_activity(
+                "reasoning",
+                kind="thinking",
+                label="Reasoning through the answer",
+                detail="The reasoning pass is complete.",
+                state="completed",
+            )
+        if any(item.get("id") == "drafting" for item in activity_journal):
+            update_generation_activity(
+                "drafting",
+                kind="writing",
+                label="Writing the answer",
+                detail="The answer draft is complete.",
+                state="completed",
+            )
+        update_generation_activity(
+            "finishing",
+            kind="verification",
+            label="Finishing the response",
+            detail="Separating the final answer from private model channels and saving telemetry.",
+            state="completed",
+        )
         if active_target_kind == "model_bundle":
             origin = {
                 "model_bundle_id": active_version_id,
@@ -5172,6 +5418,7 @@ class ChatService:
             "runtime_instance_id": runtime_instance_id,
             "source_sha256": source_sha256,
             "template_version": CHAT_TEMPLATE_VERSION,
+            "activity_journal": activity_journal,
             "web_search": relationship["web_search"],
             "cancellation_token": cancellation_token,
             "cancellation_state": "not_requested",

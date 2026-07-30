@@ -811,6 +811,7 @@ class _GenerationPreviewAccumulator:
             raise ValueError("preview limit must be positive")
         self.limit = int(limit)
         self.token_count = 0
+        self.character_count = 0
         self._raw_tail = ""
         self._tag_tail = ""
         self._reasoning_open = False
@@ -819,6 +820,7 @@ class _GenerationPreviewAccumulator:
         value = str(piece or "")
         if value:
             self.token_count += 1
+            self.character_count += len(value)
             self._raw_tail = (self._raw_tail + value)[-self.limit :]
             self._scan_tags(value)
         kind = "reasoning" if self._reasoning_open else "output"
@@ -827,6 +829,7 @@ class _GenerationPreviewAccumulator:
             "kind": kind,
             "tail_text": visible_tail[-self.limit :],
             "token_count": self.token_count,
+            "character_count": self.character_count,
         }
 
     def _scan_tags(self, piece: str) -> None:

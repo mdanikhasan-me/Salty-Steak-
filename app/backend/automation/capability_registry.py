@@ -108,6 +108,7 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "argv": "array[string]",
             "working_directory": "absolute_path",
             "timeout_seconds": "number",
+            "elevated": "boolean",
         },
         required_arguments=("argv",),
         operations=("execute",),
@@ -117,7 +118,9 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
         cancellation="in_flight",
         model_instructions=(
             "terminal.execute — Run a terminal command and capture its output.\n"
-            '  Arguments: {"argv": ["executable", "arg1"], "timeout_seconds": 10}'
+            '  Arguments: {"argv": ["executable", "arg1"], "timeout_seconds": 10, '
+            '"elevated": false}. Set elevated=true only when the task genuinely '
+            "requires administrator rights and Full access is selected."
         ),
         output_types={
             "status": "string",
@@ -306,6 +309,7 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "target": "string|absolute_path|url",
             "arguments": "string",
             "wait_ms": "integer",
+            "elevate": "boolean",
         },
         required_arguments=("target",),
         operations=("launch",),
@@ -316,7 +320,9 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
         model_instructions=(
             "application.launch — Launch an installed application or open a link.\n"
             '  Arguments: {"target": "app name, https URL, or absolute file path", '
-            '"wait_ms": optional milliseconds to wait after launching}'
+            '"wait_ms": optional milliseconds to wait after launching, '
+            '"elevate": false}. Set elevate=true only for an application that '
+            "genuinely requires administrator rights while Full access is selected."
         ),
         agent_rules=(
             "- Opening a website or an application is a single application.launch "

@@ -362,7 +362,9 @@ FINALISER_BASE_RULES = (
     "Do not estimate, round or fill a gap. If the findings do not give "
     "something that was asked for, say that they do not. "
     "If the findings disagree, say what the disagreement is. If they do not "
-    "answer the question, say so plainly."
+    "answer the question, say so plainly. "
+    "Cite factual statements with Markdown links from that finding's sources. "
+    "Use only the exact source URLs supplied; never invent, repair, or guess a link."
 )
 
 
@@ -454,6 +456,100 @@ def finaliser_payload(
     return payload
 
 
+_MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", re.IGNORECASE)
+
+
+def _validated_source_links(
+    findings: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 8,
+) -> list[tuple[str, str]]:
+    links: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for finding in findings:
+        for source in finding.get("evidence") or finding.get("sources") or []:
+            if not isinstance(source, Mapping):
+                continue
+            if str(source.get("validation") or "validated") != "validated":
+                continue
+            url = str(source.get("url") or "").strip()
+            if not url.casefold().startswith(("http://", "https://")) or url in seen:
+                continue
+            seen.add(url)
+            title = " ".join(str(source.get("title") or source.get("domain") or url).split())
+            title = title.replace("[", "").replace("]", "")[:100] or url
+            links.append((title, url))
+            if len(links) >= limit:
+                return links
+    return links
+
+
+def _attach_validated_citations(
+    answer: str,
+    findings: Sequence[Mapping[str, Any]],
+) -> str:
+    """Remove invented links and ensure the answer exposes checked sources."""
+
+    links = _validated_source_links(findings)
+    if not links:
+        return answer
+    allowed = {url for _title, url in links}
+    used: set[str] = set()
+
+    def keep_known(match: re.Match[str]) -> str:
+        label, url = match.group(1), match.group(2)
+        if url in allowed:
+            used.add(url)
+            return match.group(0)
+        return label
+
+    safe = _MARKDOWN_LINK.sub(keep_known, str(answer or "").strip())
+    if used:
+        return safe
+    citations = " ".join(f"[{title}]({url})" for title, url in links)
+    return f"{safe}\n\nValidated sources: {citations}".strip()
+
+
+def _research_activity_journal(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    journal: list[dict[str, Any]] = []
+    for index, wave in enumerate(report.get("waves") or [], start=1):
+        if not isinstance(wave, Mapping):
+            continue
+        query = str(wave.get("query") or "")[:180]
+        journal.append(
+            {
+                "id": f"research-wave-{index}",
+                "kind": "verification" if wave.get("validation") else "research",
+                "label": (
+                    f"Validated: {query}"
+                    if wave.get("validation")
+                    else f"Researched: {query}"
+                ),
+                "detail": (
+                    f"{int(wave.get('verified') or 0)} sources validated · "
+                    f"{int(wave.get('rejected') or 0)} links rejected"
+                ),
+                "state": "completed",
+                "sequence": len(journal) + 1,
+            }
+        )
+    journal.append(
+        {
+            "id": "research-evidence",
+            "kind": "verification",
+            "label": "Compared and attributed the evidence",
+            "detail": (
+                f"{int(report.get('corroborated') or 0)} corroborated findings · "
+                f"{int(report.get('disputed') or 0)} disputed findings · "
+                f"{len(report.get('rejected_sources') or [])} rejected links"
+            ),
+            "state": "completed",
+            "sequence": len(journal) + 1,
+        }
+    )
+    return journal
+
+
 def _evidence_limits(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """What the gathered evidence settles, and what it does not.
 
@@ -542,6 +638,7 @@ class LiveRunners:
         follow_through_steps: int = 10,
         established: str = "",
         checkpoint_path: str | Path | None = None,
+        research_profile: str = "verification",
     ) -> None:
         self.broker = broker
         self.connectors = connectors
@@ -575,6 +672,12 @@ class LiveRunners:
 
         self.established = str(established or "")
         self.checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
+        selected_profile = str(research_profile or "verification").strip().casefold()
+        self.research_profile = (
+            selected_profile
+            if selected_profile in {"verification", "instant", "cooking"}
+            else "verification"
+        )
 
 
 
@@ -905,10 +1008,15 @@ class LiveRunners:
             }
 
         question = str(decision.get("question") or decision.get("goal") or request)
-        budget = Budget(
-            max_sources=int(decision.get("max_sources") or 6),
-            max_queries=int(decision.get("max_queries") or 3),
-        )
+
+
+
+        budget = Budget.for_profile(self.research_profile)
+        research_checkpoint = None
+        if self.checkpoint_path is not None:
+            research_checkpoint = self.checkpoint_path.with_name(
+                self.checkpoint_path.stem + "-research.json"
+            )
         loop = ResearchLoop(
             question,
             search=self.search,
@@ -917,11 +1025,14 @@ class LiveRunners:
             budget=budget,
             task=self.task,
             on_progress=self.on_research,
+            checkpoint_path=research_checkpoint,
         )
         report = loop.run(str(decision.get("query") or question))
+        answer = self._answer_from(question, report)
         return {
-            "answer": self._answer_from(question, report),
+            "answer": answer,
             "status": "completed",
+            "activity_journal": _research_activity_journal(report),
             "research": {
                 key: report[key]
                 for key in (
@@ -932,6 +1043,9 @@ class LiveRunners:
                     "corroborated",
                     "disputed",
                     "stop_reason",
+                    "profile",
+                    "hard_ceiling_seconds",
+                    "validation_rounds_completed",
                 )
             }
 
@@ -1048,8 +1162,14 @@ class LiveRunners:
                                 findings=[
                                     {
                                         "text": claim.get("text"),
-                                        "sources": int(claim.get("source_count") or 0),
+                                        "source_count": int(claim.get("source_count") or 0),
+                                        "sources": list(claim.get("evidence") or []),
                                         "disputed": bool(claim.get("disputed")),
+                                        "confidence": claim.get("confidence"),
+                                        "validated": bool(claim.get("validated")),
+                                        "independent_source_count": int(
+                                            claim.get("independent_source_count") or 0
+                                        ),
                                     }
                                     for claim in ordered
                                 ],
@@ -1061,15 +1181,16 @@ class LiveRunners:
             )
             answer = strip_reasoning(str(reply or "")).strip()
             if answer and not _reads_like_process(answer):
-                return answer
+                return _attach_validated_citations(answer, ordered)
 
 
 
-        return "\n".join(
+        fallback = "\n".join(
             f"- {claim.get('text')}"
             for claim in ordered[:6]
             if str(claim.get("text") or "").strip()
         ) or self._summarise(report)
+        return _attach_validated_citations(fallback, ordered)
 
     @staticmethod
     def _summarise(report: Mapping[str, Any]) -> str:

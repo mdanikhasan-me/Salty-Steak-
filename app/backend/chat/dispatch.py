@@ -532,6 +532,7 @@ class TurnDispatcher:
         conversation_id: str,
         message_id: str = "",
         latest_request: str = "",
+        reference_context: str = "",
     ) -> TurnOutcome:
         """Carry out whatever the model decided.
 
@@ -570,6 +571,7 @@ class TurnDispatcher:
                 action=action,
                 request=request,
                 latest_request=latest_request or request,
+                reference_context=reference_context,
                 conversation_id=conversation_id,
                 message_id=message_id,
             )
@@ -609,6 +611,7 @@ class TurnDispatcher:
         conversation_id: str,
         message_id: str,
         latest_request: str = "",
+        reference_context: str = "",
     ) -> TurnOutcome:
         if self.images is None:
             return TurnOutcome(
@@ -641,6 +644,7 @@ class TurnDispatcher:
                     decision,
                     original_request=request,
                     latest_request=latest_request or request,
+                    reference_context=reference_context,
                     notes=str(decision.get("model_notes") or ""),
                     conversation_id=conversation_id,
                     message_id=message_id,

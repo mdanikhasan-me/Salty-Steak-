@@ -33,7 +33,7 @@ function SiteChips({ sites }) {
             ) : null}
           </span>
           <span className="site-chips__host">{site.host}</span>
-          {site.state === "verified" ? (
+          {site.state === "validated" || site.state === "verified" ? (
             <Check className="research-wave__verified" aria-hidden="true" />
           ) : null}
         </a>

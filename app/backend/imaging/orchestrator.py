@@ -15,6 +15,7 @@ whole turn budget looking busy.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -37,6 +38,17 @@ ORCHESTRATOR_SCHEMA = "salty-steak-image-orchestrator-v1"
 
 
 MAX_BRIEF_CORRECTIONS = 1
+
+CONTEXTUAL_IMAGE_REFERENCE = re.compile(
+    r"\b(?:"
+    r"what\s+(?:you|we)\s+(?:just\s+)?(?:described|said|wrote|mentioned|imagined|outlined|explained|discussed)"
+    r"|(?:generate|create|make|draw|render|visuali[sz]e)\b[^.!?\n]{0,60}\b(?:it|that|this|those)\b"
+    r"|(?:the\s+)?(?:above|earlier|previous|prior)\s+(?:answer|description|idea|scene|concept|design|conversation|discussion)"
+    r"|(?:our|this|the)\s+(?:conversation|discussion)"
+    r"|turn\s+(?:it|that|this)\s+into"
+    r")",
+    re.IGNORECASE,
+)
 
 
 
@@ -104,6 +116,7 @@ class ImageOrchestrator:
         *,
         original_request: str,
         latest_request: str = "",
+        reference_context: str = "",
         notes: str = "",
         conversation_id: str = "",
         message_id: str = "",
@@ -123,19 +136,29 @@ class ImageOrchestrator:
 
 
 
+        latest = str(latest_request or "")
+        validation_request = _validation_request(
+            latest_request=latest,
+            original_request=original_request,
+            reference_context=reference_context,
+        )
         brief = build_brief(
             decision.get("brief") or decision.get("arguments") or decision,
             original_request=original_request,
-            fallback_subject=str(latest_request or ""),
+            fallback_subject=latest,
         )
-        brief = self._author_brief(brief, request=original_request, notes=notes)
+        brief = self._author_brief(
+            brief,
+            request=original_request,
+            validation_request=validation_request,
+            notes=notes,
+        )
 
 
 
 
 
-
-        brief = self._enforce(brief, latest_request or original_request)
+        brief = self._enforce(brief, validation_request)
         job = ImageGenerationJob(
             brief=brief,
             conversation_id=conversation_id,
@@ -197,7 +220,12 @@ class ImageOrchestrator:
 
 
     def _author_brief(
-        self, brief: RenderBrief, *, request: str, notes: str = ""
+        self,
+        brief: RenderBrief,
+        *,
+        request: str,
+        validation_request: str = "",
+        notes: str = "",
     ) -> RenderBrief:
         """Let the text model write the brief out properly before rendering.
 
@@ -234,7 +262,7 @@ class ImageOrchestrator:
 
 
 
-        if not inspect(candidate, request=request).ok:
+        if not inspect(candidate, request=validation_request or request).ok:
             self._event("image_brief_authoring_rejected", subject=candidate.subject[:120])
             return brief
         self._event("image_brief_authored", subject=candidate.subject[:120])
@@ -358,9 +386,33 @@ class ImageOrchestrator:
         return bool(self.task is not None and self.task.stop_requested)
 
 
+def _validation_request(
+    *,
+    latest_request: str,
+    original_request: str,
+    reference_context: str,
+) -> str:
+    """Ground a deictic image request in the conversation it points at."""
+
+    latest = str(latest_request or "").strip()
+    original = str(original_request or "").strip()
+    reference = str(reference_context or "").strip()
+    if not latest:
+        return original
+    if CONTEXTUAL_IMAGE_REFERENCE.search(latest) is None:
+        return latest
+    parts = [latest]
+    if reference:
+        parts.append(reference)
+    if original and original != latest:
+        parts.append(original)
+    return "\n\n".join(parts)
+
+
 __all__ = [
     "ImageOrchestrationError",
     "ImageOrchestrator",
+    "CONTEXTUAL_IMAGE_REFERENCE",
     "MAX_BRIEF_CORRECTIONS",
     "ORCHESTRATOR_SCHEMA",
 ]

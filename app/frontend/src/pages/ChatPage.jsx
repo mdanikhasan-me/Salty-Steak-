@@ -128,6 +128,7 @@ const DEFAULT_GENERATION_SETTINGS = {
   repetition_penalty: 1.1,
   seed: -1,
   reasoning_mode: "instant",
+  reasoning_visibility: "summaries",
   computer_authority_mode: "ask_every_time",
   web_search_enabled: false,
   system_prompt: "",
@@ -286,7 +287,6 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const generationTaskRef = useRef(0);
   const activeGenerationRef = useRef(null);
   const [agentMode, setAgentMode] = useState(false);
-
 
 
   const [researchMode, setResearchMode] = useState(false);
@@ -2297,6 +2297,8 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
 
 
 
+
+
                                                                            }
           <button
             type="button"
@@ -2536,7 +2538,9 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
         <InlineNotice kind="warning" title="This enables real capabilities">
           Full access is not only about confirmation. Enabling it grants the
           capabilities below, and they stay granted until you revoke them in
-          Computer control. Every use is recorded in the audit log.
+          Computer control. Every use is recorded in the audit log. Actions that
+          need administrator rights may still show the secure Windows UAC prompt;
+          Salty Steak does not bypass that operating-system boundary.
         </InlineNotice>
         <ul className="capability-consent-list">
           {(fullAccessRequest?.capabilities || []).map((capability) => (

@@ -41,6 +41,7 @@ export function researchWaves(progress) {
     const sites = (wave.sites || []).filter((site) => site && site.host);
     const opened = Number(wave.opened) || 0;
     const verified = Number(wave.verified) || 0;
+    const rejected = Number(wave.rejected) || 0;
     const done = String(wave.state || "") === "done";
 
     return {
@@ -53,7 +54,9 @@ export function researchWaves(progress) {
       running: !done,
       opened,
       verified,
-      detail: detailFor({ opened, verified, done }),
+      rejected,
+      validation: Boolean(wave.validation),
+      detail: detailFor({ opened, verified, rejected, done }),
       sites: sites.map((site) => ({
         host: niceHost(site.host),
         url: String(site.url || ""),
@@ -65,10 +68,11 @@ export function researchWaves(progress) {
   });
 }
 
-function detailFor({ opened, verified, done }) {
+function detailFor({ opened, verified, rejected, done }) {
   if (verified) {
-    return `${verified} verified${opened ? ` of ${opened} read` : ""}`;
+    return `${verified} validated${rejected ? ` · ${rejected} rejected` : ""}`;
   }
+  if (rejected) return `${rejected} rejected`;
   if (opened) return `${opened} read`;
   return done ? "nothing usable" : "";
 }
@@ -96,6 +100,7 @@ export function researchProgress(details) {
     waves,
     siteCount: sites.size,
     verified: waves.reduce((total, wave) => total + wave.verified, 0),
+    rejected: waves.reduce((total, wave) => total + wave.rejected, 0),
 
     summary: `Searched ${sites.size} ${sites.size === 1 ? "website" : "websites"}`,
   };

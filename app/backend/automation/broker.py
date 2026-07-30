@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import ctypes
 import hashlib
+import json
 import os
 import shutil
 import struct
@@ -66,7 +67,7 @@ AUTOMATION_SCHEMA = "salty-steak-windows-automation-v1"
 MAX_WINDOW_TITLE_CHARACTERS = 512
 MAX_ENUMERATED_WINDOWS = 400
 DEFAULT_TIMEOUT_SECONDS = 10.0
-MAX_TIMEOUT_SECONDS = 30.0
+MAX_TIMEOUT_SECONDS = 14_400.0
 DEFAULT_OUTPUT_BYTES = 1024 * 1024
 MAX_ARGUMENTS = 128
 MAX_ARGUMENT_CHARACTERS = 32_768
@@ -82,6 +83,8 @@ MAX_SCROLL_CLICKS = 100
 DEFAULT_LAUNCH_WAIT_MS = 0
 MAX_LAUNCH_WAIT_MS = 10_000
 MAX_TARGET_CHARACTERS = 2_048
+ELEVATED_TERMINAL_PROTOCOL = "salty-steak-elevated-terminal-v1"
+MAX_ELEVATED_RESULT_BYTES = 12 * 1024 * 1024
 
 MAX_FILE_READ_CHARACTERS = 40_000
 
@@ -277,7 +280,10 @@ class AutomationBroker:
                 "filesystem_sandbox_enforced": False,
                 "executable_allowlist_enforced": False,
                 "command_network_isolation_enforced": False,
-                "requested_process_runs_as_current_user": True,
+                "requested_process_runs_as_current_user": "unless_full_access_requests_elevation",
+                "full_access_can_request_process_elevation": True,
+                "elevation_requires_windows_uac": True,
+                "desktop_ui_process_is_elevated": False,
                 "requested_process_inherits_host_environment": True,
                 "process_tree_termination": "windows_job_object_when_available_otherwise_parent_process",
                 "screen_capture_scope": "primary_screen_only",
@@ -465,7 +471,9 @@ class AutomationBroker:
             elif capability == FILES_CAPABILITY:
                 result = self._invoke_files(audit_id, arguments, authority_mode)
             else:
-                result = self._invoke_application_launch(audit_id, arguments)
+                result = self._invoke_application_launch(
+                    audit_id, arguments, authority_mode
+                )
             outcome = str(result["status"])
             self._finish_audit(audit_id, outcome=outcome, result=result)
             return result
@@ -832,6 +840,14 @@ class AutomationBroker:
     ) -> dict[str, Any]:
         self._only_fields(arguments, CAPABILITY_FIELDS[TERMINAL_CAPABILITY])
         argv = self._argv(arguments.get("argv"))
+        elevated_value = arguments.get("elevated", False)
+        if not isinstance(elevated_value, bool):
+            raise ValueError("Terminal elevated must be true or false")
+        elevated = bool(elevated_value)
+        if elevated and authority_mode != "full_access":
+            raise PermissionError(
+                "Administrator terminal execution requires Full access"
+            )
         allowed_root = self._project_directory(constraints["working_directory_root"])
 
 
@@ -857,7 +873,11 @@ class AutomationBroker:
             raise ValueError(
                 f"Terminal timeout_seconds must be between 0.05 and {self.max_timeout_seconds:g}"
             )
-        executable = self._resolve_executable(argv[0], working_directory, allowed_root)
+        executable = self._resolve_executable(
+            argv[0],
+            working_directory,
+            None if unconfined else allowed_root,
+        )
         executed_argv = [str(executable), *argv[1:]]
         child_environment = os.environ.copy()
 
@@ -869,6 +889,15 @@ class AutomationBroker:
         )
 
         started = time.monotonic()
+        if elevated:
+            return self._invoke_elevated_terminal(
+                audit_id=audit_id,
+                requested_argv=argv,
+                executed_argv=executed_argv,
+                working_directory=working_directory,
+                timeout_seconds=timeout_seconds,
+                started=started,
+            )
         creationflags = (
             getattr(subprocess, "CREATE_NO_WINDOW", 0)
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -884,6 +913,7 @@ class AutomationBroker:
                     working_directory,
                     timeout_seconds,
                     started,
+                    elevated_requested=False,
                 )
             process = subprocess.Popen(
                 executed_argv,
@@ -961,6 +991,9 @@ class AutomationBroker:
             "executed_argv": executed_argv,
             "working_directory": str(working_directory),
             "shell": False,
+            "elevation_requested": False,
+            "process_elevated": _is_process_elevated(),
+            "elevation_backend": None,
             "timeout_seconds": timeout_seconds,
             "timed_out": timed_out,
             "exit_code": exit_code,
@@ -968,6 +1001,159 @@ class AutomationBroker:
             "stdout": _public_output(stdout_capture),
             "stderr": _public_output(stderr_capture),
         }
+
+    def _invoke_elevated_terminal(
+        self,
+        *,
+        audit_id: str,
+        requested_argv: list[str],
+        executed_argv: list[str],
+        working_directory: Path,
+        timeout_seconds: float,
+        started: float,
+    ) -> dict[str, Any]:
+        """Run one argv-only command through a nonce-bound administrator worker."""
+
+        with self._lock:
+            if audit_id in self._revoked_invocations:
+                return self._revoked_terminal_result(
+                    audit_id,
+                    requested_argv,
+                    executed_argv,
+                    working_directory,
+                    timeout_seconds,
+                    started,
+                    elevated_requested=True,
+                )
+
+        private_python, worker = _elevated_terminal_runtime(self.package_root)
+        coordination_root = (self.artifact_root / "elevated-terminal").resolve()
+        ensure_within(coordination_root, self.artifact_root)
+        coordination_root.mkdir(parents=True, exist_ok=True)
+        nonce = hashlib.sha256(
+            f"{audit_id}:{os.getpid()}:{time.time_ns()}".encode("utf-8")
+        ).hexdigest()
+        request_path = coordination_root / f"{audit_id}-{nonce}.request.json"
+        result_path = coordination_root / f"{audit_id}-{nonce}.result.json"
+        cancel_path = coordination_root / f"{audit_id}-{nonce}.cancel"
+        worker_sha256 = sha256_file(worker)
+        request_payload = {
+            "protocol": ELEVATED_TERMINAL_PROTOCOL,
+            "nonce": nonce,
+            "argv": executed_argv,
+            "working_directory": str(working_directory),
+            "timeout_seconds": timeout_seconds,
+            "max_output_bytes": self.max_output_bytes,
+            "result_path": str(result_path),
+            "cancel_path": str(cancel_path),
+        }
+        request_bytes = json.dumps(
+            request_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        request_sha256 = hashlib.sha256(request_bytes).hexdigest()
+        atomic_write_bytes(request_path, request_bytes)
+        parameters = subprocess.list2cmdline(
+            [
+                "-I",
+                str(worker),
+                "--worker-sha256",
+                worker_sha256,
+                "--request",
+                str(request_path),
+                "--request-sha256",
+                request_sha256,
+            ]
+        )
+        process: _ShellExecuteProcess | None = None
+        wrapper_exit_code: int | None = None
+        try:
+            process = _shell_execute_process(
+                str(private_python),
+                parameters,
+                str(self.package_root),
+                verb="runas",
+                cancel_path=cancel_path,
+            )
+            with self._lock:
+                self._active[audit_id] = (TERMINAL_CAPABILITY, process)
+                if audit_id in self._revoked_invocations:
+                    process.kill()
+            try:
+                wrapper_exit_code = process.wait(timeout=timeout_seconds + 15)
+            except subprocess.TimeoutExpired as exc:
+                process.kill()
+                try:
+                    wrapper_exit_code = process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.force_kill()
+                    raise TimeoutError(
+                        "Elevated terminal worker did not stop after its timeout"
+                    ) from exc
+            if not result_path.is_file():
+                raise RuntimeError(
+                    "Elevated terminal worker returned no authenticated result "
+                    f"(exit code {wrapper_exit_code})"
+                )
+            raw_result = result_path.read_bytes()
+            if not raw_result or len(raw_result) > MAX_ELEVATED_RESULT_BYTES:
+                raise RuntimeError("Elevated terminal result size is invalid")
+            worker_result = json.loads(raw_result.decode("utf-8"))
+            if (
+                not isinstance(worker_result, Mapping)
+                or worker_result.get("protocol") != ELEVATED_TERMINAL_PROTOCOL
+                or worker_result.get("nonce") != nonce
+            ):
+                raise PermissionError("Elevated terminal result authentication failed")
+            worker_error = worker_result.get("worker_error")
+            if isinstance(worker_error, Mapping):
+                raise RuntimeError(
+                    "Elevated terminal worker failed: "
+                    + str(worker_error.get("message") or worker_error.get("type") or "unknown error")
+                )
+            if worker_result.get("process_elevated") is not True:
+                raise PermissionError(
+                    "Windows did not grant administrator rights to the terminal worker"
+                )
+            status = str(worker_result.get("status") or "failed")
+            if status not in {"succeeded", "failed", "timed_out", "revoked"}:
+                raise RuntimeError(f"Elevated terminal worker returned invalid status: {status}")
+            with self._lock:
+                if audit_id in self._revoked_invocations:
+                    status = "revoked"
+            return {
+                "schema": AUTOMATION_SCHEMA,
+                "audit_record_id": audit_id,
+                "capability": TERMINAL_CAPABILITY,
+                "status": status,
+                "requested_argv": requested_argv,
+                "executed_argv": executed_argv,
+                "working_directory": str(working_directory),
+                "shell": False,
+                "elevation_requested": True,
+                "process_elevated": True,
+                "elevation_backend": "windows_runas_worker",
+                "timeout_seconds": timeout_seconds,
+                "timed_out": status == "timed_out",
+                "exit_code": _optional_int(worker_result.get("exit_code")),
+                "duration_ms": float(
+                    worker_result.get("duration_ms")
+                    or round((time.monotonic() - started) * 1000, 3)
+                ),
+                "stdout": _validated_worker_output(worker_result.get("stdout")),
+                "stderr": _validated_worker_output(worker_result.get("stderr")),
+                "worker_exit_code": wrapper_exit_code,
+            }
+        finally:
+            if process is not None:
+                process.close()
+            for path in (request_path, result_path, cancel_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def _revoked_terminal_result(
         self,
@@ -977,6 +1163,7 @@ class AutomationBroker:
         working_directory: Path,
         timeout_seconds: float,
         started: float,
+        elevated_requested: bool = False,
     ) -> dict[str, Any]:
         empty = _empty_output()
         return {
@@ -988,6 +1175,9 @@ class AutomationBroker:
             "executed_argv": executed_argv,
             "working_directory": str(working_directory),
             "shell": False,
+            "elevation_requested": elevated_requested,
+            "process_elevated": False,
+            "elevation_backend": "windows_runas_worker" if elevated_requested else None,
             "timeout_seconds": timeout_seconds,
             "timed_out": False,
             "exit_code": None,
@@ -1435,11 +1625,20 @@ class AutomationBroker:
         self,
         audit_id: str,
         arguments: Mapping[str, Any],
+        authority_mode: str = "ask_every_time",
     ) -> dict[str, Any]:
         """Open an installed application, a link, or a file with its handler."""
 
         self._only_fields(arguments, CAPABILITY_FIELDS[APPLICATION_LAUNCH_CAPABILITY])
         target, resolution = _resolve_launch_target(arguments.get("target"))
+        elevate_value = arguments.get("elevate", False)
+        if not isinstance(elevate_value, bool):
+            raise ValueError("Launch elevate must be true or false")
+        elevate = bool(elevate_value)
+        if elevate and authority_mode != "full_access":
+            raise PermissionError("Administrator application launch requires Full access")
+        if elevate and resolution == "url":
+            raise ValueError("Web links cannot be launched with administrator rights")
         launch_arguments = arguments.get("arguments")
         if launch_arguments is not None:
             if not isinstance(launch_arguments, str):
@@ -1463,8 +1662,17 @@ class AutomationBroker:
                     "capability": APPLICATION_LAUNCH_CAPABILITY,
                     "status": "revoked",
                     "target": target,
+                    "elevation_requested": elevate,
+                    "process_elevated": False,
+                    "elevation_backend": "windows_runas" if elevate else None,
                 }
-        outcome = _shell_execute(target, launch_arguments)
+        process_id: int | None = None
+        if elevate:
+            elevated_outcome = _shell_execute_elevated(target, launch_arguments)
+            outcome = int(elevated_outcome["shell_execute_result"])
+            process_id = _optional_int(elevated_outcome.get("process_id"))
+        else:
+            outcome = _shell_execute(target, launch_arguments)
 
 
         if outcome <= 32:
@@ -1485,6 +1693,10 @@ class AutomationBroker:
             "arguments": launch_arguments,
             "wait_ms": wait_value,
             "shell_execute_result": outcome,
+            "process_id": process_id,
+            "elevation_requested": elevate,
+            "process_elevated": elevate,
+            "elevation_backend": "windows_runas" if elevate else None,
             "waited_for_exit": False,
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
         }
@@ -1628,7 +1840,7 @@ class AutomationBroker:
     def _resolve_executable(
         value: str,
         working_directory: Path,
-        allowed_root: Path,
+        allowed_root: Path | None,
     ) -> Path:
         candidate = Path(value)
         has_path = candidate.is_absolute() or bool(candidate.drive) or any(
@@ -1641,7 +1853,7 @@ class AutomationBroker:
             resolved = (
                 candidate if candidate.is_absolute() else working_directory / candidate
             ).resolve(strict=True)
-            if relative:
+            if relative and allowed_root is not None:
                 ensure_within(resolved, allowed_root)
         else:
             located = shutil.which(value)
@@ -1855,6 +2067,55 @@ def _public_output(capture: Mapping[str, Any]) -> dict[str, Any]:
         "truncated": bool(capture["truncated"]),
         "sha256": str(capture["sha256"]),
     }
+
+
+def _validated_worker_output(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise RuntimeError("Elevated terminal worker omitted captured output")
+    try:
+        retained = base64.b64decode(str(value["retained_base64"]), validate=True)
+        bytes_total = int(value["bytes_total"])
+        bytes_retained = int(value["bytes_retained"])
+        digest = str(value["sha256"])
+        text = str(value["text"])
+        encoding = str(value["encoding"])
+        truncated = bool(value["truncated"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("Elevated terminal output payload is invalid") from exc
+    if (
+        bytes_total < 0
+        or bytes_retained != len(retained)
+        or bytes_retained > DEFAULT_OUTPUT_BYTES
+        or bytes_total < bytes_retained
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+        or encoding != "utf-8_with_replacement"
+        or truncated != (bytes_total > bytes_retained)
+        or text != retained.decode("utf-8", errors="replace")
+    ):
+        raise RuntimeError("Elevated terminal output payload failed validation")
+    if not truncated and hashlib.sha256(retained).hexdigest() != digest:
+        raise RuntimeError("Elevated terminal output digest is invalid")
+    return {
+        "text": text,
+        "retained_base64": str(value["retained_base64"]),
+        "encoding": encoding,
+        "bytes_total": bytes_total,
+        "bytes_retained": bytes_retained,
+        "truncated": truncated,
+        "sha256": digest,
+    }
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise RuntimeError("Elevated terminal exit code is invalid")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Elevated terminal exit code is invalid") from exc
 
 
 def _existing_path(value: object, *, must_exist: bool = True) -> Path:
@@ -2533,6 +2794,200 @@ def _resolve_launch_target(value: object) -> tuple[str, str]:
     if registered:
         return registered, "app_paths_registry"
     raise FileNotFoundError(f"No installed application matches: {target}")
+
+
+def _elevated_terminal_runtime(package_root: Path) -> tuple[Path, Path]:
+    root = package_root.resolve()
+    worker = (root / "app" / "backend" / "automation" / "elevated_terminal_worker.py").resolve()
+    ensure_within(worker, root)
+    if not worker.is_file():
+        raise RuntimeError("The elevated terminal worker is not part of this build")
+    candidates = (
+        root / ".venv" / "Scripts" / "python.exe",
+        root / ".python" / "python.exe",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve(), worker
+    raise RuntimeError("The private Python interpreter for elevated commands is missing")
+
+
+def _is_process_elevated() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        return bool(ctypes.WinDLL("shell32", use_last_error=True).IsUserAnAdmin())
+    except OSError:
+        return False
+
+
+class _ShellExecuteProcess:
+    """Waitable process handle returned by ShellExecuteExW."""
+
+    def __init__(
+        self,
+        handle: int,
+        *,
+        process_id: int | None,
+        shell_execute_result: int,
+        cancel_path: Path | None,
+    ) -> None:
+        self.handle = int(handle)
+        self.pid = process_id
+        self.shell_execute_result = int(shell_execute_result)
+        self.cancel_path = cancel_path
+
+    def poll(self) -> int | None:
+        if not self.handle:
+            return 0
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        outcome = int(kernel32.WaitForSingleObject(wintypes.HANDLE(self.handle), 0))
+        if outcome == 0x00000102:
+            return None
+        if outcome != 0:
+            raise OSError(ctypes.get_last_error(), "Could not poll elevated process")
+        return self._exit_code()
+
+    def wait(self, timeout: float | None = None) -> int:
+        if not self.handle:
+            return 0
+        milliseconds = 0xFFFFFFFF if timeout is None else max(0, int(timeout * 1000))
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        outcome = int(
+            kernel32.WaitForSingleObject(
+                wintypes.HANDLE(self.handle), wintypes.DWORD(milliseconds)
+            )
+        )
+        if outcome == 0x00000102:
+            raise subprocess.TimeoutExpired("elevated terminal worker", timeout)
+        if outcome != 0:
+            raise OSError(ctypes.get_last_error(), "Could not wait for elevated process")
+        return self._exit_code()
+
+    def _exit_code(self) -> int:
+        exit_code = wintypes.DWORD(0)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetExitCodeProcess.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        if not kernel32.GetExitCodeProcess(
+            wintypes.HANDLE(self.handle), ctypes.byref(exit_code)
+        ):
+            raise OSError(ctypes.get_last_error(), "Could not read elevated process exit code")
+        return int(exit_code.value)
+
+    def kill(self) -> None:
+        if self.cancel_path is not None:
+            try:
+                atomic_write_bytes(self.cancel_path, b"cancel\n")
+                return
+            except OSError:
+                pass
+        self.force_kill()
+
+    def force_kill(self) -> None:
+        if not self.handle or self.poll() is not None:
+            return
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateProcess.restype = wintypes.BOOL
+        if not kernel32.TerminateProcess(wintypes.HANDLE(self.handle), 1):
+            raise OSError(ctypes.get_last_error(), "Could not terminate elevated process")
+
+    def close(self) -> None:
+        if not self.handle:
+            return
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle(wintypes.HANDLE(self.handle))
+        self.handle = 0
+
+
+class _ShellExecuteInfo(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("fMask", wintypes.ULONG),
+        ("hwnd", wintypes.HWND),
+        ("lpVerb", wintypes.LPCWSTR),
+        ("lpFile", wintypes.LPCWSTR),
+        ("lpParameters", wintypes.LPCWSTR),
+        ("lpDirectory", wintypes.LPCWSTR),
+        ("nShow", ctypes.c_int),
+        ("hInstApp", wintypes.HINSTANCE),
+        ("lpIDList", wintypes.LPVOID),
+        ("lpClass", wintypes.LPCWSTR),
+        ("hkeyClass", wintypes.HKEY),
+        ("dwHotKey", wintypes.DWORD),
+        ("hIcon", wintypes.HANDLE),
+        ("hProcess", wintypes.HANDLE),
+    ]
+
+
+def _shell_execute_process(
+    target: str,
+    arguments: str | None,
+    working_directory: str | None,
+    *,
+    verb: str,
+    cancel_path: Path | None = None,
+    show_window: int = 0,
+) -> _ShellExecuteProcess:
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(_ShellExecuteInfo)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    information = _ShellExecuteInfo()
+    information.cbSize = ctypes.sizeof(information)
+    information.fMask = 0x00000040 | 0x00000100
+    information.lpVerb = verb
+    information.lpFile = target
+    information.lpParameters = arguments
+    information.lpDirectory = working_directory
+    information.nShow = int(show_window)
+    if not shell32.ShellExecuteExW(ctypes.byref(information)):
+        error = ctypes.get_last_error()
+        if error == 1223:
+            raise PermissionError("Windows administrator consent was cancelled")
+        if error == 5:
+            raise PermissionError("Windows denied administrator process launch")
+        raise OSError(error, ctypes.WinError(error).strerror)
+    handle = int(ctypes.cast(information.hProcess, ctypes.c_void_p).value or 0)
+    if not handle:
+        raise RuntimeError("Windows returned no process handle for administrator launch")
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetProcessId.argtypes = [wintypes.HANDLE]
+    kernel32.GetProcessId.restype = wintypes.DWORD
+    process_id = int(kernel32.GetProcessId(wintypes.HANDLE(handle))) or None
+    raw_result = int(ctypes.cast(information.hInstApp, ctypes.c_void_p).value or 0)
+    return _ShellExecuteProcess(
+        handle,
+        process_id=process_id,
+        shell_execute_result=raw_result,
+        cancel_path=cancel_path,
+    )
+
+
+def _shell_execute_elevated(target: str, arguments: str | None) -> dict[str, Any]:
+    process = _shell_execute_process(
+        target,
+        arguments,
+        None,
+        verb="runas",
+        show_window=1,
+    )
+    try:
+        return {
+            "shell_execute_result": process.shell_execute_result,
+            "process_id": process.pid,
+        }
+    finally:
+        process.close()
 
 
 def _shell_execute(target: str, arguments: str | None) -> int:

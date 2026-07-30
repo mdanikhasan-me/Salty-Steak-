@@ -112,6 +112,20 @@
 .response-settings-sheet__advanced-row > span { display: grid; gap: 1px; }
 .response-settings-sheet__advanced-row > span small { color: var(--r18-muted, #9b9690); font-size: 10px; font-weight: 400; }
 
+.response-settings-sheet__trace-toggle {
+  display: grid;
+  min-height: 58px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--r18-line, rgb(255 255 255 / 7%));
+}
+.response-settings-sheet__trace-toggle > span { display: grid; gap: 2px; }
+.response-settings-sheet__trace-toggle strong { color: var(--r18-text-soft, #d4d0ca); font-size: 12px; font-weight: 560; }
+.response-settings-sheet__trace-toggle small { color: var(--r18-muted, #9b9690); font-size: 10.5px; line-height: 1.4; }
+.response-settings-sheet__trace-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--r18-accent, #b47a58); }
+
 .response-settings-sheet__instruction { display: grid; gap: 7px; padding: 13px 0 1px; }
 .response-settings-sheet__instruction > span { color: var(--r18-text-soft, #d4d0ca); font-size: 12px; font-weight: 560; }
 .response-settings-sheet__instruction textarea { min-height: 82px; padding: 8px 9px; resize: vertical; font-size: 12px; line-height: 1.45; }

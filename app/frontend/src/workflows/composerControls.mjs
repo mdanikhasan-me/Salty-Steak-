@@ -17,7 +17,7 @@ export const COMPUTER_AUTHORITY_MODES = Object.freeze([
     id: "full_access",
     label: "Full access",
     controlLabel: "Full access",
-    description: "Run explicit computer actions immediately with a local audit trail.",
+    description: "Run computer actions immediately, including administrator actions through Windows UAC, with a local audit trail.",
   }),
 ]);
 
@@ -39,13 +39,13 @@ export const COOKING_MODES = Object.freeze([
     id: "instant",
     label: "Instant",
     controlLabel: "Instant",
-    description: "Direct answer mode. The native template closes the extended thinking pass.",
+    description: "Direct answers; with Research on, run focused research for up to five minutes.",
   }),
   Object.freeze({
     id: "cooking",
     controlLabel: "Cooking",
     label: "Cooking",
-    description: "Deliberate mode. The native template leaves the thinking pass open before the final answer.",
+    description: "Deliberate answers; with Research on, validate iteratively with a hard four-hour ceiling.",
   }),
 ]);
 
@@ -90,6 +90,12 @@ export function cookingModeLabel(value) {
   return selected?.controlLabel || "Instant";
 }
 
+export function normaliseReasoningVisibility(value) {
+  return String(value || "").trim().toLowerCase() === "raw_local"
+    ? "raw_local"
+    : "summaries";
+}
+
 export function normaliseContextWindowTokens(value, fallback = 32_768) {
   const candidate = Number(value);
   if (CONTEXT_WINDOW_PRESETS.some((preset) => preset.tokens === candidate)) return candidate;
@@ -121,6 +127,7 @@ const GENERATION_SETTING_KEYS = Object.freeze([
   "repetition_penalty",
   "seed",
   "reasoning_mode",
+  "reasoning_visibility",
   "web_search_enabled",
   "system_prompt",
   "stop_sequences",
@@ -157,6 +164,9 @@ export function normaliseGenerationSettingsSnapshot(value, defaults = {}) {
       : 8_192;
   }
   settings.reasoning_mode = normaliseCookingMode(merged.reasoning_mode);
+  settings.reasoning_visibility = normaliseReasoningVisibility(
+    merged.reasoning_visibility,
+  );
   settings.web_search_enabled = Boolean(merged.web_search_enabled);
   settings.system_prompt = String(merged.system_prompt || "");
   settings.stop_sequences = Array.isArray(merged.stop_sequences)

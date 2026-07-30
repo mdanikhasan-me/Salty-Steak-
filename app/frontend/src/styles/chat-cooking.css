@@ -247,6 +247,16 @@ button.cooking-status:focus-visible,
 }
 
 .cooking-activity__section-title > svg { width: 15px; height: 15px; color: var(--r18-accent, var(--accent)); }
+.cooking-activity__journal { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--r18-line, var(--line)); }
+.cooking-activity__journal ol { display: grid; gap: 0; padding: 0; margin: 0; list-style: none; }
+.cooking-activity__journal li { display: grid; min-width: 0; grid-template-columns: 12px minmax(0, 1fr); gap: 9px; padding: 0 0 13px; }
+.cooking-activity__journal li:last-child { padding-bottom: 0; }
+.cooking-activity__journal-marker { width: 7px; height: 7px; margin-top: 5px; background: var(--r18-muted, var(--muted)); border: 1px solid var(--r18-line-strong, var(--line)); border-radius: 50%; }
+.cooking-activity__journal li[data-state="running"] .cooking-activity__journal-marker { background: var(--r18-accent, var(--accent)); }
+.cooking-activity__journal strong { display: block; color: var(--r18-text-soft, var(--ink-soft)); font-size: 12px; font-weight: 600; line-height: 1.4; }
+.cooking-activity__journal p { margin: 2px 0 0; color: var(--r18-muted, var(--muted)); font-size: 11.5px; line-height: 1.45; }
+.cooking-activity__journal small,
+.cooking-activity__trace > small { display: block; margin-top: 4px; color: var(--r18-muted, var(--muted)); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .cooking-activity__research { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--r18-line, var(--line)); }
 .cooking-activity__research ol { display: grid; gap: 7px; padding: 0 0 0 20px; margin: 0; }
 .cooking-activity__research li { min-width: 0; color: var(--r18-muted, var(--muted)); font-size: 11px; }
@@ -259,6 +269,11 @@ button.cooking-status:focus-visible,
   font-size: 12.5px;
   line-height: 1.58;
 }
+
+.cooking-activity__draft,
+.cooking-activity__raw { max-height: 260px; margin: 0; overflow-y: auto; white-space: pre-wrap; }
+.cooking-activity__trace--raw { padding-top: 14px; border-top: 1px solid var(--r18-line, var(--line)); }
+.cooking-activity__trace--raw .cooking-activity__content { color: var(--r18-text-soft, var(--ink-soft)); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 10.75px; }
 
 .cooking-activity__content.rich-text p,
 .cooking-activity__content.rich-text ul,
