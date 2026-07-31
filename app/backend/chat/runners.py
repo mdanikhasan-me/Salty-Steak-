@@ -27,6 +27,7 @@ from ..automation.credentials import redact
 from ..automation.routing import apply_argument_aliases
 
 from ..research import Budget, ResearchLoop
+from ..research.ledger import publisher_domain
 from ..workflow import Executor, WorkflowEngine, build_plan
 from ..workflow.plan import Plan, PlanError
 from .orchestrator import strip_reasoning
@@ -356,6 +357,11 @@ FINALISER_BASE_RULES = (
     "Answer the user's question using only the findings below. Write the "
     "answer itself in plain prose — do not describe the search, do not count "
     "sources, do not mention findings or claims. "
+    "Answer only what was asked; do not turn a narrow status question into a "
+    "list of adjacent features. Prefer fewer, stronger sources over a "
+    "long bibliography. Use no more than six source URLs unless the user asks "
+    "for more. Cite with inline Markdown links in the form [source](exact URL); "
+    "do not use numbered footnotes or bare URLs. "
     "Never combine parts of two different findings: if one finding names a "
     "thing and another names a number, they are not about each other unless a "
     "single finding says so. "
@@ -363,6 +369,17 @@ FINALISER_BASE_RULES = (
     "something that was asked for, say that they do not. "
     "If the findings disagree, say what the disagreement is. If they do not "
     "answer the question, say so plainly. "
+    "If the user asks you to identify disagreements and no supplied finding is "
+    "marked disputed, say that no material disagreement appeared in the "
+    "validated evidence. "
+    "Describe a disagreement only when both opposing findings and their source "
+    "records are supplied. For time-sensitive status questions, compare dates "
+    "and versions: an older page describing an earlier state is historical, "
+    "not automatically a current contradiction. Prefer primary or official "
+    "evidence for canonical status and use independent publishers to check it. "
+    "When the user requests an independent comparison and the findings provide "
+    "different publisher_domain values, cite at least two organisationally "
+    "independent publishers. Subdomains of one publisher are not independent. "
     "Cite factual statements with Markdown links from that finding's sources. "
     "Use only the exact source URLs supplied; never invent, repair, or guess a link."
 )
@@ -457,14 +474,157 @@ def finaliser_payload(
 
 
 _MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", re.IGNORECASE)
+_FOOTNOTE_DEFINITION = re.compile(
+    r"(?m)^\[\^([^\]]+)\]:\s*(https?://\S+)\s*$",
+    re.IGNORECASE,
+)
+_FOOTNOTE_MARKER = re.compile(r"\[\^([^\]]+)\]")
+
+_QUESTION_NOISE = frozenset(
+    """
+    about answer citations cite concise direct disagreement disagreements
+    fewer find findings give identify independent information more most
+    one prefer provide research result results source sources technical
+    using validate validated validation verification verify with
+    """.split()
+)
+_DIRECT_ANSWER_TERMS = frozenset(
+    {
+        "available",
+        "availability",
+        "current",
+        "invalid",
+        "latest",
+        "release",
+        "released",
+        "stable",
+        "status",
+        "valid",
+        "version",
+    }
+)
+_RESEARCH_BOILERPLATE = (
+    "call to action",
+    "enjoy the new release",
+    "for more details",
+    "more resources",
+    "online documentation",
+    "report bugs",
+    "see also",
+    "thanks to all",
+)
+
+
+def _question_terms(value: str) -> set[str]:
+    return {
+        word
+        for word in re.findall(r"[a-z0-9]+", str(value or "").casefold())
+        if len(word) > 1 and word not in _QUESTION_NOISE
+    }
+
+
+def _finding_rank(
+    question_terms: set[str], finding: Mapping[str, Any]
+) -> tuple[Any, ...]:
+    text = str(finding.get("text") or "")
+    text_terms = _question_terms(text)
+    overlap = len(question_terms & text_terms)
+    direct_overlap = len(question_terms & text_terms & _DIRECT_ANSWER_TERMS)
+    coverage = overlap / max(1, len(question_terms))
+    boilerplate = any(phrase in text.casefold() for phrase in _RESEARCH_BOILERPLATE)
+    return (
+        not boilerplate,
+        direct_overlap,
+        overlap,
+        coverage,
+        int(finding.get("independent_source_count") or 0),
+        int(finding.get("source_count") or 0),
+        float(finding.get("confidence") or 0.0),
+        -len(text_terms),
+    )
+
+
+def _select_finaliser_findings(
+    question: str,
+    findings: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 8,
+    disputed_limit: int = 1,
+) -> list[Mapping[str, Any]]:
+    """Keep the evidence packet focused while preserving relevant disputes."""
+
+    terms = _question_terms(question)
+    records = [item for item in findings if isinstance(item, Mapping)]
+    settled = sorted(
+        (item for item in records if not item.get("disputed")),
+        key=lambda item: _finding_rank(terms, item),
+        reverse=True,
+    )
+    disputed = sorted(
+        (item for item in records if item.get("disputed")),
+        key=lambda item: _finding_rank(terms, item),
+        reverse=True,
+    )
+    by_id = {
+        str(item.get("claim") or ""): item
+        for item in records
+        if str(item.get("claim") or "")
+    }
+    dispute_pairs: list[Mapping[str, Any]] = []
+    paired: set[str] = set()
+    direct_terms_requested = len(terms & _DIRECT_ANSWER_TERMS)
+    for item in disputed:
+        rank = _finding_rank(terms, item)
+        if not rank[0] or rank[2] <= 0:
+            continue
+        if direct_terms_requested > 1 and rank[1] < 2:
+            continue
+        opponents = [
+            by_id.get(str(identifier)) for identifier in item.get("contradicts") or []
+        ]
+        opponents = [
+            opponent
+            for opponent in opponents
+            if opponent is not None
+            and _finding_rank(terms, opponent)[0]
+            and _finding_rank(terms, opponent)[2] > 0
+            and not (
+                direct_terms_requested > 1
+                and _finding_rank(terms, opponent)[1] < 2
+            )
+        ]
+        if not opponents:
+            continue
+        opponent = max(opponents, key=lambda value: _finding_rank(terms, value))
+        pair_key = "|".join(
+            sorted(
+                (
+                    str(item.get("claim") or id(item)),
+                    str(opponent.get("claim") or id(opponent)),
+                )
+            )
+        )
+        if pair_key in paired:
+            continue
+        paired.add(pair_key)
+        dispute_pairs.extend((item, opponent))
+        if len(paired) >= max(0, int(disputed_limit)):
+            break
+    settled_limit = max(0, int(limit) - len(dispute_pairs))
+    selected = settled[:settled_limit] + dispute_pairs
+    return selected or records[: max(1, int(limit))]
+
+
+def _citation_key(url: str) -> str:
+    return str(url or "").split("#", 1)[0].rstrip("/.,;:)").casefold()
 
 
 def _validated_source_links(
     findings: Sequence[Mapping[str, Any]],
     *,
-    limit: int = 8,
+    limit: int = 6,
 ) -> list[tuple[str, str]]:
-    links: list[tuple[str, str]] = []
+    candidates: list[tuple[str, str]] = []
     seen: set[str] = set()
     for finding in findings:
         for source in finding.get("evidence") or finding.get("sources") or []:
@@ -473,14 +633,36 @@ def _validated_source_links(
             if str(source.get("validation") or "validated") != "validated":
                 continue
             url = str(source.get("url") or "").strip()
-            if not url.casefold().startswith(("http://", "https://")) or url in seen:
+            key = _citation_key(url)
+            if not url.casefold().startswith(("http://", "https://")) or key in seen:
                 continue
-            seen.add(url)
+            seen.add(key)
             title = " ".join(str(source.get("title") or source.get("domain") or url).split())
             title = title.replace("[", "").replace("]", "")[:100] or url
-            links.append((title, url))
-            if len(links) >= limit:
-                return links
+            candidates.append((title, url))
+
+
+
+
+    links: list[tuple[str, str]] = []
+    publishers: set[str] = set()
+    for title, url in candidates:
+        publisher = publisher_domain(url)
+        if publisher and publisher in publishers:
+            continue
+        links.append((title, url))
+        if publisher:
+            publishers.add(publisher)
+        if len(links) >= limit:
+            return links
+    selected = {_citation_key(url) for _title, url in links}
+    for title, url in candidates:
+        if _citation_key(url) in selected:
+            continue
+        links.append((title, url))
+        selected.add(_citation_key(url))
+        if len(links) >= limit:
+            break
     return links
 
 
@@ -493,20 +675,57 @@ def _attach_validated_citations(
     links = _validated_source_links(findings)
     if not links:
         return answer
-    allowed = {url for _title, url in links}
+    allowed = {_citation_key(url): url for _title, url in links}
     used: set[str] = set()
 
     def keep_known(match: re.Match[str]) -> str:
         label, url = match.group(1), match.group(2)
-        if url in allowed:
-            used.add(url)
+        key = _citation_key(url)
+        if key in allowed:
+            used.add(key)
             return match.group(0)
         return label
 
     safe = _MARKDOWN_LINK.sub(keep_known, str(answer or "").strip())
-    if used:
+
+
+
+
+    aliases: dict[str, str | None] = {}
+    first_label_for_url: dict[str, str] = {}
+
+    def keep_footnote(match: re.Match[str]) -> str:
+        label, url = match.group(1), match.group(2)
+        key = _citation_key(url)
+        if key not in allowed:
+            aliases[label] = None
+            return ""
+        if key in first_label_for_url:
+            aliases[label] = first_label_for_url[key]
+            return ""
+        first_label_for_url[key] = label
+        aliases[label] = label
+        used.add(key)
+        return f"[^{label}]: {allowed[key]}"
+
+    safe = _FOOTNOTE_DEFINITION.sub(keep_footnote, safe)
+
+    def repair_marker(match: re.Match[str]) -> str:
+        label = match.group(1)
+        if label not in aliases:
+            return match.group(0)
+        replacement = aliases[label]
+        return f"[^{replacement}]" if replacement else ""
+
+    safe = _FOOTNOTE_MARKER.sub(repair_marker, safe)
+    safe = re.sub(r"\n{3,}", "\n\n", safe).strip()
+
+    missing = [
+        (title, url) for title, url in links if _citation_key(url) not in used
+    ]
+    if not missing:
         return safe
-    citations = " ".join(f"[{title}]({url})" for title, url in links)
+    citations = " ".join(f"[{title}]({url})" for title, url in missing)
     return f"{safe}\n\nValidated sources: {citations}".strip()
 
 
@@ -1130,13 +1349,9 @@ class LiveRunners:
 
 
 
-        ordered = sorted(
-            claims,
-            key=lambda claim: (
-                bool(claim.get("disputed")),
-                -int(claim.get("source_count") or 0),
-            ),
-        )[:24]
+
+
+        ordered = _select_finaliser_findings(question, claims)
 
         if self.generate is not None:
             if self.task is not None:
@@ -1161,10 +1376,12 @@ class LiveRunners:
                                 evidence_limits=_evidence_limits(observations),
                                 findings=[
                                     {
+                                        "claim": claim.get("claim"),
                                         "text": claim.get("text"),
                                         "source_count": int(claim.get("source_count") or 0),
                                         "sources": list(claim.get("evidence") or []),
                                         "disputed": bool(claim.get("disputed")),
+                                        "contradicts": list(claim.get("contradicts") or []),
                                         "confidence": claim.get("confidence"),
                                         "validated": bool(claim.get("validated")),
                                         "independent_source_count": int(

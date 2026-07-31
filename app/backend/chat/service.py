@@ -324,6 +324,61 @@ def _turn_reached_outside(details: Mapping[str, Any]) -> bool:
     return bool(details.get("generated_image"))
 
 
+def _anchor_research_goal_spec(spec: Any, request: str) -> Any:
+    """Drop model-invented research predicates that the request never named.
+
+    The live compiler added a Unix installation path and two placeholder URLs
+    to a web-only Python release-status question. Those became impossible
+    requirements and made a fully cited research answer permanently
+    Incomplete. Research has its own post-retrieval evidence verifier; this
+    helper keeps only explicit, request-anchored extra requirements.
+    """
+
+    if spec is None:
+        return None
+    from .goal_state import Predicate
+
+    request_text = " ".join(str(request or "").casefold().split())
+    request_urls = {
+        match.rstrip("/.,;:)").casefold()
+        for match in re.findall(r"https?://[^\s)\]]+", str(request or ""), re.IGNORECASE)
+    }
+    anchored: list[Any] = []
+    for predicate in getattr(spec, "required", ()) or ():
+        kind = str(getattr(predicate, "kind", "")).strip().casefold()
+        subject = str(getattr(predicate, "subject", "")).strip()
+        subject_text = " ".join(subject.casefold().split())
+        if kind in {"active_url", "exact_page"}:
+            key = subject.rstrip("/.,;:)").casefold()
+            if key in request_urls:
+                anchored.append(
+                    Predicate(
+                        "exact_page",
+                        subject,
+                        detail=str(getattr(predicate, "detail", "")),
+                    )
+                )
+            continue
+        if kind == "stock_confirmed":
+            if subject_text and subject_text in request_text:
+                anchored.append(predicate)
+            continue
+        if kind in {"present", "absent"}:
+            literal = subject_text
+            for marker in ("*", "?", "["):
+                literal = literal.split(marker, 1)[0]
+            literal = literal.rstrip("\\/")
+            if literal and literal in request_text:
+                anchored.append(predicate)
+            continue
+
+
+
+
+    spec.required = tuple(anchored)
+    return spec
+
+
 def _checked_label_name(name: Any) -> str:
     checked = str(name or "").strip()
     if not checked:
@@ -4179,6 +4234,21 @@ class ChatService:
 
                         permission_scope=permission_scope,
                     )
+                    if str(permission_scope).startswith("research:"):
+                        spec = _anchor_research_goal_spec(spec, request)
+                        if not spec.required:
+                            attempts.append(
+                                {
+                                    "attempt": number,
+                                    "status": "research_evidence_verifier",
+                                    "required_count": 0,
+                                }
+                            )
+                            return None, {
+                                "status": "research_evidence_verifier",
+                                "attempt_count": number,
+                                "attempts": attempts,
+                            }
                     if spec.required:
                         attempts.append(
                             {

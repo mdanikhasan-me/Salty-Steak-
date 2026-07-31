@@ -33,6 +33,13 @@ DUPLICATE_THRESHOLD = 0.72
 
 
 
+
+
+CONTAINMENT_THRESHOLD = 0.75
+MIN_CONTAINED_WORDS = 4
+
+
+
 NOISE = frozenset(
     """
     the a an and or of to in on for is are was were be been it its this that
@@ -55,6 +62,22 @@ NUMBER_WORDS = {
 }
 
 
+
+
+DELEGATED_SUFFIX_LABELS = frozenset({"ac", "co", "com", "edu", "gov", "net", "org"})
+MULTI_TENANT_SUFFIXES = frozenset(
+    {
+        "blogspot.com",
+        "github.io",
+        "netlify.app",
+        "pages.dev",
+        "substack.com",
+        "vercel.app",
+        "wordpress.com",
+    }
+)
+
+
 def _words(text: str) -> set[str]:
     return {
         word
@@ -66,7 +89,15 @@ def _words(text: str) -> set[str]:
 def _numbers(text: str) -> set[str]:
     """Every value a statement asserts, in digits or in words."""
 
-    lowered = str(text).casefold()
+
+
+
+
+    lowered = re.sub(
+        r"\b\d+(?:\.\d+){1,3}\b",
+        " ",
+        str(text).casefold(),
+    )
     found = set(re.findall(r"\d+(?:[.,]\d+)?", lowered))
     found.update(word for word in re.findall(r"[a-z]+", lowered) if word in NUMBER_WORDS)
     return found
@@ -79,6 +110,48 @@ def similarity(left: str, right: str) -> float:
     if not first or not second:
         return 0.0
     return len(first & second) / len(first | second)
+
+
+def publisher_domain(value: str) -> str:
+    """Return the organisational domain used for independence checks.
+
+    ``docs.python.org`` and ``blog.python.org`` are separate hosts but not
+    independent publishers. Counting them twice caused the live research gate
+    to stop before it had found the independent technical source the user
+    explicitly requested.
+    """
+
+    raw = str(value or "").strip().casefold()
+    host = (urlsplit(raw).hostname or raw).strip(".")
+    if not host or ":" in host or re.fullmatch(r"\d+(?:\.\d+){3}", host):
+        return host
+    labels = [label for label in host.split(".") if label]
+    if len(labels) <= 2:
+        return host
+    suffix = ".".join(labels[-2:])
+    if suffix in MULTI_TENANT_SUFFIXES:
+        return ".".join(labels[-3:])
+    if len(labels[-1]) == 2 and labels[-2] in DELEGATED_SUFFIX_LABELS:
+        return ".".join(labels[-3:])
+    return suffix
+
+
+def _versions(text: str) -> set[str]:
+    return set(re.findall(r"\b\d+(?:\.\d+){1,3}\b", str(text).casefold()))
+
+
+def _same_statement(left: str, right: str) -> bool:
+    left_versions, right_versions = _versions(left), _versions(right)
+    if left_versions and right_versions and left_versions.isdisjoint(right_versions):
+        return False
+    first, second = _words(left), _words(right)
+    overlap = len(first & second)
+    if similarity(left, right) >= DUPLICATE_THRESHOLD:
+        return True
+    if overlap < MIN_CONTAINED_WORDS or not first or not second:
+        return False
+    containment = overlap / min(len(first), len(second))
+    return containment >= CONTAINMENT_THRESHOLD
 
 
 @dataclass
@@ -101,6 +174,10 @@ class Source:
     def domain(self) -> str:
         return (urlsplit(self.url).hostname or "").casefold()
 
+    @property
+    def publisher_domain(self) -> str:
+        return publisher_domain(self.domain)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "source": self.source_id,
@@ -111,6 +188,7 @@ class Source:
             "requested_url": self.requested_url or self.url,
             "validation": self.validation,
             "domain": self.domain,
+            "publisher_domain": self.publisher_domain,
             "content_sha256": self.content_sha256,
             "content_characters": self.content_characters,
         }
@@ -284,8 +362,7 @@ class ResearchLedger:
 
         text = " ".join(str(text).split())
         for existing in self.claims.values():
-            score = similarity(existing.text, text)
-            if score < DUPLICATE_THRESHOLD:
+            if not _same_statement(existing.text, text):
                 continue
             if self._conflicts(existing.text, text):
                 break
@@ -350,6 +427,19 @@ class ResearchLedger:
     def _conflicts(left: str, right: str) -> bool:
         """Whether two similar statements actually disagree."""
 
+        left_versions, right_versions = _versions(left), _versions(right)
+        if left_versions and right_versions and left_versions != right_versions:
+
+
+
+
+            current_words = {"current", "latest"}
+            if (
+                _words(left) & current_words
+                and _words(right) & current_words
+            ):
+                return True
+            return False
         left_numbers, right_numbers = _numbers(left), _numbers(right)
         if left_numbers and right_numbers and left_numbers != right_numbers:
 
@@ -367,9 +457,9 @@ class ResearchLedger:
 
     def independent_source_count(self, claim: Claim) -> int:
         domains = {
-            self.sources[source_id].domain
+            self.sources[source_id].publisher_domain
             for source_id in claim.sources
-            if source_id in self.sources and self.sources[source_id].domain
+            if source_id in self.sources and self.sources[source_id].publisher_domain
         }
         return len(domains)
 

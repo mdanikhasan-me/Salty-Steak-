@@ -27,6 +27,7 @@ code of zero does not mean the system changed.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -157,8 +158,89 @@ def _verify_research(
 
     from .goal_state import verify_predicates
 
-    verdict, evidence = verify_predicates(spec, _research_observer(orchestration))
-    return verdict, {**gathered, **evidence}
+    if spec is not None and getattr(spec, "required", ()):
+        verdict, evidence = verify_predicates(spec, _research_observer(orchestration))
+        return verdict, {**gathered, **evidence}
+
+
+
+
+
+
+
+    answer = str(orchestration.get("answer") or "").strip()
+    sources = [
+        source
+        for source in (orchestration.get("sources") or [])
+        if isinstance(source, Mapping)
+        and str(source.get("validation") or "validated") == "validated"
+        and str(source.get("url") or "").casefold().startswith(("http://", "https://"))
+    ]
+    stop_reason = str((report or {}).get("stop_reason") or "")
+    if not answer or not sources or stop_reason not in {
+        "evidence_sufficient",
+        "checkpoint_completed",
+    }:
+        return None, {
+            **gathered,
+            "reason": "no_required_predicates",
+            "validated_sources": len(sources),
+            "answer_present": bool(answer),
+        }
+
+    from ..research.ledger import publisher_domain
+
+    by_url = {
+        _research_url_key(str(source.get("url") or "")): source for source in sources
+    }
+    cited = {
+        _research_url_key(url)
+        for url in re.findall(r"https?://[^\s)\]]+", answer, flags=re.IGNORECASE)
+    }
+    unknown = sorted(url for url in cited if url not in by_url)
+    if unknown:
+        return False, {
+            **gathered,
+            "reason": "answer_cited_unvalidated_sources",
+            "unvalidated_citations": unknown[:10],
+        }
+    if not cited:
+        return None, {**gathered, "reason": "answer_has_no_validated_citations"}
+
+    source_publishers = {
+        publisher_domain(str(source.get("url") or "")) for source in sources
+    } - {""}
+    cited_publishers = {
+        publisher_domain(str(by_url[url].get("url") or ""))
+        for url in cited
+        if url in by_url
+    } - {""}
+    required_publishers = 2
+    if len(source_publishers) < required_publishers:
+        return None, {
+            **gathered,
+            "reason": "research_lacks_independent_sources",
+            "validated_publishers": len(source_publishers),
+        }
+    if len(cited_publishers) < required_publishers:
+        return None, {
+            **gathered,
+            "reason": "answer_lacks_independent_citations",
+            "validated_publishers": len(source_publishers),
+            "cited_publishers": len(cited_publishers),
+        }
+    return True, {
+        **gathered,
+        "reason": "validated_research_answer",
+        "validated_sources": len(sources),
+        "validated_publishers": len(source_publishers),
+        "citation_count": len(cited),
+        "cited_publishers": len(cited_publishers),
+    }
+
+
+def _research_url_key(value: str) -> str:
+    return str(value or "").split("#", 1)[0].rstrip("/.,;:").casefold()
 
 
 def _research_observer(orchestration: Mapping[str, Any]):
@@ -173,6 +255,12 @@ def _research_observer(orchestration: Mapping[str, Any]):
     observations = [
         item for item in (orchestration.get("observations") or []) if isinstance(item, Mapping)
     ]
+    validated_source_urls = {
+        _research_url_key(str(item.get("url") or ""))
+        for item in (orchestration.get("sources") or [])
+        if isinstance(item, Mapping)
+        and str(item.get("validation") or "validated") == "validated"
+    }
 
     def observe(predicate: Any) -> bool | None:
         kind = str(getattr(predicate, "kind", ""))
@@ -180,10 +268,11 @@ def _research_observer(orchestration: Mapping[str, Any]):
         if kind == "exact_page":
 
 
-            return any(
+            observed = any(
                 subject and subject == str(item.get("url") or "").strip().casefold()
                 for item in observations
             )
+            return observed or _research_url_key(subject) in validated_source_urls
         if kind == "stock_confirmed":
 
 
