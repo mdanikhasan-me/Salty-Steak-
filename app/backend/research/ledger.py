@@ -78,6 +78,21 @@ MULTI_TENANT_SUFFIXES = frozenset(
 )
 
 
+
+
+
+
+
+NON_EDITORIAL_PUBLISHERS = frozenset(
+    {
+        "github.com",
+        "githubusercontent.com",
+        "scribd.com",
+        "slideshare.net",
+    }
+)
+
+
 def _words(text: str) -> set[str]:
     return {
         word
@@ -136,6 +151,36 @@ def publisher_domain(value: str) -> str:
     return suffix
 
 
+def independence_key(value: str, *, title: str = "") -> str:
+    """Return the publisher identity that can count as independent evidence.
+
+    The visible host remains available through :func:`publisher_domain`.  This
+    stricter identity is only for corroboration and completion gates.  A mirror
+    whose title explicitly attributes another domain is assigned to that
+    origin, while generic code/document hosts do not masquerade as editorially
+    independent publishers.
+    """
+
+    base = publisher_domain(value)
+    written_title = str(title or "")
+    tail = written_title.rsplit("|", 1)[-1]
+    attributed = (
+        re.findall(
+            r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b",
+            tail.casefold(),
+        )
+        if "|" in written_title
+        else []
+    )
+    if attributed:
+        origin = publisher_domain(attributed[-1])
+        if origin:
+            return origin
+    if base in NON_EDITORIAL_PUBLISHERS:
+        return ""
+    return base
+
+
 def _versions(text: str) -> set[str]:
     return set(re.findall(r"\b\d+(?:\.\d+){1,3}\b", str(text).casefold()))
 
@@ -178,6 +223,10 @@ class Source:
     def publisher_domain(self) -> str:
         return publisher_domain(self.domain)
 
+    @property
+    def independence_key(self) -> str:
+        return independence_key(self.url, title=self.title)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "source": self.source_id,
@@ -189,6 +238,7 @@ class Source:
             "validation": self.validation,
             "domain": self.domain,
             "publisher_domain": self.publisher_domain,
+            "independence_key": self.independence_key,
             "content_sha256": self.content_sha256,
             "content_characters": self.content_characters,
         }
@@ -234,6 +284,9 @@ class Budget:
     max_queries: int = 6
     max_seconds: float = 300.0
 
+
+    max_sources_per_query: int = 8
+
     coverage_target: int = 5
 
     barren_limit: int = 2
@@ -252,6 +305,7 @@ class Budget:
                 max_sources=4096,
                 max_queries=1024,
                 max_seconds=14_400.0,
+                max_sources_per_query=8,
                 coverage_target=12,
                 barren_limit=12,
                 min_independent_sources=2,
@@ -263,6 +317,7 @@ class Budget:
                 max_sources=64,
                 max_queries=24,
                 max_seconds=300.0,
+                max_sources_per_query=5,
                 coverage_target=6,
                 barren_limit=5,
                 min_independent_sources=2,
@@ -273,6 +328,7 @@ class Budget:
             max_sources=16,
             max_queries=8,
             max_seconds=180.0,
+            max_sources_per_query=4,
             coverage_target=2,
             barren_limit=3,
             min_independent_sources=2,
@@ -457,11 +513,26 @@ class ResearchLedger:
 
     def independent_source_count(self, claim: Claim) -> int:
         domains = {
-            self.sources[source_id].publisher_domain
+            self.sources[source_id].independence_key
             for source_id in claim.sources
-            if source_id in self.sources and self.sources[source_id].publisher_domain
+            if source_id in self.sources and self.sources[source_id].independence_key
         }
         return len(domains)
+
+    @property
+    def evidence_publishers(self) -> set[str]:
+        """Editorial publishers that contributed at least one extracted claim."""
+
+        contributing = {
+            source_id
+            for claim in self.claims.values()
+            for source_id in claim.sources
+        }
+        return {
+            self.sources[source_id].independence_key
+            for source_id in contributing
+            if source_id in self.sources and self.sources[source_id].independence_key
+        }
 
     @property
     def corroborated_claims(self) -> list[Claim]:
@@ -483,8 +554,16 @@ class ResearchLedger:
 
         if self.elapsed_seconds >= self.budget.max_seconds:
             return True, "time_budget"
-        if (
+        enough_claim_evidence = (
             len(self.corroborated_claims) >= self.budget.coverage_target
+            or (
+                len(self.claims) >= self.budget.coverage_target
+                and len(self.evidence_publishers)
+                >= max(2, int(self.budget.min_independent_sources))
+            )
+        )
+        if (
+            enough_claim_evidence
             and self.validation_rounds_completed >= self.budget.validation_rounds
         ):
             return True, "evidence_sufficient"
@@ -538,6 +617,7 @@ class ResearchLedger:
             "source_count": len(self.sources),
             "claim_count": len(self.claims),
             "corroborated": len(self.corroborated_claims),
+            "independent_publisher_count": len(self.evidence_publishers),
             "disputed": len(self.disputed_claims),
             "open_questions": list(self.open_questions),
             "stopped": stop,
@@ -650,5 +730,7 @@ __all__ = [
     "LEDGER_SCHEMA",
     "ResearchLedger",
     "Source",
+    "independence_key",
+    "publisher_domain",
     "similarity",
 ]

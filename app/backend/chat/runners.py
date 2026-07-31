@@ -27,7 +27,7 @@ from ..automation.credentials import redact
 from ..automation.routing import apply_argument_aliases
 
 from ..research import Budget, ResearchLoop
-from ..research.ledger import publisher_domain
+from ..research.ledger import independence_key
 from ..workflow import Executor, WorkflowEngine, build_plan
 from ..workflow.plan import Plan, PlanError
 from .orchestrator import strip_reasoning
@@ -515,6 +515,23 @@ _RESEARCH_BOILERPLATE = (
 )
 
 
+def _is_research_boilerplate(value: str) -> bool:
+    """Recognise navigation/document metadata that resembles a status answer."""
+
+    text = " ".join(str(value or "").casefold().split())
+    if any(phrase in text for phrase in _RESEARCH_BOILERPLATE):
+        return True
+    if "page source" in text or "contents abstract" in text:
+        return True
+
+
+    return (
+        "status:" in text
+        and ("type:" in text or "typ:" in text)
+        and ("title:" in text or "pep index" in text)
+    )
+
+
 def _question_terms(value: str) -> set[str]:
     return {
         word
@@ -531,7 +548,7 @@ def _finding_rank(
     overlap = len(question_terms & text_terms)
     direct_overlap = len(question_terms & text_terms & _DIRECT_ANSWER_TERMS)
     coverage = overlap / max(1, len(question_terms))
-    boilerplate = any(phrase in text.casefold() for phrase in _RESEARCH_BOILERPLATE)
+    boilerplate = _is_research_boilerplate(text)
     return (
         not boilerplate,
         direct_overlap,
@@ -622,12 +639,20 @@ def _citation_key(url: str) -> str:
 def _validated_source_links(
     findings: Sequence[Mapping[str, Any]],
     *,
-    limit: int = 6,
+    sources: Sequence[Mapping[str, Any]] = (),
+    question: str = "",
+    limit: int = 3,
 ) -> list[tuple[str, str]]:
-    candidates: list[tuple[str, str]] = []
+    candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for finding in findings:
-        for source in finding.get("evidence") or finding.get("sources") or []:
+    source_groups: list[Sequence[Mapping[str, Any]]] = [sources]
+    source_groups.extend(
+        finding.get("evidence") or finding.get("sources") or []
+        for finding in findings
+        if isinstance(finding, Mapping)
+    )
+    for group in source_groups:
+        for source in group:
             if not isinstance(source, Mapping):
                 continue
             if str(source.get("validation") or "validated") != "validated":
@@ -639,15 +664,40 @@ def _validated_source_links(
             seen.add(key)
             title = " ".join(str(source.get("title") or source.get("domain") or url).split())
             title = title.replace("[", "").replace("]", "")[:100] or url
-            candidates.append((title, url))
+            publisher = str(source.get("independence_key") or "").strip()
+            if not publisher:
+                publisher = independence_key(url, title=title)
+            title_terms = _question_terms(f"{title} {url}")
+            question_terms = _question_terms(question)
+            publisher_terms = _question_terms(publisher)
+            candidates.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "publisher": publisher,
+                    "rank": (
+                        bool(publisher),
+                        len(publisher_terms & question_terms),
+                        len(title_terms & question_terms & _DIRECT_ANSWER_TERMS),
+                        len(title_terms & question_terms),
+                        -len(candidates),
+                        int(source.get("content_characters") or 0),
+                    ),
+                }
+            )
+
+    candidates.sort(key=lambda item: item["rank"], reverse=True)
+    editorial = [item for item in candidates if item["publisher"]]
+    pool = editorial or candidates
 
 
 
 
     links: list[tuple[str, str]] = []
     publishers: set[str] = set()
-    for title, url in candidates:
-        publisher = publisher_domain(url)
+    for item in pool:
+        title, url = str(item["title"]), str(item["url"])
+        publisher = str(item["publisher"])
         if publisher and publisher in publishers:
             continue
         links.append((title, url))
@@ -656,7 +706,8 @@ def _validated_source_links(
         if len(links) >= limit:
             return links
     selected = {_citation_key(url) for _title, url in links}
-    for title, url in candidates:
+    for item in pool:
+        title, url = str(item["title"]), str(item["url"])
         if _citation_key(url) in selected:
             continue
         links.append((title, url))
@@ -669,10 +720,17 @@ def _validated_source_links(
 def _attach_validated_citations(
     answer: str,
     findings: Sequence[Mapping[str, Any]],
+    *,
+    sources: Sequence[Mapping[str, Any]] = (),
+    question: str = "",
 ) -> str:
     """Remove invented links and ensure the answer exposes checked sources."""
 
-    links = _validated_source_links(findings)
+    links = _validated_source_links(
+        findings,
+        sources=sources,
+        question=question,
+    )
     if not links:
         return answer
     allowed = {_citation_key(url): url for _title, url in links}
@@ -691,33 +749,20 @@ def _attach_validated_citations(
 
 
 
-    aliases: dict[str, str | None] = {}
-    first_label_for_url: dict[str, str] = {}
+    safe = _FOOTNOTE_DEFINITION.sub("", safe)
+    safe = _FOOTNOTE_MARKER.sub("", safe)
 
-    def keep_footnote(match: re.Match[str]) -> str:
-        label, url = match.group(1), match.group(2)
-        key = _citation_key(url)
-        if key not in allowed:
-            aliases[label] = None
-            return ""
-        if key in first_label_for_url:
-            aliases[label] = first_label_for_url[key]
-            return ""
-        first_label_for_url[key] = label
-        aliases[label] = label
-        used.add(key)
-        return f"[^{label}]: {allowed[key]}"
+    protected: list[str] = []
 
-    safe = _FOOTNOTE_DEFINITION.sub(keep_footnote, safe)
+    def protect_inline_link(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return f"@@SALTY_VALIDATED_LINK_{len(protected) - 1}@@"
 
-    def repair_marker(match: re.Match[str]) -> str:
-        label = match.group(1)
-        if label not in aliases:
-            return match.group(0)
-        replacement = aliases[label]
-        return f"[^{replacement}]" if replacement else ""
-
-    safe = _FOOTNOTE_MARKER.sub(repair_marker, safe)
+    safe = _MARKDOWN_LINK.sub(protect_inline_link, safe)
+    safe = re.sub(r"https?://[^\s<>()\]]+", "", safe, flags=re.IGNORECASE)
+    for index, link in enumerate(protected):
+        safe = safe.replace(f"@@SALTY_VALIDATED_LINK_{index}@@", link)
+    safe = "\n".join(line.rstrip() for line in safe.splitlines())
     safe = re.sub(r"\n{3,}", "\n\n", safe).strip()
 
     missing = [
@@ -727,6 +772,35 @@ def _attach_validated_citations(
         return safe
     citations = " ".join(f"[{title}]({url})" for title, url in missing)
     return f"{safe}\n\nValidated sources: {citations}".strip()
+
+
+def _ensure_disagreement_answer(
+    question: str,
+    answer: str,
+    findings: Sequence[Mapping[str, Any]],
+) -> str:
+    """Make an explicitly requested disagreement check visible in the answer."""
+
+    if not re.search(
+        r"\b(?:disagree(?:ment|ments|d)?|contradict(?:ion|ions|ed)?|conflict(?:s|ed)?)\b",
+        str(question or ""),
+        re.IGNORECASE,
+    ):
+        return str(answer or "").strip()
+    text = str(answer or "").strip()
+    if re.search(
+        r"\b(?:disagree(?:ment|ments|d)?|contradict(?:ion|ions|ed)?|conflict(?:s|ed)?)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return text
+    disputed = [item for item in findings if bool(item.get("disputed"))]
+    if not disputed:
+        note = "No material disagreement appeared in the validated evidence."
+    else:
+        first = " ".join(str(disputed[0].get("text") or "").split())[:220]
+        note = f"The validated evidence contains a material disagreement: {first}"
+    return f"{text}\n\n{note}".strip()
 
 
 def _research_activity_journal(report: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1260,6 +1334,7 @@ class LiveRunners:
                     "source_count",
                     "claim_count",
                     "corroborated",
+                    "independent_publisher_count",
                     "disputed",
                     "stop_reason",
                     "profile",
@@ -1294,8 +1369,26 @@ class LiveRunners:
 
         if self.generate is None:
             return None
-        gaps = [claim.to_dict() for claim in ledger.disputed_claims][:5]
-        if not gaps and len(ledger.corroborated_claims) >= 2:
+        terms = _question_terms(ledger.question)
+        gaps = sorted(
+            (
+                claim.to_dict()
+                for claim in ledger.disputed_claims
+                if _finding_rank(terms, claim.to_dict())[0]
+                and _finding_rank(terms, claim.to_dict())[2] > 0
+            ),
+            key=lambda item: _finding_rank(terms, item),
+            reverse=True,
+        )[:5]
+        evidence_covered = (
+            len(ledger.corroborated_claims) >= 2
+            or (
+                len(ledger.claims) >= ledger.budget.coverage_target
+                and len(ledger.evidence_publishers)
+                >= max(2, int(ledger.budget.min_independent_sources))
+            )
+        )
+        if not gaps and evidence_covered:
             return None
         if self.task is not None:
             self.task.metrics.planning_model_calls += 1
@@ -1398,7 +1491,13 @@ class LiveRunners:
             )
             answer = strip_reasoning(str(reply or "")).strip()
             if answer and not _reads_like_process(answer):
-                return _attach_validated_citations(answer, ordered)
+                answer = _ensure_disagreement_answer(question, answer, ordered)
+                return _attach_validated_citations(
+                    answer,
+                    ordered,
+                    sources=list(report.get("sources") or []),
+                    question=question,
+                )
 
 
 
@@ -1407,7 +1506,13 @@ class LiveRunners:
             for claim in ordered[:6]
             if str(claim.get("text") or "").strip()
         ) or self._summarise(report)
-        return _attach_validated_citations(fallback, ordered)
+        fallback = _ensure_disagreement_answer(question, fallback, ordered)
+        return _attach_validated_citations(
+            fallback,
+            ordered,
+            sources=list(report.get("sources") or []),
+            question=question,
+        )
 
     @staticmethod
     def _summarise(report: Mapping[str, Any]) -> str:

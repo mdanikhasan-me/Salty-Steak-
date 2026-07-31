@@ -343,6 +343,20 @@ def _anchor_research_goal_spec(spec: Any, request: str) -> Any:
         match.rstrip("/.,;:)").casefold()
         for match in re.findall(r"https?://[^\s)\]]+", str(request or ""), re.IGNORECASE)
     }
+
+
+
+
+
+
+
+    stock_language = bool(
+        re.search(
+            r"\b(?:in[ -]?stock|out[ -]?of[ -]?stock|stock|inventory|sold[ -]?out|"
+            r"buy|purchase|purchasable|seller|retailer|cheapest|price|pre[ -]?order)\b",
+            request_text,
+        )
+    )
     anchored: list[Any] = []
     for predicate in getattr(spec, "required", ()) or ():
         kind = str(getattr(predicate, "kind", "")).strip().casefold()
@@ -360,7 +374,7 @@ def _anchor_research_goal_spec(spec: Any, request: str) -> Any:
                 )
             continue
         if kind == "stock_confirmed":
-            if subject_text and subject_text in request_text:
+            if stock_language and subject_text and subject_text in request_text:
                 anchored.append(predicate)
             continue
         if kind in {"present", "absent"}:

@@ -188,7 +188,7 @@ def _verify_research(
             "answer_present": bool(answer),
         }
 
-    from ..research.ledger import publisher_domain
+    from ..research.ledger import independence_key
 
     by_url = {
         _research_url_key(str(source.get("url") or "")): source for source in sources
@@ -207,11 +207,15 @@ def _verify_research(
     if not cited:
         return None, {**gathered, "reason": "answer_has_no_validated_citations"}
 
-    source_publishers = {
-        publisher_domain(str(source.get("url") or "")) for source in sources
-    } - {""}
+    def source_publisher(source: Mapping[str, Any]) -> str:
+        return str(source.get("independence_key") or "").strip() or independence_key(
+            str(source.get("url") or ""),
+            title=str(source.get("title") or ""),
+        )
+
+    source_publishers = {source_publisher(source) for source in sources} - {""}
     cited_publishers = {
-        publisher_domain(str(by_url[url].get("url") or ""))
+        source_publisher(by_url[url])
         for url in cited
         if url in by_url
     } - {""}

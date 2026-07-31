@@ -229,6 +229,10 @@ class ResearchLoop:
             for candidate in candidates:
                 if self._stopped():
                     return {**self.ledger.report(), "stop_reason": "cancelled"}
+                if opened >= max(1, int(self.ledger.budget.max_sources_per_query)):
+
+
+                    break
                 halt, _ = self.ledger.should_stop()
                 if halt:
                     break
@@ -409,6 +413,9 @@ class ResearchLoop:
                     "source_count": len(self.ledger.sources),
                     "claim_count": len(self.ledger.claims),
                     "corroborated": len(self.ledger.corroborated_claims),
+                    "independent_publisher_count": len(
+                        self.ledger.evidence_publishers
+                    ),
                     "disputed": len(self.ledger.disputed_claims),
                     "rejected_source_count": len(self.ledger.rejected_sources),
                     "validation_rounds_completed": (
