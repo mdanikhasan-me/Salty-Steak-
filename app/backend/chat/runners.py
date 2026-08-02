@@ -359,8 +359,9 @@ FINALISER_BASE_RULES = (
     "sources, do not mention findings or claims. "
     "Answer only what was asked; do not turn a narrow status question into a "
     "list of adjacent features. Prefer fewer, stronger sources over a "
-    "long bibliography. Use no more than six source URLs unless the user asks "
-    "for more. Cite with inline Markdown links in the form [source](exact URL); "
+    "long bibliography. Use no more than three source URLs unless the user asks "
+    "for more. Keep the answer under 140 words unless the user asks for detail. "
+    "Cite with inline Markdown links in the form [source](exact URL); "
     "do not use numbered footnotes or bare URLs. "
     "Never combine parts of two different findings: if one finding names a "
     "thing and another names a number, they are not about each other unless a "
@@ -482,10 +483,10 @@ _FOOTNOTE_MARKER = re.compile(r"\[\^([^\]]+)\]")
 
 _QUESTION_NOISE = frozenset(
     """
-    about answer citations cite concise direct disagreement disagreements
-    fewer find findings give identify independent information more most
-    one prefer provide research result results source sources technical
-    using validate validated validation verification verify with
+    a about an and answer any are at citations cite concise direct disagreement disagreements
+    fewer find findings for from give identify in independent information is least more most
+    official one prefer provide research result results source sources technical
+    that the this to using validate validated validation verification verify with
     """.split()
 )
 _DIRECT_ANSWER_TERMS = frozenset(
@@ -502,6 +503,10 @@ _DIRECT_ANSWER_TERMS = frozenset(
         "valid",
         "version",
     }
+)
+_STATUS_QUESTION_TERMS = frozenset({"current", "latest", "stable", "status", "version"})
+_STATUS_FINDING_TERMS = frozenset(
+    {"available", "current", "latest", "maintenance", "newest", "released", "stable"}
 )
 _RESEARCH_BOILERPLATE = (
     "call to action",
@@ -561,6 +566,21 @@ def _finding_rank(
     )
 
 
+def _is_status_finding(question_terms: set[str], finding: Mapping[str, Any]) -> bool:
+    """Whether a finding answers a narrow current/stable/version status ask."""
+
+    if not question_terms & _STATUS_QUESTION_TERMS:
+        return True
+    text_terms = _question_terms(str(finding.get("text") or ""))
+    subject_terms = {
+        term
+        for term in question_terms - _STATUS_QUESTION_TERMS - _DIRECT_ANSWER_TERMS
+        if not term.isdigit()
+    }
+    subject_matches = not subject_terms or bool(text_terms & subject_terms)
+    return subject_matches and bool(text_terms & _STATUS_FINDING_TERMS)
+
+
 def _select_finaliser_findings(
     question: str,
     findings: Sequence[Mapping[str, Any]],
@@ -572,8 +592,14 @@ def _select_finaliser_findings(
 
     terms = _question_terms(question)
     records = [item for item in findings if isinstance(item, Mapping)]
+    settled_records = [item for item in records if not item.get("disputed")]
+    status_records = [
+        item for item in settled_records if _is_status_finding(terms, item)
+    ]
+    if status_records:
+        settled_records = status_records
     settled = sorted(
-        (item for item in records if not item.get("disputed")),
+        settled_records,
         key=lambda item: _finding_rank(terms, item),
         reverse=True,
     )
@@ -733,7 +759,10 @@ def _attach_validated_citations(
     )
     if not links:
         return answer
-    allowed = {_citation_key(url): url for _title, url in links}
+    allowed = {
+        _citation_key(url): {"title": title, "url": url}
+        for title, url in links
+    }
     used: set[str] = set()
 
     def keep_known(match: re.Match[str]) -> str:
@@ -741,6 +770,9 @@ def _attach_validated_citations(
         key = _citation_key(url)
         if key in allowed:
             used.add(key)
+            if re.fullmatch(r"src-\d+", label.strip(), flags=re.IGNORECASE):
+                record = allowed[key]
+                return f"[{record['title']}]({record['url']})"
             return match.group(0)
         return label
 
@@ -751,6 +783,13 @@ def _attach_validated_citations(
 
     safe = _FOOTNOTE_DEFINITION.sub("", safe)
     safe = _FOOTNOTE_MARKER.sub("", safe)
+    safe = re.sub(r"\bsrc-\d+\b", "", safe, flags=re.IGNORECASE)
+    safe = re.sub(
+        r"^\s*based on (?:the )?provided findings,?\s*",
+        "",
+        safe,
+        flags=re.IGNORECASE,
+    )
 
     protected: list[str] = []
 
@@ -762,7 +801,11 @@ def _attach_validated_citations(
     safe = re.sub(r"https?://[^\s<>()\]]+", "", safe, flags=re.IGNORECASE)
     for index, link in enumerate(protected):
         safe = safe.replace(f"@@SALTY_VALIDATED_LINK_{index}@@", link)
-    safe = "\n".join(line.rstrip() for line in safe.splitlines())
+    safe = "\n".join(
+        re.sub(r"[ \t]{2,}", " ", line).rstrip()
+        for line in safe.splitlines()
+    )
+    safe = re.sub(r"\s+([.,;:])", r"\1", safe)
     safe = re.sub(r"\n{3,}", "\n\n", safe).strip()
 
     missing = [
