@@ -16,6 +16,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -56,6 +57,73 @@ INVALID_PAGE_SIGNALS = (
     "this link is invalid",
     "content is unavailable",
 )
+
+STATUS_QUERY_CLAUSE = re.compile(
+    r"\b(?:using|prefer|identify|give|cite|include|with direct)\b",
+    re.IGNORECASE,
+)
+LEADING_RESEARCH_VERB = re.compile(
+    r"^\s*(?:please\s+)?(?:research|search(?:\s+for)?|find|look\s+up|determine)\s+",
+    re.IGNORECASE,
+)
+VERSION_TOKEN = re.compile(r"\b\d+(?:\.\d+){1,3}\b")
+
+
+def _status_subject(question: str) -> str:
+    """Turn a request-shaped status prompt into one focused search subject."""
+
+    first_clause = re.split(
+        r"(?:\.(?=\s|$)|\n)", str(question or ""), maxsplit=1
+    )[0]
+    first_clause = STATUS_QUERY_CLAUSE.split(first_clause, maxsplit=1)[0]
+    first_clause = LEADING_RESEARCH_VERB.sub("", first_clause)
+    return " ".join(first_clause.split())[:180] or "current release status"
+
+
+def _version_key(value: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in str(value).split("."))
+    except ValueError:
+        return ()
+
+
+def _latest_relevant_version(ledger: ResearchLedger) -> str:
+    """Newest discovered version matching any series named in the question."""
+
+    requested = [
+        (_version_key(value), value)
+        for value in VERSION_TOKEN.findall(ledger.question)
+    ]
+    candidates: set[str] = set()
+    for claim in ledger.relevant_claims:
+        candidates.update(VERSION_TOKEN.findall(claim.text))
+    if requested:
+        prefixes = [parts for parts, _value in requested if parts]
+        candidates = {
+            value
+            for value in candidates
+            if any(_version_key(value)[: len(prefix)] == prefix for prefix in prefixes)
+        }
+    return max(candidates, key=_version_key, default="")
+
+
+def _status_search_query(
+    question: str,
+    *,
+    independent: bool,
+    version: str = "",
+) -> str:
+    """A short freshness-anchored query for current-version research."""
+
+    subject = _status_subject(question)
+    as_of = datetime.now().astimezone().date().isoformat()
+    focus = f" {version}" if version and version not in subject else ""
+    authority = (
+        "independent technical source confirmation"
+        if independent
+        else "official authoritative source"
+    )
+    return f"{subject}{focus} latest current as of {as_of} {authority}"
 
 
 def statements_from_page(page: Mapping[str, Any], *, limit: int = 40) -> list[str]:
@@ -172,11 +240,15 @@ class ResearchLoop:
                 dict(wave, sites=list(wave["sites"])) for wave in self.waves
             ]
             return report
-        query = (
-            self._next_query
-            if self.ledger.queries
-            else str(initial_query or self.ledger.question)
-        )
+        if self.ledger.queries:
+            query = self._next_query
+        elif self.ledger.is_status_question:
+            query = _status_search_query(
+                self.ledger.question,
+                independent=False,
+            )
+        else:
+            query = str(initial_query or self.ledger.question)
 
 
         ended = ""
@@ -354,8 +426,14 @@ class ResearchLoop:
             ):
                 nxt = self._validation_query()
                 self._validation_query_pending = True
+            if not nxt and not self.ledger.evidence_sufficient:
+                nxt = self._evidence_gap_query()
             if not nxt:
-                ended = "evidence_sufficient"
+                ended = (
+                    "evidence_sufficient"
+                    if self.ledger.evidence_sufficient
+                    else "no_further_queries"
+                )
                 break
             query = nxt
             self._next_query = query
@@ -439,7 +517,13 @@ class ResearchLoop:
         """A focused independent check, not another broad duplicate search."""
 
         round_number = self.ledger.validation_rounds_completed + 1
-        disputed = self.ledger.disputed_claims
+        if self.ledger.is_status_question:
+            return _status_search_query(
+                self.ledger.question,
+                independent=True,
+                version=_latest_relevant_version(self.ledger),
+            )
+        disputed = self.ledger.relevant_disputed_claims
         if disputed:
             focus = disputed[0].text[:180]
             return (
@@ -461,6 +545,21 @@ class ResearchLoop:
             f'{self.ledger.question} independent primary source verification '
             f'cross-check {round_number}'
         )
+
+    def _evidence_gap_query(self) -> str | None:
+        """Deterministic fallback when the model stops before the evidence does."""
+
+        if not self.ledger.is_status_question:
+            return None
+        query = _status_search_query(
+            self.ledger.question,
+            independent=True,
+            version=_latest_relevant_version(self.ledger),
+        )
+        searched = {item.casefold() for item in self.ledger.queries}
+        if query.casefold() in searched:
+            query = f"{query} alternate publisher {len(self.ledger.queries) + 1}"
+        return query
 
     def _save_checkpoint(
         self,

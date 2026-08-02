@@ -93,6 +93,36 @@ NON_EDITORIAL_PUBLISHERS = frozenset(
 )
 
 
+
+
+
+
+
+RESEARCH_REQUEST_WORDS = frozenset(
+    """
+    answer any citation citations cite concise direct disagreement disagreements
+    fewer find findings give identify independent information least official one
+    prefer provide research result results source sources technical using validate
+    validated validation verification verify
+    """.split()
+)
+STATUS_QUESTION_WORDS = frozenset(
+    {"current", "latest", "release", "stable", "status", "version"}
+)
+STATUS_CLAIM_WORDS = frozenset(
+    {
+        "available",
+        "bugfix",
+        "current",
+        "latest",
+        "maintenance",
+        "newest",
+        "released",
+        "stable",
+    }
+)
+
+
 def _words(text: str) -> set[str]:
     return {
         word
@@ -183,6 +213,13 @@ def independence_key(value: str, *, title: str = "") -> str:
 
 def _versions(text: str) -> set[str]:
     return set(re.findall(r"\b\d+(?:\.\d+){1,3}\b", str(text).casefold()))
+
+
+def _version_parts(value: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in str(value).split("."))
+    except ValueError:
+        return ()
 
 
 def _same_statement(left: str, right: str) -> bool:
@@ -432,8 +469,10 @@ class ResearchLedger:
             claim_id=f"clm-{len(self.claims) + 1}", text=text, sources=[source_id]
         )
         for existing in self.claims.values():
-            if similarity(existing.text, text) >= 0.4 and self._conflicts(
-                existing.text, text
+            if (
+                self._has_independent_publisher(existing, source_id)
+                and similarity(existing.text, text) >= 0.4
+                and self._conflicts(existing.text, text)
             ):
                 claim.contradicts.append(existing.claim_id)
                 existing.contradicts.append(claim.claim_id)
@@ -442,6 +481,25 @@ class ResearchLedger:
                 claim.confidence = 0.4
         self.claims[claim.claim_id] = claim
         return claim
+
+    def _has_independent_publisher(self, claim: Claim, source_id: str) -> bool:
+        """Whether a new claim comes from a distinct editorial publisher.
+
+        A disagreement is specifically a difference *between sources*. Two
+        lifecycle rows on one page, two pages from python.org, or a GitHub
+        mirror must not manufacture a cross-source dispute.
+        """
+
+        source = self.sources.get(source_id)
+        key = source.independence_key if source is not None else ""
+        if not key:
+            return False
+        existing_keys = {
+            self.sources[item].independence_key
+            for item in claim.sources
+            if item in self.sources and self.sources[item].independence_key
+        }
+        return any(existing != key for existing in existing_keys)
 
     def record_observation(self, observation: Mapping[str, Any]) -> None:
         """One page binding one product to one price, kept whole.
@@ -535,6 +593,121 @@ class ResearchLedger:
         }
 
     @property
+    def is_status_question(self) -> bool:
+        """Whether the question asks for a current/latest version status."""
+
+        return bool(_words(self.question) & STATUS_QUESTION_WORDS)
+
+    @property
+    def question_subject_words(self) -> set[str]:
+        """Meaningful subject words after removing research instructions."""
+
+        return _words(self.question) - RESEARCH_REQUEST_WORDS - STATUS_QUESTION_WORDS
+
+    def claim_relevant_to_question(self, claim: Claim) -> bool:
+        """Whether a claim can contribute to this question's completion gate."""
+
+        if not self.is_status_question:
+            return True
+        words = _words(claim.text)
+        subject = self.question_subject_words
+        subject_matches = len(words.intersection(subject))
+        required_subject_matches = min(2, len(subject))
+        if subject and subject_matches < required_subject_matches:
+            return False
+        return bool(words & STATUS_CLAIM_WORDS)
+
+    @property
+    def relevant_claims(self) -> list[Claim]:
+        return [
+            claim
+            for claim in self.claims.values()
+            if self.claim_relevant_to_question(claim)
+        ]
+
+    @property
+    def relevant_evidence_publishers(self) -> set[str]:
+        contributing = {
+            source_id
+            for claim in self.relevant_claims
+            for source_id in claim.sources
+        }
+        return {
+            self.sources[source_id].independence_key
+            for source_id in contributing
+            if source_id in self.sources and self.sources[source_id].independence_key
+        }
+
+    @property
+    def relevant_corroborated_claims(self) -> list[Claim]:
+        required = max(2, int(self.budget.min_independent_sources))
+        return [
+            claim
+            for claim in self.relevant_claims
+            if self.independent_source_count(claim) >= required
+        ]
+
+    @property
+    def relevant_disputed_claims(self) -> list[Claim]:
+        return [claim for claim in self.relevant_claims if claim.disputed]
+
+    @property
+    def status_target_version(self) -> str:
+        """Newest discovered patch in a version series named by the question."""
+
+        requested = [_version_parts(value) for value in _versions(self.question)]
+        if not requested:
+            return ""
+        candidates = {
+            value
+            for claim in self.relevant_claims
+            for value in _versions(claim.text)
+            if any(
+                len(_version_parts(value)) > len(prefix)
+                and _version_parts(value)[: len(prefix)] == prefix
+                for prefix in requested
+                if prefix
+            )
+        }
+        return max(candidates, key=_version_parts, default="")
+
+    @property
+    def status_target_publishers(self) -> set[str]:
+        """Publishers that actually support the newest matching patch."""
+
+        target = self.status_target_version
+        if not target:
+            return set(self.relevant_evidence_publishers)
+        contributing = {
+            source_id
+            for claim in self.relevant_claims
+            if target in _versions(claim.text)
+            for source_id in claim.sources
+        }
+        return {
+            self.sources[source_id].independence_key
+            for source_id in contributing
+            if source_id in self.sources and self.sources[source_id].independence_key
+        }
+
+    @property
+    def evidence_sufficient(self) -> bool:
+        """Whether evidence relevant to the actual question meets the gate."""
+
+        required = max(2, int(self.budget.min_independent_sources))
+        if self.is_status_question:
+            return bool(self.relevant_claims) and len(
+                self.status_target_publishers
+            ) >= required
+        return (
+            len(self.corroborated_claims) >= self.budget.coverage_target
+            or (
+                len(self.claims) >= self.budget.coverage_target
+                and len(self.evidence_publishers) >= required
+            )
+        )
+
+    @property
     def corroborated_claims(self) -> list[Claim]:
         required = max(2, int(self.budget.min_independent_sources))
         return [
@@ -554,16 +727,8 @@ class ResearchLedger:
 
         if self.elapsed_seconds >= self.budget.max_seconds:
             return True, "time_budget"
-        enough_claim_evidence = (
-            len(self.corroborated_claims) >= self.budget.coverage_target
-            or (
-                len(self.claims) >= self.budget.coverage_target
-                and len(self.evidence_publishers)
-                >= max(2, int(self.budget.min_independent_sources))
-            )
-        )
         if (
-            enough_claim_evidence
+            self.evidence_sufficient
             and self.validation_rounds_completed >= self.budget.validation_rounds
         ):
             return True, "evidence_sufficient"
@@ -619,6 +784,13 @@ class ResearchLedger:
             "corroborated": len(self.corroborated_claims),
             "independent_publisher_count": len(self.evidence_publishers),
             "disputed": len(self.disputed_claims),
+            "relevant_claim_count": len(self.relevant_claims),
+            "relevant_corroborated": len(self.relevant_corroborated_claims),
+            "relevant_disputed": len(self.relevant_disputed_claims),
+            "relevant_publisher_count": len(self.relevant_evidence_publishers),
+            "status_target_version": self.status_target_version,
+            "status_target_publisher_count": len(self.status_target_publishers),
+            "evidence_sufficient": self.evidence_sufficient,
             "open_questions": list(self.open_questions),
             "stopped": stop,
             "stop_reason": reason,

@@ -150,6 +150,7 @@ def _verify_research(
         "observations": len(observations),
         "claims": claim_count,
         "stop_reason": str((report or {}).get("stop_reason") or ""),
+        "evidence_sufficient": (report or {}).get("evidence_sufficient"),
     }
 
 
@@ -177,6 +178,16 @@ def _verify_research(
         and str(source.get("url") or "").casefold().startswith(("http://", "https://"))
     ]
     stop_reason = str((report or {}).get("stop_reason") or "")
+    if (report or {}).get("evidence_sufficient") is False:
+        return None, {
+            **gathered,
+            "reason": "research_evidence_not_sufficient",
+            "relevant_publishers": int(
+                (report or {}).get("status_target_publisher_count")
+                or (report or {}).get("relevant_publisher_count")
+                or 0
+            ),
+        }
     if not answer or not sources or stop_reason not in {
         "evidence_sufficient",
         "checkpoint_completed",

@@ -361,6 +361,8 @@ FINALISER_BASE_RULES = (
     "list of adjacent features. Prefer fewer, stronger sources over a "
     "long bibliography. Use no more than three source URLs unless the user asks "
     "for more. Keep the answer under 140 words unless the user asks for detail. "
+    "For a current/latest version question, use the highest matching patch "
+    "version in the settled findings; older release notes are historical. "
     "Cite with inline Markdown links in the form [source](exact URL); "
     "do not use numbered footnotes or bare URLs. "
     "Never combine parts of two different findings: if one finding names a "
@@ -508,6 +510,7 @@ _STATUS_QUESTION_TERMS = frozenset({"current", "latest", "stable", "status", "ve
 _STATUS_FINDING_TERMS = frozenset(
     {"available", "current", "latest", "maintenance", "newest", "released", "stable"}
 )
+_VERSION_TOKEN = re.compile(r"\b\d+(?:\.\d+){1,3}\b")
 _RESEARCH_BOILERPLATE = (
     "call to action",
     "enjoy the new release",
@@ -543,6 +546,68 @@ def _question_terms(value: str) -> set[str]:
         for word in re.findall(r"[a-z0-9]+", str(value or "").casefold())
         if len(word) > 1 and word not in _QUESTION_NOISE
     }
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in str(value).split("."))
+    except ValueError:
+        return ()
+
+
+def _latest_status_version(
+    question: str,
+    findings: Sequence[Mapping[str, Any]],
+) -> str:
+    """Newest settled version matching a series explicitly named by the user."""
+
+    requested = [_version_tuple(value) for value in _VERSION_TOKEN.findall(question)]
+    versions: set[str] = set()
+    for finding in findings:
+        if finding.get("disputed"):
+            continue
+        for value in _VERSION_TOKEN.findall(str(finding.get("text") or "")):
+            parts = _version_tuple(value)
+            if requested and not any(
+                parts[: len(prefix)] == prefix for prefix in requested if prefix
+            ):
+                continue
+            versions.add(value)
+    return max(versions, key=_version_tuple, default="")
+
+
+def _status_fallback_answer(
+    question: str,
+    findings: Sequence[Mapping[str, Any]],
+) -> str:
+    """A claim-bounded answer when synthesis chooses an older patch release."""
+
+    latest = _latest_status_version(question, findings)
+    if not latest:
+        return ""
+    requested = _VERSION_TOKEN.findall(question)
+    series = requested[0] if requested else ".".join(latest.split(".")[:2])
+    descriptor = "maintenance " if any(
+        latest in str(item.get("text") or "")
+        and "maintenance" in str(item.get("text") or "").casefold()
+        for item in findings
+        if not item.get("disputed")
+    ) else ""
+    return (
+        f"{latest} is the latest validated {descriptor}release in the "
+        f"requested {series} series."
+    )
+
+
+def _status_answer_uses_latest(
+    question: str,
+    answer: str,
+    findings: Sequence[Mapping[str, Any]],
+) -> bool:
+    if not _question_terms(question) & _STATUS_QUESTION_TERMS:
+        return True
+    latest = _latest_status_version(question, findings)
+    return not latest or latest in _VERSION_TOKEN.findall(str(answer or ""))
 
 
 def _finding_rank(
@@ -598,9 +663,15 @@ def _select_finaliser_findings(
     ]
     if status_records:
         settled_records = status_records
+
+    def settled_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
+        rank = _finding_rank(terms, item)
+        version = _version_tuple(_latest_status_version(question, [item]))
+        return rank[:2] + (version,) + rank[2:]
+
     settled = sorted(
         settled_records,
-        key=lambda item: _finding_rank(terms, item),
+        key=settled_key,
         reverse=True,
     )
     disputed = sorted(
@@ -770,7 +841,9 @@ def _attach_validated_citations(
         key = _citation_key(url)
         if key in allowed:
             used.add(key)
-            if re.fullmatch(r"src-\d+", label.strip(), flags=re.IGNORECASE):
+            if re.fullmatch(r"src-\d+", label.strip(), flags=re.IGNORECASE) or re.fullmatch(
+                r"https?://\S+", label.strip(), flags=re.IGNORECASE
+            ):
                 record = allowed[key]
                 return f"[{record['title']}]({record['url']})"
             return match.group(0)
@@ -813,7 +886,7 @@ def _attach_validated_citations(
     ]
     if not missing:
         return safe
-    citations = " ".join(f"[{title}]({url})" for title, url in missing)
+    citations = "; ".join(f"[{title}]({url})" for title, url in missing)
     return f"{safe}\n\nValidated sources: {citations}".strip()
 
 
@@ -875,8 +948,8 @@ def _research_activity_journal(report: Mapping[str, Any]) -> list[dict[str, Any]
             "kind": "verification",
             "label": "Compared and attributed the evidence",
             "detail": (
-                f"{int(report.get('corroborated') or 0)} corroborated findings · "
-                f"{int(report.get('disputed') or 0)} disputed findings · "
+                f"{int(report.get('relevant_corroborated') or 0)} corroborated findings · "
+                f"{int(report.get('relevant_disputed') or 0)} disputed findings · "
                 f"{len(report.get('rejected_sources') or [])} rejected links"
             ),
             "state": "completed",
@@ -1379,6 +1452,13 @@ class LiveRunners:
                     "corroborated",
                     "independent_publisher_count",
                     "disputed",
+                    "relevant_claim_count",
+                    "relevant_corroborated",
+                    "relevant_disputed",
+                    "relevant_publisher_count",
+                    "status_target_version",
+                    "status_target_publisher_count",
+                    "evidence_sufficient",
                     "stop_reason",
                     "profile",
                     "hard_ceiling_seconds",
@@ -1416,21 +1496,14 @@ class LiveRunners:
         gaps = sorted(
             (
                 claim.to_dict()
-                for claim in ledger.disputed_claims
+                for claim in ledger.relevant_disputed_claims
                 if _finding_rank(terms, claim.to_dict())[0]
                 and _finding_rank(terms, claim.to_dict())[2] > 0
             ),
             key=lambda item: _finding_rank(terms, item),
             reverse=True,
         )[:5]
-        evidence_covered = (
-            len(ledger.corroborated_claims) >= 2
-            or (
-                len(ledger.claims) >= ledger.budget.coverage_target
-                and len(ledger.evidence_publishers)
-                >= max(2, int(ledger.budget.min_independent_sources))
-            )
-        )
+        evidence_covered = ledger.evidence_sufficient
         if not gaps and evidence_covered:
             return None
         if self.task is not None:
@@ -1535,6 +1608,12 @@ class LiveRunners:
             answer = strip_reasoning(str(reply or "")).strip()
             if answer and not _reads_like_process(answer):
                 answer = _ensure_disagreement_answer(question, answer, ordered)
+                if not _status_answer_uses_latest(question, answer, ordered):
+                    answer = _ensure_disagreement_answer(
+                        question,
+                        _status_fallback_answer(question, ordered),
+                        ordered,
+                    )
                 return _attach_validated_citations(
                     answer,
                     ordered,
@@ -1563,10 +1642,14 @@ class LiveRunners:
             f"I read {report['source_count']} sources and kept "
             f"{report['claim_count']} distinct findings."
         ]
-        disputed = [claim for claim in report["claims"] if claim["disputed"]]
+        disputed = int(
+            report.get("relevant_disputed")
+            if "relevant_disputed" in report
+            else report.get("disputed") or 0
+        )
         if disputed:
             lines.append(
-                f"{len(disputed)} of them disagree between sources and are worth "
+                f"{disputed} of them disagree between sources and are worth "
                 "checking before relying on."
             )
         lines.append(f"I stopped because: {report['stop_reason'].replace('_', ' ')}.")
