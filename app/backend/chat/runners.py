@@ -363,6 +363,7 @@ FINALISER_BASE_RULES = (
     "for more. Keep the answer under 140 words unless the user asks for detail. "
     "For a current/latest version question, use the highest matching patch "
     "version in the settled findings; older release notes are historical. "
+    "Do not add support-lifecycle or end-of-life dates unless the question asks. "
     "Cite with inline Markdown links in the form [source](exact URL); "
     "do not use numbered footnotes or bare URLs. "
     "Never combine parts of two different findings: if one finding names a "
@@ -608,6 +609,26 @@ def _status_answer_uses_latest(
         return True
     latest = _latest_status_version(question, findings)
     return not latest or latest in _VERSION_TOKEN.findall(str(answer or ""))
+
+
+def _trim_unrequested_status_scope(question: str, answer: str) -> str:
+    """Keep a patch-status answer from inventing one undifferentiated support phase."""
+
+    if not _question_terms(question) & _STATUS_QUESTION_TERMS:
+        return str(answer or "").strip()
+    if re.search(
+        r"\b(?:active support|end[- ]of[- ]life|eol|lifecycle|security support|support until|support through)\b",
+        str(question or ""),
+        flags=re.IGNORECASE,
+    ):
+        return str(answer or "").strip()
+    trimmed = re.sub(
+        r",?\s+with\s+(?:active\s+)?support\s+(?:through|until)\s+[^.]+(?=\.)",
+        "",
+        str(answer or ""),
+        flags=re.IGNORECASE,
+    )
+    return "\n".join(" ".join(line.split()) for line in trimmed.splitlines()).strip()
 
 
 def _finding_rank(
@@ -942,16 +963,28 @@ def _research_activity_journal(report: Mapping[str, Any]) -> list[dict[str, Any]
                 "sequence": len(journal) + 1,
             }
         )
+    status_target = str(report.get("status_target_version") or "").strip()
+    rejected_count = len(report.get("rejected_sources") or [])
+    rejected_label = "link" if rejected_count == 1 else "links"
+    if status_target:
+        evidence_detail = (
+            f"{int(report.get('status_target_publisher_count') or 0)} publishers "
+            f"confirmed {status_target} · "
+            f"{int(report.get('relevant_disputed') or 0)} material disagreements · "
+            f"{rejected_count} rejected {rejected_label}"
+        )
+    else:
+        evidence_detail = (
+            f"{int(report.get('relevant_corroborated') or 0)} corroborated findings · "
+            f"{int(report.get('relevant_disputed') or 0)} disputed findings · "
+            f"{rejected_count} rejected {rejected_label}"
+        )
     journal.append(
         {
             "id": "research-evidence",
             "kind": "verification",
             "label": "Compared and attributed the evidence",
-            "detail": (
-                f"{int(report.get('relevant_corroborated') or 0)} corroborated findings · "
-                f"{int(report.get('relevant_disputed') or 0)} disputed findings · "
-                f"{len(report.get('rejected_sources') or [])} rejected links"
-            ),
+            "detail": evidence_detail,
             "state": "completed",
             "sequence": len(journal) + 1,
         }
@@ -1614,6 +1647,7 @@ class LiveRunners:
                         _status_fallback_answer(question, ordered),
                         ordered,
                     )
+                answer = _trim_unrequested_status_scope(question, answer)
                 return _attach_validated_citations(
                     answer,
                     ordered,

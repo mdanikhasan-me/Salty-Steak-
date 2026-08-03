@@ -50,12 +50,16 @@ MAX_STATEMENT_CHARACTERS = 300
 CHECKPOINT_SCHEMA = "salty-steak-research-checkpoint-v1"
 INVALID_PAGE_SIGNALS = (
     "404 not found",
+    "checking your browser",
     "page not found",
     "invite invalid",
     "invite may be expired",
     "link has expired",
     "this link is invalid",
     "content is unavailable",
+    "enable javascript and cookies to continue",
+    "just a moment",
+    "performing security verification",
 )
 
 STATUS_QUERY_CLAUSE = re.compile(
@@ -418,14 +422,14 @@ class ResearchLoop:
                 ended = reason
                 break
 
-            nxt = self.follow_up(self.ledger) if self.follow_up else None
             if (
-                not nxt
-                and self.ledger.validation_rounds_completed
+                self.ledger.validation_rounds_completed
                 < self.ledger.budget.validation_rounds
             ):
                 nxt = self._validation_query()
                 self._validation_query_pending = True
+            else:
+                nxt = self.follow_up(self.ledger) if self.follow_up else None
             if not nxt and not self.ledger.evidence_sufficient:
                 nxt = self._evidence_gap_query()
             if not nxt:
