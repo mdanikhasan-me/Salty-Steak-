@@ -1,5 +1,11 @@
+import { useEffect, useRef } from "react";
 import { Globe2, X } from "lucide-react";
 import { splitAssistantContent } from "../workflows/chatContent.mjs";
+import {
+  activityEntryTelemetry,
+  currentActivityEntry,
+  normaliseActivityJournal,
+} from "../workflows/activityJournal.mjs";
 import { formatDuration } from "../workflows/formatters.js";
 import { CookingGlyph, CookingStatus } from "./CookingStatus.jsx";
 
@@ -30,7 +36,7 @@ export function CookingActivityPanel({
       : String(details?.reasoning_text || parsedContent.reasoning || "")
     : "";
   const answerDraft = active && previewKind === "output" ? activeContent : "";
-  const journal = activityJournal(operation, details);
+  const journal = normaliseActivityJournal(operation, details, { active });
   const cookingIncomplete = mode === "cooking" && Boolean(parsedContent.reasoningIncomplete);
   const webSearch = details?.web_search || {};
   const sources = Array.isArray(webSearch.sources) ? webSearch.sources : [];
@@ -65,7 +71,7 @@ export function CookingActivityPanel({
           <div className="cooking-activity__live">
             <CookingStatus label={stage} busy />
             <ActivityMetrics items={activity} />
-            <ActivityJournal entries={journal} />
+            <ActivityJournal entries={journal} active />
             {
                                                                    }
             {answerDraft ? (
@@ -107,17 +113,39 @@ export function CookingActivityPanel({
   );
 }
 
-function ActivityJournal({ entries }) {
+function ActivityJournal({ entries, active = false }) {
+  const current = currentActivityEntry(entries);
+  const currentRef = useRef(null);
+  const finished = entries.filter((entry) => ["completed", "skipped", "failed"].includes(entry.state)).length;
+
+  useEffect(() => {
+    if (!active || !current?.id || !currentRef.current) return;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    currentRef.current.scrollIntoView({
+      block: "nearest",
+      behavior: reduced ? "auto" : "smooth",
+    });
+  }, [active, current?.id]);
+
   if (!entries.length) return null;
   return (
     <section className="cooking-activity__journal" aria-label="Activity journal">
       <div className="cooking-activity__section-title">
         <CookingGlyph />
         <span>Activity</span>
+        <span className="cooking-activity__step-count">
+          {active ? `${finished}/${entries.length}` : `${entries.length} steps`}
+        </span>
       </div>
       <ol>
         {entries.map((entry) => (
-          <li key={entry.id || `${entry.label}-${entry.sequence}`} data-state={entry.state}>
+          <li
+            key={entry.id || `${entry.label}-${entry.sequence}`}
+            ref={entry.id === current?.id ? currentRef : null}
+            data-state={entry.state}
+            data-kind={entry.kind}
+            aria-current={entry.id === current?.id ? "step" : undefined}
+          >
             <span className="cooking-activity__journal-marker" aria-hidden="true" />
             <div>
               <strong>{entry.label}</strong>
@@ -127,6 +155,9 @@ function ActivityJournal({ entries }) {
           </li>
         ))}
       </ol>
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        {current ? `${current.label}. ${current.detail}` : ""}
+      </span>
     </section>
   );
 }
@@ -142,42 +173,6 @@ function RawTrace({ text, active = false }) {
       <small>{`${text.length.toLocaleString()} characters${active ? " so far" : ""}`}</small>
     </section>
   );
-}
-
-function activityJournal(operation, details) {
-  const candidates = [
-    operation?.result?.activity_journal,
-    operation?.progress?.activity_journal,
-    details?.activity_journal,
-    details?.orchestration?.activity_journal,
-  ];
-  const value = candidates.find(Array.isArray) || [];
-  return value
-    .filter((entry) => entry && typeof entry === "object")
-    .map((entry, index) => ({
-      id: String(entry.id || `activity-${index + 1}`),
-      sequence: Number(entry.sequence) || index + 1,
-      label: String(entry.label || "Working").slice(0, 120),
-      detail: String(entry.detail || "").slice(0, 400),
-      state: ["running", "completed", "failed"].includes(String(entry.state))
-        ? String(entry.state)
-        : "completed",
-      token_count: Number(entry.token_count),
-      character_count: Number(entry.character_count),
-    }))
-    .sort((left, right) => left.sequence - right.sequence);
-}
-
-function activityEntryTelemetry(entry) {
-  const parts = [];
-  if (Number.isFinite(entry.token_count) && entry.token_count >= 0) {
-    parts.push(`${Math.round(entry.token_count).toLocaleString()} tokens`);
-  }
-  if (Number.isFinite(entry.character_count) && entry.character_count >= 0) {
-    parts.push(`${Math.round(entry.character_count).toLocaleString()} characters`);
-  }
-  if (!parts.length) return entry.state === "running" ? "In progress" : "Complete";
-  return `${entry.state === "running" ? "In progress" : "Complete"} · ${parts.join(" · ")}`;
 }
 
 function finiteDurationSeconds(details) {
@@ -198,6 +193,14 @@ function cookingStage(phase, mode) {
   const value = String(phase || "").toLowerCase();
   if (value.includes("queue") || value.includes("wait")) return "Waiting to respond";
   if (value.includes("search")) return "Searching sources";
+  if (value.includes("read")) return "Reading sources";
+  if (value.includes("validat") || value.includes("reject")) return "Validating evidence";
+  if (value.includes("compar")) return "Comparing evidence";
+  if (value.includes("source") && value.includes("gather")) return "Sources gathered";
+  if (value.includes("synth")) return "Synthesizing evidence";
+  if (value.includes("writ") || value.includes("draft")) return "Writing the answer";
+  if (value.includes("verif") || value.includes("citation")) return "Verifying the answer";
+  if (value.includes("research complete")) return "Research complete";
   if (value.includes("load") || value.includes("runtime")) return "Preparing runtime";
   if (value.includes("prepar") || value.includes("prefill") || value.includes("prompt")) return "Preparing response";
   if (value.includes("sav") || value.includes("final")) return "Finishing response";

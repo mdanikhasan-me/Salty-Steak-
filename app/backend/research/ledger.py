@@ -797,6 +797,11 @@ class ResearchLedger:
             "seconds": round(self.elapsed_seconds, 2),
             "profile": self.budget.profile,
             "hard_ceiling_seconds": self.budget.max_seconds,
+            "coverage_target": self.budget.coverage_target,
+            "minimum_independent_sources": self.budget.min_independent_sources,
+            "validation_rounds_required": self.budget.validation_rounds,
+            "maximum_sources": self.budget.max_sources,
+            "maximum_queries": self.budget.max_queries,
             "validation_rounds_completed": self.validation_rounds_completed,
         }
 

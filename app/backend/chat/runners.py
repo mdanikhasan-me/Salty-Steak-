@@ -27,6 +27,10 @@ from ..automation.credentials import redact
 from ..automation.routing import apply_argument_aliases
 
 from ..research import Budget, ResearchLoop
+from ..research.activity import (
+    build_research_activity_journal,
+    research_progress_snapshot,
+)
 from ..research.ledger import independence_key
 from ..workflow import Executor, WorkflowEngine, build_plan
 from ..workflow.plan import Plan, PlanError
@@ -941,56 +945,14 @@ def _ensure_disagreement_answer(
     return f"{text}\n\n{note}".strip()
 
 
-def _research_activity_journal(report: Mapping[str, Any]) -> list[dict[str, Any]]:
-    journal: list[dict[str, Any]] = []
-    for index, wave in enumerate(report.get("waves") or [], start=1):
-        if not isinstance(wave, Mapping):
-            continue
-        query = str(wave.get("query") or "")[:180]
-        journal.append(
-            {
-                "id": f"research-wave-{index}",
-                "kind": "verification" if wave.get("validation") else "research",
-                "label": (
-                    f"Validated: {query}"
-                    if wave.get("validation")
-                    else f"Researched: {query}"
-                ),
-                "detail": (
-                    f"{int(wave.get('verified') or 0)} sources validated · "
-                    f"{int(wave.get('rejected') or 0)} links rejected"
-                ),
-                "state": "completed",
-                "sequence": len(journal) + 1,
-            }
-        )
-    status_target = str(report.get("status_target_version") or "").strip()
-    rejected_count = len(report.get("rejected_sources") or [])
-    rejected_label = "link" if rejected_count == 1 else "links"
-    if status_target:
-        evidence_detail = (
-            f"{int(report.get('status_target_publisher_count') or 0)} publishers "
-            f"confirmed {status_target} · "
-            f"{int(report.get('relevant_disputed') or 0)} material disagreements · "
-            f"{rejected_count} rejected {rejected_label}"
-        )
-    else:
-        evidence_detail = (
-            f"{int(report.get('relevant_corroborated') or 0)} corroborated findings · "
-            f"{int(report.get('relevant_disputed') or 0)} disputed findings · "
-            f"{rejected_count} rejected {rejected_label}"
-        )
-    journal.append(
-        {
-            "id": "research-evidence",
-            "kind": "verification",
-            "label": "Compared and attributed the evidence",
-            "detail": evidence_detail,
-            "state": "completed",
-            "sequence": len(journal) + 1,
-        }
+def _research_activity_journal(
+    report: Mapping[str, Any], answer: str = ""
+) -> list[dict[str, Any]]:
+    """The cleaned, past-tense journal retained beside a finished answer."""
+
+    return build_research_activity_journal(
+        research_progress_snapshot(report, phase="completed", answer=answer)
     )
-    return journal
 
 
 def _evidence_limits(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -1066,6 +1028,10 @@ class LiveRunners:
         connectors: Any = None,
         images: Any = None,
         generate: Callable[[list[dict[str, str]]], str] | None = None,
+        generate_with_preview: Callable[
+            [list[dict[str, str]], Callable[[Mapping[str, Any]], None]], str
+        ]
+        | None = None,
         task: Any = None,
         capabilities: Sequence[str] = (),
         authority_mode: str = "ask_every_time",
@@ -1087,6 +1053,7 @@ class LiveRunners:
         self.connectors = connectors
         self.images = images
         self.generate = generate
+        self.generate_with_preview = generate_with_preview
         self.task = task
         self.capabilities = list(capabilities)
         self.authority_mode = authority_mode
@@ -1441,6 +1408,30 @@ class LiveRunners:
 
 
 
+    def _publish_research_stage(
+        self,
+        report: Mapping[str, Any],
+        phase: str,
+        *,
+        generation_preview: Mapping[str, Any] | None = None,
+        answer: str = "",
+    ) -> None:
+        if self.on_research is None:
+            return
+        try:
+            self.on_research(
+                research_progress_snapshot(
+                    report,
+                    phase=phase,
+                    generation_preview=generation_preview,
+                    answer=answer,
+                )
+            )
+        except Exception:
+
+
+            return
+
     def run_research(self, *, decision: Mapping[str, Any], request: str) -> dict[str, Any]:
         """Gather and compare sources, reasoning only where it is needed."""
 
@@ -1471,11 +1462,13 @@ class LiveRunners:
             checkpoint_path=research_checkpoint,
         )
         report = loop.run(str(decision.get("query") or question))
+        self._publish_research_stage(report, "synthesizing")
         answer = self._answer_from(question, report)
+        self._publish_research_stage(report, "completed", answer=answer)
         return {
             "answer": answer,
             "status": "completed",
-            "activity_journal": _research_activity_journal(report),
+            "activity_journal": _research_activity_journal(report, answer),
             "research": {
                 key: report[key]
                 for key in (
@@ -1496,6 +1489,9 @@ class LiveRunners:
                     "stop_reason",
                     "profile",
                     "hard_ceiling_seconds",
+                    "coverage_target",
+                    "minimum_independent_sources",
+                    "validation_rounds_required",
                     "validation_rounds_completed",
                 )
             }
@@ -1596,7 +1592,7 @@ class LiveRunners:
 
         ordered = _select_finaliser_findings(question, claims)
 
-        if self.generate is not None:
+        if self.generate is not None or self.generate_with_preview is not None:
             if self.task is not None:
                 self.task.metrics.model_calls += 1
 
@@ -1604,41 +1600,53 @@ class LiveRunners:
 
 
             observations = list(report.get("observations") or [])
-            reply = self.generate(
-                [
-                    {
-                        "role": "system",
-                        "content": finaliser_instruction(observations=observations),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            finaliser_payload(
-                                question=question,
-                                observations=observations,
-                                evidence_limits=_evidence_limits(observations),
-                                findings=[
-                                    {
-                                        "claim": claim.get("claim"),
-                                        "text": claim.get("text"),
-                                        "source_count": int(claim.get("source_count") or 0),
-                                        "sources": list(claim.get("evidence") or []),
-                                        "disputed": bool(claim.get("disputed")),
-                                        "contradicts": list(claim.get("contradicts") or []),
-                                        "confidence": claim.get("confidence"),
-                                        "validated": bool(claim.get("validated")),
-                                        "independent_source_count": int(
-                                            claim.get("independent_source_count") or 0
-                                        ),
-                                    }
-                                    for claim in ordered
-                                ],
-                            ),
-                            default=str,
+            messages = [
+                {
+                    "role": "system",
+                    "content": finaliser_instruction(observations=observations),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        finaliser_payload(
+                            question=question,
+                            observations=observations,
+                            evidence_limits=_evidence_limits(observations),
+                            findings=[
+                                {
+                                    "claim": claim.get("claim"),
+                                    "text": claim.get("text"),
+                                    "source_count": int(claim.get("source_count") or 0),
+                                    "sources": list(claim.get("evidence") or []),
+                                    "disputed": bool(claim.get("disputed")),
+                                    "contradicts": list(claim.get("contradicts") or []),
+                                    "confidence": claim.get("confidence"),
+                                    "validated": bool(claim.get("validated")),
+                                    "independent_source_count": int(
+                                        claim.get("independent_source_count") or 0
+                                    ),
+                                }
+                                for claim in ordered
+                            ],
                         ),
-                    },
-                ]
-            )
+                        default=str,
+                    ),
+                },
+            ]
+            self._publish_research_stage(report, "drafting")
+            if self.generate_with_preview is not None:
+                reply = self.generate_with_preview(
+                    messages,
+                    lambda preview: self._publish_research_stage(
+                        report,
+                        "drafting",
+                        generation_preview=preview,
+                    ),
+                )
+            else:
+                assert self.generate is not None
+                reply = self.generate(messages)
+            self._publish_research_stage(report, "verifying")
             answer = strip_reasoning(str(reply or "")).strip()
             if answer and not _reads_like_process(answer):
                 answer = _ensure_disagreement_answer(question, answer, ordered)

@@ -321,6 +321,17 @@ class ResearchLoop:
                     continue
                 self._attempted_urls.add(normalised_url)
 
+
+
+
+                host = _host_of(url)
+                for site in wave["sites"]:
+                    if site["host"] == host:
+                        site["state"] = "reading"
+                        break
+                wave["state"] = "reading"
+                self._publish("reading")
+
                 try:
                     page = validate_page(self.read(url), url)
                 except Exception as error:
@@ -350,6 +361,15 @@ class ResearchLoop:
                     content_characters=int(page.get("content_characters") or 0),
                 )
                 if source is None:
+                    for site in wave["sites"]:
+                        if site["host"] == host:
+                            site["state"] = "skipped"
+                            site["reason"] = (
+                                "This destination duplicated evidence already read."
+                            )
+                            break
+                    self._publish("validating")
+                    self._save_checkpoint(next_query=query)
                     continue
 
 
@@ -400,6 +420,13 @@ class ResearchLoop:
                 self.ledger.validation_rounds_completed += 1
                 self._validation_query_pending = False
 
+
+
+
+            wave["state"] = "done"
+            self._publish("comparing")
+            self._save_checkpoint(next_query=query)
+
             if opened == 0:
                 if (
                     self.ledger.validation_rounds_completed
@@ -445,7 +472,11 @@ class ResearchLoop:
 
         for wave in self.waves:
             wave["state"] = "done"
-        self._publish("completed")
+
+
+
+
+        self._publish("retrieval_completed")
 
         report = self.ledger.report()
         if ended:
@@ -503,6 +534,15 @@ class ResearchLoop:
                     "validation_rounds_completed": (
                         self.ledger.validation_rounds_completed
                     ),
+                    "validation_rounds_required": (
+                        self.ledger.budget.validation_rounds
+                    ),
+                    "minimum_independent_sources": (
+                        self.ledger.budget.min_independent_sources
+                    ),
+                    "coverage_target": self.ledger.budget.coverage_target,
+                    "query_count": len(self.ledger.queries),
+                    "evidence_sufficient": self.ledger.evidence_sufficient,
                     "waves": [dict(wave, sites=list(wave["sites"])) for wave in self.waves],
                 }
             )

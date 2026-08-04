@@ -8,11 +8,11 @@
 }
 
 .chat-page--activity-open {
-  grid-template-columns: 0 minmax(0, 1fr) 328px;
+  grid-template-columns: 0 minmax(0, 1fr) 372px;
 }
 
 .chat-page--sidebar-open.chat-page--activity-open {
-  grid-template-columns: 252px minmax(0, 1fr) 328px;
+  grid-template-columns: 252px minmax(0, 1fr) 372px;
 }
 
 
@@ -139,6 +139,7 @@ button.cooking-status:focus-visible,
   min-width: 0;
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
+  contain: layout paint;
   color: var(--r18-text-soft, var(--ink-soft));
   background: #171a1e;
   border-left: 1px solid var(--r18-line, var(--line));
@@ -197,6 +198,8 @@ button.cooking-status:focus-visible,
   min-height: 0;
   padding: 18px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
   scrollbar-gutter: stable;
 }
 
@@ -247,12 +250,22 @@ button.cooking-status:focus-visible,
 }
 
 .cooking-activity__section-title > svg { width: 15px; height: 15px; color: var(--r18-accent, var(--accent)); }
+.cooking-activity__step-count { margin-left: auto; color: var(--r18-muted, var(--muted)); font-size: 10.5px; font-variant-numeric: tabular-nums; font-weight: 500; }
 .cooking-activity__journal { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--r18-line, var(--line)); }
 .cooking-activity__journal ol { display: grid; gap: 0; padding: 0; margin: 0; list-style: none; }
-.cooking-activity__journal li { display: grid; min-width: 0; grid-template-columns: 12px minmax(0, 1fr); gap: 9px; padding: 0 0 13px; }
+.cooking-activity__journal li { position: relative; display: grid; min-width: 0; grid-template-columns: 12px minmax(0, 1fr); gap: 9px; padding: 0 0 13px; contain: layout style; transition: transform 140ms ease; }
 .cooking-activity__journal li:last-child { padding-bottom: 0; }
-.cooking-activity__journal-marker { width: 7px; height: 7px; margin-top: 5px; background: var(--r18-muted, var(--muted)); border: 1px solid var(--r18-line-strong, var(--line)); border-radius: 50%; }
-.cooking-activity__journal li[data-state="running"] .cooking-activity__journal-marker { background: var(--r18-accent, var(--accent)); }
+.cooking-activity__journal li:not(:last-child)::after { position: absolute; z-index: 0; top: 13px; bottom: 0; left: 3px; width: 1px; content: ""; background: var(--r18-line, var(--line)); }
+.cooking-activity__journal-marker { position: relative; z-index: 1; width: 7px; height: 7px; margin-top: 5px; background: #171a1e; border: 1px solid var(--r18-line-strong, var(--line)); border-radius: 50%; }
+.cooking-activity__journal li[data-state="pending"] strong,
+.cooking-activity__journal li[data-state="pending"] p,
+.cooking-activity__journal li[data-state="pending"] small { color: var(--r18-muted, var(--muted)); }
+.cooking-activity__journal li[data-state="running"] { transform: translateX(1px); }
+.cooking-activity__journal li[data-state="running"] .cooking-activity__journal-marker { background: var(--r18-accent, var(--accent)); border-color: var(--r18-accent, var(--accent)); box-shadow: 0 0 0 4px rgb(190 124 83 / 12%); }
+.cooking-activity__journal li[data-state="running"] strong { color: var(--r18-text, var(--ink)); }
+.cooking-activity__journal li[data-state="completed"] .cooking-activity__journal-marker { background: #6b9b78; border-color: #6b9b78; }
+.cooking-activity__journal li[data-state="skipped"] .cooking-activity__journal-marker { background: transparent; border-style: dashed; }
+.cooking-activity__journal li[data-state="failed"] .cooking-activity__journal-marker { background: #b66a6a; border-color: #b66a6a; }
 .cooking-activity__journal strong { display: block; color: var(--r18-text-soft, var(--ink-soft)); font-size: 12px; font-weight: 600; line-height: 1.4; }
 .cooking-activity__journal p { margin: 2px 0 0; color: var(--r18-muted, var(--muted)); font-size: 11.5px; line-height: 1.45; }
 .cooking-activity__journal small,
@@ -292,11 +305,11 @@ button.cooking-status:focus-visible,
   }
 
   .chat-page--sidebar-open.chat-page--activity-open {
-    grid-template-columns: 220px minmax(0, 1fr) 300px;
+    grid-template-columns: 220px minmax(0, 1fr) 340px;
   }
 
   .chat-page--activity-open {
-    grid-template-columns: 0 minmax(0, 1fr) 300px;
+    grid-template-columns: 0 minmax(0, 1fr) 340px;
   }
 }
 
@@ -313,7 +326,7 @@ button.cooking-status:focus-visible,
     position: absolute;
     z-index: 70;
     inset: 0 0 0 auto;
-    width: min(360px, calc(100vw - 48px));
+    width: min(390px, calc(100vw - 48px));
     box-shadow: -18px 0 42px rgb(0 0 0 / 32%);
   }
 
@@ -325,4 +338,9 @@ button.cooking-status:focus-visible,
     background: rgb(4 5 7 / 48%);
     backdrop-filter: blur(2px);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cooking-activity__body { scroll-behavior: auto; }
+  .cooking-activity__journal li { transition: none; }
 }

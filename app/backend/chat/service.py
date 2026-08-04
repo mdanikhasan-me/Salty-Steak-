@@ -31,6 +31,7 @@ from ..runtime.steak_gen import (
     SteakGenWorkerClient,
 )
 from ..runtime.salty_native_worker import SaltyNativeWorkerRuntime
+from ..research.activity import build_research_activity_journal
 from ..runtime.salty_vision import (
     BASE_STEAK_PUBLIC_NAME,
     VISION_RUNTIME_ID,
@@ -1885,6 +1886,7 @@ class ChatService:
         *,
         context: OperationContext,
         generation_settings: Mapping[str, Any],
+        on_preview: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
         """Produce one planning reply for the agent loop.
 
@@ -1898,27 +1900,34 @@ class ChatService:
         target = self._selected_target()
         with self._bundle_lifecycle_lock:
             self._ensure_bundle_runtime(target, context.operation_id)
-            response = self.model_bundle_runtime.generate(
-                messages=list(messages),
-                maximum_output_tokens=int(generation_settings["maximum_output_tokens"]),
-                temperature=float(generation_settings["temperature"]),
-                top_p=float(generation_settings["top_p"]),
-                top_k=int(generation_settings["top_k"]),
-                repetition_penalty=float(generation_settings["repetition_penalty"]),
-                seed=int(generation_settings["seed"]),
-                stop_sequences=[],
-                should_stop=context.stop_requested,
-                context_window_tokens=int(
+            generation_arguments: dict[str, Any] = {
+                "messages": list(messages),
+                "maximum_output_tokens": int(
+                    generation_settings["maximum_output_tokens"]
+                ),
+                "temperature": float(generation_settings["temperature"]),
+                "top_p": float(generation_settings["top_p"]),
+                "top_k": int(generation_settings["top_k"]),
+                "repetition_penalty": float(
+                    generation_settings["repetition_penalty"]
+                ),
+                "seed": int(generation_settings["seed"]),
+                "stop_sequences": [],
+                "should_stop": context.stop_requested,
+                "context_window_tokens": int(
                     generation_settings["context_window_tokens"]
                 ),
-                reserved_output_tokens=int(
+                "reserved_output_tokens": int(
                     generation_settings["maximum_output_tokens"]
                 ),
 
 
-                reasoning_mode="instant",
-                maximum_output_mode="manual",
-            )
+                "reasoning_mode": "instant",
+                "maximum_output_mode": "manual",
+            }
+            if on_preview is not None:
+                generation_arguments["on_preview"] = on_preview
+            response = self.model_bundle_runtime.generate(**generation_arguments)
 
 
 
@@ -3881,6 +3890,17 @@ class ChatService:
                 messages, context=context, generation_settings=generation_settings
             )
 
+        def generate_with_preview(
+            messages: list[dict[str, str]],
+            on_preview: Callable[[Mapping[str, Any]], None],
+        ) -> str:
+            return self._agent_generate(
+                messages,
+                context=context,
+                generation_settings=generation_settings,
+                on_preview=lambda value: on_preview(dict(value)),
+            )
+
         research_profile = str(
             generation_settings.get("research_profile") or "verification"
         )
@@ -3945,66 +3965,42 @@ class ChatService:
 
             waves = list(progress.get("waves") or [])
             sites = sum(len(wave.get("sites") or []) for wave in waves)
-            journal = [
-                dict(item)
-                for item in (provenance or {}).get("activity_journal", [])
-                if isinstance(item, Mapping)
-            ]
-            for index, wave in enumerate(waves, start=1):
-                validated = int(wave.get("verified") or 0)
-                rejected = int(wave.get("rejected") or 0)
-                query = str(wave.get("query") or "")[:180]
-                journal.append(
-                    {
-                        "id": f"research-wave-{index}",
-                        "kind": "verification" if wave.get("validation") else "research",
-                        "label": (
-                            f"Validating: {query}"
-                            if wave.get("validation")
-                            else f"Searching: {query}"
-                        ),
-                        "detail": (
-                            f"{len(wave.get('sites') or [])} candidates · "
-                            f"{validated} validated · {rejected} rejected"
-                        ),
-                        "state": (
-                            "completed"
-                            if wave.get("state") == "done"
-                            else "running"
-                        ),
-                        "sequence": len(journal) + 1,
-                    }
-                )
-            journal.append(
-                {
-                    "id": "research-evidence",
-                    "kind": "verification",
-                    "label": "Comparing evidence",
-                    "detail": (
-                        f"{int(progress.get('corroborated') or 0)} corroborated · "
-                        f"{int(progress.get('disputed') or 0)} disputed · "
-                        f"{int(progress.get('rejected_source_count') or 0)} rejected links"
-                    ),
-                    "state": (
-                        "completed"
-                        if str(progress.get("phase")) == "completed"
-                        else "running"
-                    ),
-                    "sequence": len(journal) + 1,
-                }
-            )
-            context.update(
-                phase=(
-                    f"Searching {sites} websites"
-                    if str(progress.get("phase")) == "searching"
-                    else "Reading pages"
+            journal = build_research_activity_journal(progress)
+            phase_value = str(progress.get("phase") or "preparing").casefold()
+            phase_label = {
+                "searching": f"Searching {sites} websites",
+                "reading": "Reading and validating pages",
+                "validating": "Rejecting unusable evidence",
+                "comparing": "Comparing evidence",
+                "retrieval_completed": "Sources gathered",
+                "synthesizing": "Synthesizing supported findings",
+                "drafting": "Writing the cited answer",
+                "verifying": "Verifying claims and citations",
+                "completed": "Research complete",
+            }.get(phase_value, "Preparing research")
+            research_payload = dict(progress)
+            raw_preview = progress.get("generation_preview")
+            preview = _bounded_generation_preview(
+                raw_preview if isinstance(raw_preview, Mapping) else None,
+                include_reasoning_text=(
+                    generation_settings.get("reasoning_visibility") == "raw_local"
                 ),
-                details={
-                    **dict(provenance or {}),
-                    "conversation_id": conversation_id,
-                    "research_progress": dict(progress),
-                    "activity_journal": journal,
-                },
+            )
+            research_payload.pop("generation_preview", None)
+            if preview is not None:
+                research_payload["generation_preview"] = preview
+            live_details = {
+                **dict(provenance or {}),
+                "conversation_id": conversation_id,
+                "research_progress": research_payload,
+                "activity_journal": journal,
+                "elapsed_seconds": float(progress.get("elapsed_seconds") or 0),
+            }
+            if preview is not None:
+                live_details["generation_preview"] = preview
+            context.update(
+                phase=phase_label,
+                details=live_details,
             )
 
         return LiveRunners(
@@ -4012,6 +4008,7 @@ class ChatService:
             connectors=self.connectors,
             images=images,
             generate=generate,
+            generate_with_preview=generate_with_preview,
             task=task,
             capabilities=capabilities,
             authority_mode=str(generation_settings["computer_authority_mode"]),
