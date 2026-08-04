@@ -77,6 +77,21 @@ export function ChatMessage({
     && visibleContent.cookingTurn
     && !actionProposal
     && !generatedImage;
+  const savedActivity = assistant
+    && !actionProposal
+    && !generatedImage
+    && [
+      details?.orchestration?.activity_journal,
+      details?.activity_journal,
+    ].some((journal) => Array.isArray(journal) && journal.length > 0);
+  const researchActivity = Boolean(
+    details?.orchestration?.kind === "research"
+      || details?.research_progress
+      || details?.orchestration?.research,
+  );
+  const activityComplete = ["done", "cooked", "zonted"].includes(
+    completionState(details),
+  );
 
 
   const degradedOutput = assistant
@@ -148,13 +163,19 @@ export function ChatMessage({
           />
         ) : null}
         <div className="message__surface">
-          {cookingTurn ? (
+          {cookingTurn || savedActivity ? (
             <CookingStatus
-              label={visibleContent.reasoningIncomplete
-                ? "Cooking paused before the final answer"
-                : "Cooked"}
+              label={cookingTurn
+                ? visibleContent.reasoningIncomplete
+                  ? "Cooking paused before the final answer"
+                  : "Cooked"
+                : researchActivity
+                  ? "Research activity"
+                  : "Response activity"}
               active={cookingOpen}
-              complete={!visibleContent.reasoningIncomplete}
+              complete={cookingTurn
+                ? !visibleContent.reasoningIncomplete
+                : activityComplete}
               controls="cooking-activity-panel"
               onClick={onOpenCooking}
             />

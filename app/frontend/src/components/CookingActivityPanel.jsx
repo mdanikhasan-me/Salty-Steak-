@@ -37,6 +37,12 @@ export function CookingActivityPanel({
     : "";
   const answerDraft = active && previewKind === "output" ? activeContent : "";
   const journal = normaliseActivityJournal(operation, details, { active });
+  const researchActivity = Boolean(
+    liveDetails?.research_progress
+      || details?.research_progress
+      || details?.orchestration?.kind === "research"
+      || details?.orchestration?.research,
+  );
   const cookingIncomplete = mode === "cooking" && Boolean(parsedContent.reasoningIncomplete);
   const webSearch = details?.web_search || {};
   const sources = Array.isArray(webSearch.sources) ? webSearch.sources : [];
@@ -44,8 +50,12 @@ export function CookingActivityPanel({
   const activity = activityTelemetry(operation, details);
   const stage = cookingStage(operation?.phase, mode);
   const title = active
-    ? (mode === "cooking" ? "Cooking" : "Responding")
-    : (mode === "cooking" ? (cookingIncomplete ? "Cooking paused" : "Cooked") : "Response activity");
+    ? (researchActivity ? "Researching" : mode === "cooking" ? "Cooking" : "Responding")
+    : (researchActivity
+      ? "Research activity"
+      : mode === "cooking"
+        ? (cookingIncomplete ? "Cooking paused" : "Cooked")
+        : "Response activity");
 
   return (
     <aside id="cooking-activity-panel" className="cooking-activity" aria-label={`${title} activity`}>
