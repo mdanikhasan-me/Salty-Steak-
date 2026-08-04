@@ -17,7 +17,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 SALTY_TENSOR_TYPE_Q8_0 = 8
@@ -262,25 +262,68 @@ class _ChatMessage(ctypes.Structure):
 
 
 @dataclass(frozen=True)
+class SaltyNativeAdapterSpec:
+    adapter_id: str
+    path: str
+    sha256: str
+    scale: float = 1.0
+    activation: str = "always"
+
+    def __post_init__(self) -> None:
+        if not self.adapter_id.strip():
+            raise ValueError("Native adapter_id cannot be empty")
+        if not self.path.strip():
+            raise ValueError("Native adapter path cannot be empty")
+        digest = self.sha256.casefold()
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise ValueError("Native adapter sha256 must be 64 hexadecimal characters")
+        if not 0 < float(self.scale) <= 16:
+            raise ValueError("Native adapter scale must be between 0 and 16")
+        if self.activation not in {"always", "identity_intent", "routing_intent"}:
+            raise ValueError(
+                "Native adapter activation must be always, identity_intent, or routing_intent"
+            )
+
+    @classmethod
+    def from_value(
+        cls,
+        value: "SaltyNativeAdapterSpec | Mapping[str, Any]",
+    ) -> "SaltyNativeAdapterSpec":
+        if isinstance(value, cls):
+            return value
+        return cls(
+            adapter_id=str(value.get("adapter_id") or value.get("id") or ""),
+            path=str(value.get("path") or ""),
+            sha256=str(value.get("sha256") or "").casefold(),
+            scale=float(value.get("scale", 1.0)),
+            activation=str(value.get("activation") or "always").strip().casefold(),
+        )
+
+
+@dataclass(frozen=True)
 class SaltyNativeProfile:
-    profile_id: str = "daily_quality_8k"
-    gpu_layers: int = 25
+    profile_id: str = "base_steak_2_32k_adaptive_262k"
+    gpu_layers: int = 99
 
 
 
-
-    context_limit: int = 8_192
+    context_limit: int = 262_144
 
 
 
 
     resident_context_limit: int | None = None
-    batch_size: int = 64
-    micro_batch_size: int = 64
+    batch_size: int = 256
+    micro_batch_size: int = 128
     threads: int = 12
     thread_poll: int = 100
     kv_precision: str = "q8_0"
     cuda_output_projection: bool = False
+
+
+
+
+    host_kv_above_context: int | None = None
 
     def __post_init__(self) -> None:
         if not str(self.profile_id).strip():
@@ -305,6 +348,14 @@ class SaltyNativeProfile:
             raise ValueError("Native thread_poll must be between 0 and 100")
         if self.kv_precision != "q8_0":
             raise ValueError("This native build only supports the q8_0 KV profile")
+        if self.host_kv_above_context is not None and not (
+            self.initial_context_limit
+            <= self.host_kv_above_context
+            <= self.context_limit
+        ):
+            raise ValueError(
+                "Native host_kv_above_context must be between the resident and selectable limits"
+            )
 
     @classmethod
     def from_manifest(cls, value: Any) -> "SaltyNativeProfile":
@@ -324,7 +375,11 @@ class SaltyNativeProfile:
 
     @property
     def initial_context_limit(self) -> int:
-        return int(self.resident_context_limit or self.context_limit)
+        return int(self.resident_context_limit or min(32_768, self.context_limit))
+
+    @property
+    def host_kv_threshold(self) -> int:
+        return int(self.host_kv_above_context or min(65_536, self.context_limit))
 
 
 @dataclass
@@ -410,6 +465,8 @@ class _NativeApi:
         dll.llama_model_free.restype = None
         dll.llama_model_get_vocab.argtypes = [ctypes.c_void_p]
         dll.llama_model_get_vocab.restype = ctypes.c_void_p
+        dll.llama_model_n_embd.argtypes = [ctypes.c_void_p]
+        dll.llama_model_n_embd.restype = ctypes.c_int32
         dll.llama_model_chat_template.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
         dll.llama_model_chat_template.restype = ctypes.c_char_p
         dll.llama_init_from_model.argtypes = [ctypes.c_void_p, _ContextParams]
@@ -473,6 +530,23 @@ class _NativeApi:
         dll.llama_batch_get_one.restype = _Batch
         dll.llama_decode.argtypes = [ctypes.c_void_p, _Batch]
         dll.llama_decode.restype = ctypes.c_int32
+        dll.llama_set_embeddings.argtypes = [ctypes.c_void_p, ctypes.c_bool]
+        dll.llama_set_embeddings.restype = None
+        dll.llama_get_embeddings_ith.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+        dll.llama_get_embeddings_ith.restype = ctypes.POINTER(ctypes.c_float)
+        dll.llama_get_logits_ith.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+        dll.llama_get_logits_ith.restype = ctypes.POINTER(ctypes.c_float)
+        dll.llama_adapter_lora_init.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        dll.llama_adapter_lora_init.restype = ctypes.c_void_p
+        dll.llama_adapter_lora_free.argtypes = [ctypes.c_void_p]
+        dll.llama_adapter_lora_free.restype = None
+        dll.llama_set_adapters_lora.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_float),
+        ]
+        dll.llama_set_adapters_lora.restype = ctypes.c_int32
         dll.llama_vocab_is_eog.argtypes = [ctypes.c_void_p, ctypes.c_int32]
         dll.llama_vocab_is_eog.restype = ctypes.c_bool
         dll.llama_vocab_n_tokens.argtypes = [ctypes.c_void_p]
@@ -515,16 +589,25 @@ class SaltyNativeRuntime:
         library_directory: str | Path,
         profile: SaltyNativeProfile | None = None,
         source_sha256: str,
+        adapters: Sequence[
+            SaltyNativeAdapterSpec | Mapping[str, Any]
+        ] = (),
     ) -> None:
         self.model_path = Path(model_path).resolve()
         self.library_directory = Path(library_directory).resolve()
         self.profile = profile or SaltyNativeProfile()
         self.source_sha256 = source_sha256
+        self.adapters = tuple(
+            SaltyNativeAdapterSpec.from_value(value) for value in adapters
+        )
         self._api: _NativeApi | None = None
         self._model: int | None = None
         self._context: int | None = None
         self._vocab: int | None = None
         self._threadpool: int | None = None
+        self._adapter_handles: list[int] = []
+        self._verified_adapter_sha256: dict[str, str] = {}
+        self._active_adapter_ids: tuple[str, ...] = ()
         self._load_seconds: float | None = None
         self._verified_source_sha256: str | None = None
         self._runtime_id: str | None = None
@@ -541,6 +624,143 @@ class SaltyNativeRuntime:
     def loaded(self) -> bool:
         return bool(self._api and self._model and self._context and self._vocab)
 
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _load_adapters(self, api: _NativeApi, model: int) -> list[int]:
+        handles: list[int] = []
+        verified: dict[str, str] = {}
+        try:
+            for spec in self.adapters:
+                path = Path(spec.path).resolve()
+                if not path.is_file():
+                    raise SaltyNativeRuntimeError(
+                        f"Native adapter file is missing: {path}"
+                    )
+                actual = self._file_sha256(path)
+                if actual != spec.sha256.casefold():
+                    raise SaltyNativeRuntimeError(
+                        f"Native adapter checksum differs from {spec.adapter_id} identity"
+                    )
+                handle = api.native.llama_adapter_lora_init(
+                    model,
+                    os.fsencode(path),
+                )
+                if not handle:
+                    raise SaltyNativeRuntimeError(
+                        f"Native engine could not load adapter: {spec.adapter_id}"
+                    )
+                handles.append(handle)
+                verified[spec.adapter_id] = actual
+        except BaseException:
+            for handle in reversed(handles):
+                api.native.llama_adapter_lora_free(handle)
+            raise
+        self._verified_adapter_sha256 = verified
+        return handles
+
+    def _default_adapter_ids(self) -> tuple[str, ...]:
+        return tuple(
+            spec.adapter_id
+            for spec in getattr(self, "adapters", ())
+            if spec.activation == "always"
+        )
+
+    def conditional_adapter_ids(self, activation: str) -> tuple[str, ...]:
+        """Return hash-bound adapters registered for one learned controller lane."""
+
+        checked = str(activation).strip().casefold()
+        return tuple(
+            spec.adapter_id
+            for spec in getattr(self, "adapters", ())
+            if spec.activation == checked
+        )
+
+    def _normalise_enabled_adapter_ids(
+        self,
+        enabled_adapter_ids: Sequence[str] | None,
+    ) -> tuple[str, ...]:
+        requested = set(self._default_adapter_ids())
+        if enabled_adapter_ids is not None:
+            requested.update(str(value) for value in enabled_adapter_ids)
+        known = {spec.adapter_id for spec in getattr(self, "adapters", ())}
+        unknown = sorted(requested - known)
+        if unknown:
+            raise ValueError(f"Unknown native adapter ids: {', '.join(unknown)}")
+        return tuple(
+            spec.adapter_id
+            for spec in getattr(self, "adapters", ())
+            if spec.adapter_id in requested
+        )
+
+    def _apply_adapters(
+        self,
+        api: _NativeApi,
+        context: int,
+        enabled_adapter_ids: Sequence[str] | None = None,
+    ) -> tuple[str, ...]:
+        adapter_handles = list(getattr(self, "_adapter_handles", []))
+        if not adapter_handles:
+            return self._normalise_enabled_adapter_ids(enabled_adapter_ids)
+        adapter_specs = tuple(getattr(self, "adapters", ()))
+        active_ids = self._normalise_enabled_adapter_ids(enabled_adapter_ids)
+        active = [
+            (handle, spec)
+            for handle, spec in zip(adapter_handles, adapter_specs, strict=True)
+            if spec.adapter_id in active_ids
+        ]
+        handles = (
+            (ctypes.c_void_p * len(active))(*(handle for handle, _spec in active))
+            if active
+            else None
+        )
+        scales = (
+            (ctypes.c_float * len(active))(
+                *(float(spec.scale) for _handle, spec in active)
+            )
+            if active
+            else None
+        )
+        status = int(
+            api.native.llama_set_adapters_lora(
+                context,
+                handles,
+                len(active),
+                scales,
+            )
+        )
+        if status != 0:
+            raise SaltyNativeRuntimeError(
+                f"Native engine rejected the registered adapters: {status}"
+            )
+        return active_ids
+
+    def _set_adapter_activation(
+        self,
+        enabled_adapter_ids: Sequence[str] | None,
+    ) -> bool:
+        requested = self._normalise_enabled_adapter_ids(enabled_adapter_ids)
+        current = tuple(getattr(self, "_active_adapter_ids", ()))
+        if requested == current:
+            return False
+        if not self.loaded or not self._api or not self._context:
+            raise SaltyNativeRuntimeError("Salty Steak is not loaded")
+        applied = self._apply_adapters(
+            self._api,
+            self._context,
+            requested,
+        )
+        memory = self._api.native.llama_get_memory(self._context)
+        self._api.native.llama_memory_clear(memory, True)
+        self._resident_tokens = []
+        self._active_adapter_ids = applied
+        return True
+
     def _create_context(
         self,
         api: _NativeApi,
@@ -556,6 +776,9 @@ class SaltyNativeRuntime:
         context_params.n_threads = self.profile.threads
         context_params.n_threads_batch = self.profile.threads
         context_params.flash_attn_type = SALTY_FLASH_ATTN_ENABLED
+        context_params.offload_kqv = bool(
+            int(context_limit) <= self.profile.host_kv_threshold
+        )
         if self.profile.kv_precision == "q8_0":
             context_params.type_k = SALTY_TENSOR_TYPE_Q8_0
             context_params.type_v = SALTY_TENSOR_TYPE_Q8_0
@@ -564,6 +787,15 @@ class SaltyNativeRuntime:
             raise SaltyNativeRuntimeError(
                 f"Native engine could not allocate the {context_limit}-token model context"
             )
+        try:
+            self._apply_adapters(
+                api,
+                context,
+                getattr(self, "_active_adapter_ids", self._default_adapter_ids()),
+            )
+        except BaseException:
+            api.native.llama_free(context)
+            raise
         return context
 
     def _ensure_context_allocation(self, requested_limit: int) -> bool:
@@ -660,6 +892,8 @@ class SaltyNativeRuntime:
             if not model:
                 api.native.llama_backend_free()
                 raise SaltyNativeRuntimeError("Native engine could not load the model")
+            self._adapter_handles = self._load_adapters(api, model)
+            self._active_adapter_ids = self._default_adapter_ids()
             try:
                 context = self._create_context(
                     api,
@@ -667,12 +901,22 @@ class SaltyNativeRuntime:
                     self.profile.initial_context_limit,
                 )
             except BaseException:
+                for handle in reversed(self._adapter_handles):
+                    api.native.llama_adapter_lora_free(handle)
+                self._adapter_handles = []
+                self._verified_adapter_sha256 = {}
+                self._active_adapter_ids = ()
                 api.native.llama_model_free(model)
                 api.native.llama_backend_free()
                 raise
             vocab = api.native.llama_model_get_vocab(model)
             if not vocab:
                 api.native.llama_free(context)
+                for handle in reversed(self._adapter_handles):
+                    api.native.llama_adapter_lora_free(handle)
+                self._adapter_handles = []
+                self._verified_adapter_sha256 = {}
+                self._active_adapter_ids = ()
                 api.native.llama_model_free(model)
                 api.native.llama_backend_free()
                 raise SaltyNativeRuntimeError("Native engine did not expose the model vocabulary")
@@ -685,6 +929,11 @@ class SaltyNativeRuntime:
             )
             if not threadpool:
                 api.native.llama_free(context)
+                for handle in reversed(self._adapter_handles):
+                    api.native.llama_adapter_lora_free(handle)
+                self._adapter_handles = []
+                self._verified_adapter_sha256 = {}
+                self._active_adapter_ids = ()
                 api.native.llama_model_free(model)
                 api.native.llama_backend_free()
                 raise SaltyNativeRuntimeError("Native CPU threadpool allocation failed")
@@ -705,11 +954,15 @@ class SaltyNativeRuntime:
         with self._lock:
             api, context, model = self._api, self._context, self._model
             threadpool = self._threadpool
+            adapter_handles = list(self._adapter_handles)
             self._context = None
             self._model = None
             self._vocab = None
             self._api = None
             self._threadpool = None
+            self._adapter_handles = []
+            self._verified_adapter_sha256 = {}
+            self._active_adapter_ids = ()
             self._runtime_id = None
             self._allocated_context_limit = None
             self._decode_token_buffer = None
@@ -720,6 +973,9 @@ class SaltyNativeRuntime:
                 api.native.llama_free(context)
             if api and threadpool:
                 api.tensor_cpu.ggml_threadpool_free(threadpool)
+            if api:
+                for handle in reversed(adapter_handles):
+                    api.native.llama_adapter_lora_free(handle)
             if api and model:
                 api.native.llama_model_free(model)
             if api:
@@ -729,16 +985,37 @@ class SaltyNativeRuntime:
         return {
             "loaded": self.loaded,
             "runtime_id": self._runtime_id,
-            "runtime_family": "salty_native_steak35",
+            "runtime_family": "salty_native_steak20",
             "engine": "direct_in_process_native_library",
             "profile": asdict(self.profile),
             "source_sha256": self.source_sha256,
             "verified_source_sha256": self._verified_source_sha256,
             "model_path": str(self.model_path),
+            "adapters": [
+                {
+                    **asdict(spec),
+                    "path": str(Path(spec.path).resolve()),
+                    "verified_sha256": getattr(
+                        self,
+                        "_verified_adapter_sha256",
+                        {},
+                    ).get(
+                        spec.adapter_id
+                    ),
+                }
+                for spec in getattr(self, "adapters", ())
+            ],
+            "active_adapter_ids": list(getattr(self, "_active_adapter_ids", ())),
             "architectural_context_limit": 262_144,
             "configured_context_limit": self.profile.context_limit,
             "resident_context_limit": self.profile.initial_context_limit,
             "allocated_context_limit": self._allocated_context_limit,
+            "kv_cache_placement": (
+                "host"
+                if int(self._allocated_context_limit or self.profile.initial_context_limit)
+                > self.profile.host_kv_threshold
+                else "layer_device"
+            ),
             "load_seconds": self._load_seconds,
             "external_service_required": False,
             "network_listener_created": False,
@@ -775,21 +1052,46 @@ class SaltyNativeRuntime:
             reasoning_mode,
         )
 
-    def _tokenize(self, prompt: bytes) -> list[int]:
+    def _tokenize_bytes(
+        self,
+        prompt: bytes,
+        *,
+        add_special: bool,
+        parse_special: bool,
+    ) -> list[int]:
         assert self._api and self._vocab
         count = self._api.native.llama_tokenize(
-            self._vocab, prompt, len(prompt), None, 0, True, True
+            self._vocab,
+            prompt,
+            len(prompt),
+            None,
+            0,
+            add_special,
+            parse_special,
         )
         needed = -count if count < 0 else count
         if needed < 1:
             raise SaltyNativeRuntimeError("The rendered prompt contains no tokens")
         buffer = (ctypes.c_int32 * needed)()
         written = self._api.native.llama_tokenize(
-            self._vocab, prompt, len(prompt), buffer, needed, True, True
+            self._vocab,
+            prompt,
+            len(prompt),
+            buffer,
+            needed,
+            add_special,
+            parse_special,
         )
         if written < 0:
             raise SaltyNativeRuntimeError("The rendered prompt could not be tokenized")
         return list(buffer[:written])
+
+    def _tokenize(self, prompt: bytes) -> list[int]:
+        return self._tokenize_bytes(
+            prompt,
+            add_special=True,
+            parse_special=True,
+        )
 
     def _prompt_with_budget(
         self,
@@ -900,6 +1202,7 @@ class SaltyNativeRuntime:
         reserved_output_tokens: int | None = None,
         reasoning_mode: str = "cooking",
         maximum_output_mode: str = "manual",
+        enabled_adapter_ids: Sequence[str] | None = None,
     ) -> SaltyNativeGeneration:
         with self._lock:
             if not self.loaded or not self._api or not self._context or not self._vocab:
@@ -931,6 +1234,9 @@ class SaltyNativeRuntime:
 
             context_reallocated = self._ensure_context_allocation(
                 effective_context_limit
+            )
+            adapter_activation_changed = self._set_adapter_activation(
+                enabled_adapter_ids
             )
             memory = self._api.native.llama_get_memory(self._context)
 
@@ -1082,6 +1388,7 @@ class SaltyNativeRuntime:
                     "input_context_tokens": len(prompt_tokens),
                     "effective_context_limit": effective_context_limit,
                     "context_reallocated": context_reallocated,
+                    "adapter_activation_changed": adapter_activation_changed,
                     "reused_prefix_tokens": reusable_prefix,
                     "prefilled_tokens": len(pending_tokens),
                     "kv_cache_reuse": (

@@ -2748,6 +2748,39 @@ def _app_paths_executable(name: str) -> str | None:
     return None
 
 
+def _start_menu_shortcut(name: str) -> str | None:
+    """Resolve an exact installed-app shortcut from either Windows Start Menu."""
+
+    if os.name != "nt":
+        return None
+    roots: list[Path] = []
+    app_data = os.environ.get("APPDATA")
+    program_data = os.environ.get("ProgramData")
+    if app_data:
+        roots.append(Path(app_data) / "Microsoft" / "Windows" / "Start Menu" / "Programs")
+    if program_data:
+        roots.append(
+            Path(program_data) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+        )
+    wanted = Path(name).stem.casefold()
+    matches: list[Path] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            matches.extend(
+                path.resolve()
+                for path in root.rglob("*.lnk")
+                if path.stem.casefold() == wanted and path.is_file()
+            )
+        except OSError:
+            continue
+    if not matches:
+        return None
+
+    return str(sorted(set(matches), key=lambda value: (len(value.parts), str(value).casefold()))[0])
+
+
 def _resolve_launch_target(value: object) -> tuple[str, str]:
     """Resolve a launch request to an exact target and how it was found.
 
@@ -2793,6 +2826,9 @@ def _resolve_launch_target(value: object) -> tuple[str, str]:
     registered = _app_paths_executable(target)
     if registered:
         return registered, "app_paths_registry"
+    shortcut = _start_menu_shortcut(target)
+    if shortcut:
+        return shortcut, "start_menu_shortcut"
     raise FileNotFoundError(f"No installed application matches: {target}")
 
 

@@ -21,19 +21,19 @@ import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping, Sequence
 
 
 BASE_STEAK_PUBLIC_NAME = "Base Steak 2.0"
 BASE_STEAK_TEXT_SHA256 = (
-    "5208cf126173e7026b6e2ff86ddbac4d5a16cdda4a3942286cbe825d4cef0eee"
+    "c725cc0e496ee7e6cf1b165171507fde0ae6b8cc8509130f391df366a604f3ca"
 )
 BASE_STEAK_VISION_SHA256 = (
     "05f662501f8bd45607b079723a3e238a4e888fd085a10a53f4057a0e250f6934"
 )
-VISION_RUNTIME_ID = "salty_vision_engine_r48_staged"
+VISION_RUNTIME_ID = "salty_vision_engine_steak20_b10333"
 VISION_STAGE_SCHEMA = "salty-steak-vision-runtime-v1"
-VISION_VALIDATOR_VERSION = "salty-vision-validator-v1"
+VISION_VALIDATOR_VERSION = "salty-vision-validator-v2"
 VISION_STAGE_MANIFEST = "vision-runtime.json"
 VISION_LICENSE_FILE = "THIRD_PARTY_LICENSE.txt"
 VISION_SMOKE_IMAGE_SHA256 = (
@@ -71,22 +71,19 @@ MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
 
 
-
-
-
 VISION_RUNTIME_SHA256 = {
     "cublas64_12.dll": "e40202fe4223c1cd2d2dce7beec59e1ed61c7801bd827309183be9b50e358f4c",
     "cublasLt64_12.dll": "2a896460bef60ed57ef32b0875812f355a6984e671d638bb632f5e8c1d7a831f",
     "cudart64_12.dll": "d28e42265da7462162a54da6b7a99ea4fa2caf8139d862bb500db875d0b32dfc",
-    "ggml.dll": "43260b2802808b7add13e5838ac7bf2ed12450a8b102425b43a3bcd9f518ae5f",
-    "ggml-base.dll": "54bc2abfae49963aae75c7a19df66910af68eea9b70fc60b479843882f87bdbf",
-    "ggml-cpu.dll": "a5230c2139b825318fc56587c83055da0a71a1c937aeda220396d4d988548f2f",
+    "ggml.dll": "c44601e1ea7e15e4bba1a51b93ded7f9c70f1e0dc6af61650f44cbe913059640",
+    "ggml-base.dll": "b53433fdba89a8456d688fb93e851285808ed3701fab9bff404dbeb86f2b66f2",
+    "ggml-cpu.dll": "92eae795c6375d2facc57752f0fa5f5d6c9e495700400261aeaa1e84f10a8569",
     "ggml-cuda.dll": "b1958cc67dace83d533e12de56389c10e3577ccf4ec381e2734c38aab473c02d",
     "libomp140.x86_64.dll": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33",
-    "llama.dll": "cb34cf39d2d0a8bf9784a506a6943c7246c419514f6596fa6c752983434e0ffd",
-    "llama-common.dll": "e52147d46678745e7f9db8e35f3b1149a430f9a3799c7f67a3fdee7ce488a7ec",
-    "llama-mtmd-cli.exe": "db114863cd9410891bd3634ba4071c81c496575dbc3535feb8f62ca6b1b405ac",
-    "mtmd.dll": "256561ecc91b52a7be9b7c6774bff480515a658a1ccd9650d4f3f497666cd3d3",
+    "llama.dll": "2c6f5e9b2d6bc59b7bef41680bacd5b278656aeea43eadd9308b1ede55071a3c",
+    "llama-common.dll": "dea8c975229c107b0c701a58818913e56c5fa99e34682c63730a67fcb4c78edb",
+    "llama-mtmd-cli.exe": "c96389291a8d1814f8e0c1d7028d7e2e3fb8d419b2c66f15c6b345651fa621d0",
+    "mtmd.dll": "734ced986b0c86ca8feb235af81ce11327bec32b709afb89ad02a3e230655afb",
 }
 
 
@@ -207,6 +204,7 @@ class SaltyVisionBroker:
         temporary_root: str | Path,
         text_model_sha256: str = BASE_STEAK_TEXT_SHA256,
         projector_sha256: str = BASE_STEAK_VISION_SHA256,
+        text_adapters: Sequence[Mapping[str, Any]] = (),
         timeout_seconds: int = 900,
         device: str = "none",
         gpu_layers: int = 0,
@@ -219,6 +217,25 @@ class SaltyVisionBroker:
         self.temporary_root = Path(temporary_root).resolve()
         self.text_model_sha256 = text_model_sha256.casefold()
         self.projector_sha256 = projector_sha256.casefold()
+        self.text_adapters: tuple[dict[str, Any], ...] = tuple(
+            {
+                "id": str(value.get("id") or value.get("adapter_id") or "").strip(),
+                "path": str(Path(str(value.get("path") or "")).resolve()),
+                "sha256": str(value.get("sha256") or "").casefold(),
+                "scale": float(value.get("scale", 1.0)),
+            }
+            for value in text_adapters
+        )
+        adapter_ids: set[str] = set()
+        for adapter in self.text_adapters:
+            if not adapter["id"] or adapter["id"] in adapter_ids:
+                raise ValueError("Vision text adapter IDs must be non-empty and unique")
+            adapter_ids.add(adapter["id"])
+            digest = adapter["sha256"]
+            if len(digest) != 64 or any(value not in "0123456789abcdef" for value in digest):
+                raise ValueError("Vision text adapter SHA-256 is invalid")
+            if not 0 < adapter["scale"] <= 16:
+                raise ValueError("Vision text adapter scale must be between 0 and 16")
         self.timeout_seconds = int(timeout_seconds)
         self.device = str(device).strip()
         self.gpu_layers = int(gpu_layers)
@@ -237,6 +254,30 @@ class SaltyVisionBroker:
         self._stage_error: str | None = None
         self._verification_in_progress = False
         self._verification_lock = threading.Lock()
+
+    def _adapter_manifest_records(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": adapter["id"],
+                "filename": Path(adapter["path"]).name,
+                "sha256": adapter["sha256"],
+                "scale": adapter["scale"],
+            }
+            for adapter in self.text_adapters
+        ]
+
+    def _verified_artifact_paths(self) -> dict[str, Path]:
+        paths = {
+            "text": self.text_model_path,
+            "projector": self.projector_path,
+        }
+        paths.update(
+            {
+                f"adapter:{adapter['id']}": Path(adapter["path"])
+                for adapter in self.text_adapters
+            }
+        )
+        return paths
 
     @property
     def executable(self) -> Path:
@@ -285,6 +326,9 @@ class SaltyVisionBroker:
             if manifest.get(field) != expected:
                 self._stage_error = f"Vision runtime manifest differs for {field}"
                 return None
+        if manifest.get("text_adapters", []) != self._adapter_manifest_records():
+            self._stage_error = "Vision runtime manifest text adapters differ"
+            return None
         declared_runtime = manifest.get("runtime_files_sha256")
         required_hashes = {
             name: VISION_RUNTIME_SHA256[name]
@@ -395,6 +439,7 @@ class SaltyVisionBroker:
             "runtime_directory": str(self.runtime_directory),
             "text_model_sha256": self.text_model_sha256,
             "projector_sha256": self.projector_sha256,
+            "text_adapters": self._adapter_manifest_records(),
             "runtime_files_sha256": dict(self._runtime_hashes),
             "input_permission_required": True,
             "network_listener_created": False,
@@ -425,10 +470,10 @@ class SaltyVisionBroker:
             ),
             "last_smoke": dict(self._last_smoke) if self._last_smoke else None,
             "private_technical_metadata": {
-                "text_architecture": "steak_native_v2",
+                "text_architecture": "steak20",
                 "projector_architecture": "steak_vision_encoder",
                 "projector_type": "steak_vision_merger",
-                "engine_revision": "salty-native-release-r48",
+                "engine_revision": "salty-native-b10333-steak20",
             },
         }
 
@@ -437,6 +482,15 @@ class SaltyVisionBroker:
             "text": (self.text_model_path, self.text_model_sha256),
             "projector": (self.projector_path, self.projector_sha256),
         }
+        expected.update(
+            {
+                f"adapter:{adapter['id']}": (
+                    Path(adapter["path"]),
+                    adapter["sha256"],
+                )
+                for adapter in self.text_adapters
+            }
+        )
         verified_stats: dict[str, tuple[int, int]] = {}
         for label, (path, checksum) in expected.items():
             if not path.is_file():
@@ -469,10 +523,7 @@ class SaltyVisionBroker:
     def _assert_verified_files_unchanged(self) -> None:
         if not self._verified_model_stats or not self._runtime_hashes:
             raise SaltyVisionError("Exact model and runtime hashes have not been verified")
-        for label, path in (
-            ("text", self.text_model_path),
-            ("projector", self.projector_path),
-        ):
+        for label, path in self._verified_artifact_paths().items():
             stat = path.stat()
             if (stat.st_size, stat.st_mtime_ns) != self._verified_model_stats[label]:
                 raise SaltyVisionError(
@@ -637,6 +688,12 @@ class SaltyVisionBroker:
                 "--verbosity",
                 "2",
             ]
+            if self.text_adapters:
+                scaled_adapters = ",".join(
+                    f"{Path(os.path.relpath(adapter['path'], self.runtime_directory)).as_posix()}:{adapter['scale']:g}"
+                    for adapter in self.text_adapters
+                )
+                command[5:5] = ["--lora-scaled", scaled_adapters]
             environment = os.environ.copy()
             environment["PATH"] = (
                 f"{self.runtime_directory}{os.pathsep}{environment.get('PATH', '')}"
@@ -743,8 +800,9 @@ class SaltyVisionBroker:
                     },
                     "network_listener_created": False,
                     "external_service_required": False,
+                    "text_adapters": self._adapter_manifest_records(),
                     "stderr_tail": stderr.strip()[-2_000:],
-                    "private_text_architecture": "steak_native_v2",
+                    "private_text_architecture": "steak20",
                     "private_projector_type": "steak_vision_merger",
                 },
             )

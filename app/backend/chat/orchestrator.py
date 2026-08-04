@@ -306,6 +306,31 @@ def parse_decision(reply: str) -> dict[str, Any]:
         decision.setdefault("capability", action)
         action = SINGLE_ACTION
 
+    if (
+        action not in JOB_TYPES
+        and action not in CAPABILITY_ACTIONS
+        and "." in action
+    ):
+
+
+
+
+        operation = decision.get("operation") or decision.get("capability")
+        if isinstance(operation, str) and operation.strip():
+            decision = {
+                "action": PLAN,
+                "nodes": [
+                    {
+                        "node": str(decision.get("node") or "service_action"),
+                        "connector": action,
+                        "operation": operation.strip(),
+                        "arguments": dict(decision.get("arguments") or {}),
+                    }
+                ],
+                "reason": str(decision.get("reason") or ""),
+            }
+            action = PLAN
+
     if action not in JOB_TYPES:
         raise OrchestrationError(
             f"{parsed.get('action')!r} is not one of: {', '.join(JOB_TYPES)}"

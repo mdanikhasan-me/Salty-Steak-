@@ -22,9 +22,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from ..automation.capability_registry import FILE_OPERATIONS, FILES_CAPABILITY
+from ..automation.capability_registry import (
+    FILE_OPERATIONS,
+    FILES_CAPABILITY,
+    get_capability_descriptor,
+)
 from ..automation.credentials import redact
-from ..automation.routing import apply_argument_aliases
+from ..automation.routing import apply_argument_aliases, resolve_execution
 
 from ..research import Budget, ResearchLoop
 from ..research.activity import (
@@ -88,6 +92,25 @@ def _nodes_in_the_right_slots(
         if not isinstance(entry, Mapping):
             moved.append(entry)
             continue
+        alternate_key = entry.get("key")
+        if isinstance(alternate_key, Mapping):
+            named = {
+                str(alternate_key.get(field) or "")
+                for field in ("name", "capability", "tool")
+                if str(alternate_key.get(field) or "") in granted
+            }
+            if len(named) == 1:
+                corrected_key = dict(entry)
+                corrected_key["capability"] = named.pop()
+                if (
+                    "arguments" not in corrected_key
+                    and isinstance(corrected_key.get("key_args"), Mapping)
+                ):
+                    corrected_key["arguments"] = dict(corrected_key["key_args"])
+                corrected_key.pop("key", None)
+                corrected_key.pop("key_args", None)
+                moved.append(corrected_key)
+                continue
 
 
 
@@ -126,6 +149,36 @@ def _nodes_in_the_right_slots(
             )
             if found:
                 corrected["capability"] = found
+                arguments = dict(corrected.get("arguments") or {})
+                verb = str(entry.get("capability") or "").strip().casefold()
+                if found == "window.control" and "action" not in arguments:
+                    action_alias = {
+                        "bring_to_front": "focus",
+                        "focus_window": "focus",
+                        "close_window": "close",
+                        "list_windows": "list",
+                    }.get(verb)
+                    if action_alias:
+                        arguments["action"] = action_alias
+                elif found == "browser.control" and "command" not in arguments:
+                    command_alias = {
+                        "browser.launch": "open_url",
+                        "browser.launch_url": "open_url",
+                        "launch_url": "open_url",
+                        "navigate_to_url": "open_url",
+                    }.get(verb)
+                    if command_alias:
+                        arguments["command"] = command_alias
+                elif found == "ui.automation" and "command" not in arguments:
+                    command_alias = {
+                        "type_text": "set_value",
+                        "click_button": "invoke",
+                        "click_element": "invoke",
+                        "find_window_by_title": "find_control",
+                    }.get(verb)
+                    if command_alias:
+                        arguments["command"] = command_alias
+                corrected["arguments"] = arguments
                 corrected.pop("connector", None)
                 corrected.pop("operation", None)
                 moved.append(corrected)
@@ -235,6 +288,26 @@ def validate_plan(
                 f"Step {node.node_id!r} needs {node.capability!r}, which is not "
                 "enabled."
             )
+        if node.capability:
+            route = resolve_execution(node.capability, node.arguments, capabilities)
+            try:
+                descriptor = get_capability_descriptor(node.capability)
+            except KeyError:
+
+
+                descriptor = None
+            if descriptor is None:
+                continue
+            missing = [
+                name
+                for name in descriptor.required_arguments
+                if name not in route.arguments
+            ]
+            if missing:
+                raise PlanRejected(
+                    f"Step {node.node_id!r} needs {node.capability!r} arguments: "
+                    + ", ".join(missing)
+                )
         if node.connector and node.connector not in configured:
             raise PlanRejected(
                 f"Step {node.node_id!r} needs the {node.connector!r} service, "
@@ -1028,6 +1101,7 @@ class LiveRunners:
         connectors: Any = None,
         images: Any = None,
         generate: Callable[[list[dict[str, str]]], str] | None = None,
+        generate_structured: Callable[[list[dict[str, str]]], str] | None = None,
         generate_with_preview: Callable[
             [list[dict[str, str]], Callable[[Mapping[str, Any]], None]], str
         ]
@@ -1053,6 +1127,7 @@ class LiveRunners:
         self.connectors = connectors
         self.images = images
         self.generate = generate
+        self.generate_structured = generate_structured or generate
         self.generate_with_preview = generate_with_preview
         self.task = task
         self.capabilities = list(capabilities)
@@ -1215,13 +1290,96 @@ class LiveRunners:
                 capabilities=self.capabilities,
                 connectors=connectors,
             )
+            self._preflight_connector_plan(plan)
         except PlanRejected as error:
+            raw_payload = decision.get("plan") or decision
+            raw_nodes = (
+                list(raw_payload.get("nodes") or [])
+                if isinstance(raw_payload, Mapping)
+                else []
+            )
+            configured = set(connectors)
+            names_configured_service = any(
+                isinstance(node, Mapping)
+                and str(node.get("connector") or "") in configured
+                for node in raw_nodes
+            )
+            repaired_plan = None
+            if names_configured_service and self.generate_structured is not None:
+                repaired = self._repair_initial_connector_plan(
+                    decision=decision,
+                    request=request,
+                    error=error,
+                    connectors=connectors,
+                )
+                if repaired is not None:
+                    try:
+                        repaired_plan = validate_plan(
+                            repaired.get("plan") or repaired,
+                            goal=str(repaired.get("goal") or request),
+                            capabilities=self.capabilities,
+                            connectors=connectors,
+                        )
+                        self._preflight_connector_plan(repaired_plan)
+                    except PlanRejected as repaired_error:
+                        error = repaired_error
+                        repaired_plan = None
+            if repaired_plan is not None:
+                plan = repaired_plan
 
-            return {
-                "answer": f"I could not build a safe plan for that: {error}",
-                "status": "rejected",
-                "plan_rejected": str(error),
-            }
+
+
+
+
+            if (
+                repaired_plan is None
+                and
+                not names_configured_service
+                and self.generate is not None
+                and self.broker is not None
+                and self.capabilities
+            ):
+                from .agent_loop import AgentLoop
+
+                outcome = AgentLoop(
+                    broker=self.broker,
+                    generate=self.generate,
+                    capabilities=self.capabilities,
+                    authority_mode=self.authority_mode,
+                    approve=self.approve,
+                    task=self.task,
+                    memory=self.memory,
+                    on_step=self.on_step,
+                    should_stop=self.should_stop,
+                    describe_screenshot=self.describe_screenshot,
+                    max_iterations=self.follow_through_steps,
+                    established=self.established,
+                ).run(
+                    request,
+                    opening=json.dumps(
+                        {
+                            "invalid_plan": str(error),
+                            "note": (
+                                "Choose the first valid capability call from the live "
+                                "tool contract, observe its result, then continue."
+                            ),
+                        }
+                    ),
+                )
+                return {
+                    "answer": str(outcome.get("answer") or ""),
+                    "status": outcome.get("state"),
+                    "steps": outcome.get("steps", []),
+                    "invalid_plan_recovered_to_agent": True,
+                    "plan_rejected": str(error),
+                }
+            if repaired_plan is None:
+
+                return {
+                    "answer": f"I could not build a safe plan for that: {error}",
+                    "status": "rejected",
+                    "plan_rejected": str(error),
+                }
 
         executor = Executor(
             broker=self.broker,
@@ -1256,6 +1414,139 @@ class LiveRunners:
             "replans": result.replans,
             "waiting_for": result.waiting_for,
         }
+
+    def _preflight_connector_plan(self, plan: Plan) -> None:
+        """Reject unknown connector operations and missing fields before writes."""
+
+        if self.connectors is None:
+            if any(node.connector for node in plan.nodes):
+                raise PlanRejected("The plan names a service but none is configured")
+            return
+        for node in plan.nodes:
+            if not node.connector:
+                continue
+            try:
+                connector = self.connectors.get(node.connector)
+                spec = connector.operation(str(node.operation))
+            except Exception as error:
+                raise PlanRejected(str(error)) from error
+            missing = [name for name in spec.required if name not in node.arguments]
+            if (
+                "id" in missing
+                and "ids" in node.arguments
+                and len(spec.required) == 1
+            ):
+                node.arguments["id"] = node.arguments.pop("ids")
+                missing.remove("id")
+            if missing:
+                raise PlanRejected(
+                    f"Step {node.node_id!r} operation {node.operation!r} needs: "
+                    + ", ".join(missing)
+                )
+            for name in spec.required:
+                value = node.arguments.get(name)
+                if (
+                    name.endswith("id")
+                    and isinstance(value, str)
+                    and re.search(r"[<>{}]|(?:^|\s)(?:from|unknown|placeholder)(?:\s|$)", value, re.I)
+                ):
+                    raise PlanRejected(
+                        f"Step {node.node_id!r} contains a placeholder instead of an observed {name}"
+                    )
+            ids_value = node.arguments.get("ids")
+            if (
+                getattr(spec, "batchable", False)
+                and isinstance(ids_value, Mapping)
+                and set(ids_value) == {"$ref"}
+                and re.search(r"\.items\[\d+\]\.id$", str(ids_value["$ref"]))
+                and re.search(r"\b(messages|emails|items|results)\b", plan.goal, re.I)
+                and not re.search(r"\b(first|one|single|only one)\b", plan.goal, re.I)
+            ):
+                node.arguments["ids"] = {
+                    "$ref": re.sub(
+                        r"\.items\[\d+\]\.id$",
+                        ".items[*].id",
+                        str(ids_value["$ref"]),
+                    )
+                }
+            effective_ids = node.arguments.get("ids")
+            if (
+                getattr(spec, "batchable", False)
+                and isinstance(effective_ids, Mapping)
+                and set(effective_ids) == {"$ref"}
+            ):
+                reference = str(effective_ids["$ref"])
+                producer = next(
+                    (
+                        candidate
+                        for candidate in sorted(plan.nodes, key=lambda item: len(item.node_id), reverse=True)
+                        if reference.startswith(f"{candidate.node_id}.output")
+                    ),
+                    None,
+                )
+                if (
+                    producer is not None
+                    and producer.connector == node.connector
+                    and producer.operation == "search"
+                ):
+                    producer.arguments.setdefault("limit", 500)
+
+
+
+
+            thread_value = node.arguments.get("thread_id")
+            if (
+                isinstance(thread_value, Mapping)
+                and set(thread_value) == {"$ref"}
+                and str(thread_value["$ref"]).endswith(".id")
+            ):
+                node.arguments["thread_id"] = {
+                    "$ref": str(thread_value["$ref"])[:-3] + ".thread_id"
+                }
+
+    def _repair_initial_connector_plan(
+        self,
+        *,
+        decision: Mapping[str, Any],
+        request: str,
+        error: Exception,
+        connectors: Sequence[str],
+    ) -> Mapping[str, Any] | None:
+        """Give one rejected service plan back to the same model before execution."""
+
+        if self.generate_structured is None or self.connectors is None:
+            return None
+        try:
+            hints = self.connectors.orchestration_hints()
+        except Exception:
+            hints = list(connectors)
+        prompt = (
+            "Return ONE valid compact JSON object and no prose. The previous plan "
+            f"was rejected before execution: {error}. Copy this exact shape, changing "
+            "only query and label text: "
+            '{"action":"plan","nodes":[{"node":"find","connector":"mail.local",'
+            '"operation":"search","arguments":{"query":"from:Sam Project Atlas",'
+            '"limit":500}},{"node":"label","connector":"mail.local","operation":'
+            '"create_label","arguments":{"name":"Project Atlas"}},{"node":"tag",'
+            '"connector":"mail.local","operation":"apply_label","arguments":{"ids":'
+            '{"$ref":"find.output.items[*].id"},"label":{"$ref":"label.output.label"}},'
+            '"depends_on":["find","label"]}]}. Do not add nodes. Do not delete. '
+            "Available exact operations: " + "; ".join(hints)
+        )
+        reply = self.generate_structured(
+            [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": request},
+            ]
+        )
+        from .dispatch import read_decision
+
+        repaired = read_decision(str(reply))
+        if repaired is None or repaired.get("action") != "plan":
+            return None
+        if self.task is not None:
+            self.task.metrics.planning_model_calls += 1
+        return repaired
 
     def _continue_from(
         self,

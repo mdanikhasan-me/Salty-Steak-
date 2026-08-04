@@ -207,6 +207,9 @@ class ApiRouter:
         if method == "POST" and parts == ("training",):
             body = self._read_json()
             return app.start_training(body, self._request_key(body))
+        if method == "POST" and parts == ("training", "identity"):
+            body = self._read_json()
+            return app.start_identity_post_training(body, self._request_key(body))
         if (
             method == "POST"
             and len(parts) == 3

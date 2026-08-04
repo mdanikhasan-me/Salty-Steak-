@@ -53,9 +53,12 @@ export const CONTEXT_WINDOW_PRESETS = Object.freeze([
   Object.freeze({ tokens: 16_384, label: "16K" }),
   Object.freeze({ tokens: 24_576, label: "24K" }),
   Object.freeze({ tokens: 32_768, label: "32K" }),
-  Object.freeze({ tokens: 40_960, label: "40K" }),
   Object.freeze({ tokens: 49_152, label: "48K" }),
   Object.freeze({ tokens: 65_536, label: "64K" }),
+  Object.freeze({ tokens: 98_304, label: "96K" }),
+  Object.freeze({ tokens: 131_072, label: "128K" }),
+  Object.freeze({ tokens: 196_608, label: "192K" }),
+  Object.freeze({ tokens: 262_144, label: "262K" }),
 ]);
 
 export const MAXIMUM_OUTPUT_MODES = Object.freeze([

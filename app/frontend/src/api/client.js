@@ -203,6 +203,12 @@ export const api = {
   getTrainingHistory: (limit = 30) =>
     request(withQuery("/training/history", { limit })),
   startTraining: (payload, requestKey) => operationRequest("/training", payload, requestKey),
+  startIdentityPostTraining: (requestKey) =>
+    operationRequest(
+      "/training/identity",
+      { user_confirmed: true },
+      requestKey,
+    ),
   retryTrainingFinalisation: (operationId, requestKey) =>
     operationRequest(
       `/training/${encodeURIComponent(operationId)}/retry-finalisation`,

@@ -137,6 +137,7 @@ TRAINING_TELEMETRY_EVENT_LIMIT = 2000
 STOPPABLE_OPERATION_TYPES = frozenset(
     {
         "training",
+        "training_identity",
         "evaluation",
         "evaluation_activation",
         "post_training_recovery",

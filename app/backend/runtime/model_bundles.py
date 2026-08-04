@@ -26,6 +26,12 @@ SUPPORTED_ROLES = {
 _COMPANION_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _COMPANION_STATE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+VERIFIED_INTEGRITY_STATES = frozenset(
+    {
+        "sha256_verified_at_import",
+        "sha256_and_tensor_payload_verified_at_rebuild",
+    }
+)
 
 
 class ModelBundleError(ValueError):
@@ -169,6 +175,28 @@ class ModelBundleRegistry:
                 raise ModelBundleError(
                     f"Companion artifact {index} reason must be text"
                 )
+            scale_value = companion.get("scale", 1.0)
+            if (
+                isinstance(scale_value, bool)
+                or not isinstance(scale_value, (int, float))
+                or not 0 < float(scale_value) <= 16
+            ):
+                raise ModelBundleError(
+                    f"Companion artifact {index} scale must be between 0 and 16"
+                )
+            activation = str(companion.get("activation") or "always").strip().casefold()
+            if activation not in {"always", "identity_intent", "routing_intent"}:
+                raise ModelBundleError(
+                    f"Companion artifact {index} activation must be always, identity_intent, or routing_intent"
+                )
+            if activation == "identity_intent" and role != "text_adapter":
+                raise ModelBundleError(
+                    f"Companion artifact {index} identity activation requires text_adapter role"
+                )
+            if activation == "routing_intent" and role != "routing_adapter":
+                raise ModelBundleError(
+                    f"Companion artifact {index} routing activation requires routing_adapter role"
+                )
             current_size = (
                 companion_path.stat().st_size if companion_path.is_file() else None
             )
@@ -187,6 +215,8 @@ class ModelBundleRegistry:
                     "role": role,
                     "state": state,
                     "reason": reason_value.strip(),
+                    "scale": float(scale_value),
+                    "activation": activation,
                     "filename": filename,
                     "artifact_path": str(companion_path),
                     "format": str(companion.get("format") or "unknown"),
@@ -239,6 +269,7 @@ class ModelBundleRegistry:
         size_matches = current_size == expected_size
         runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
         identity = manifest.get("identity") if isinstance(manifest.get("identity"), dict) else {}
+        routing = manifest.get("routing") if isinstance(manifest.get("routing"), dict) else {}
         context = manifest.get("context") if isinstance(manifest.get("context"), dict) else {}
         chat = manifest.get("chat") if isinstance(manifest.get("chat"), dict) else {}
         integrity = manifest.get("integrity") if isinstance(manifest.get("integrity"), dict) else {}
@@ -277,7 +308,11 @@ class ModelBundleRegistry:
             "artifact_size_bytes": current_size,
             "expected_size_bytes": expected_size,
             "checksum": str(artifact.get("sha256") or ""),
-            "integrity": "verified" if size_matches and integrity.get("state") == "sha256_verified_at_import" else "needs_attention",
+            "integrity": (
+                "verified"
+                if size_matches and integrity.get("state") in VERIFIED_INTEGRITY_STATES
+                else "needs_attention"
+            ),
             "integrity_scope": str(integrity.get("state") or "not_verified"),
             "current_size_matches": size_matches,
             "architectural_context_tokens": int(context.get("architectural_tokens") or 0),
@@ -295,6 +330,46 @@ class ModelBundleRegistry:
             "runtime_profile": runtime_profile,
             "runtime_state": str(runtime.get("state") or "not_configured"),
             "runtime_reason": str(runtime.get("reason") or ""),
+            "identity_adapter_required": bool(
+                identity.get("identity_adapter_required")
+            ),
+            "identity_trainer": str(identity.get("trainer") or "").strip(),
+            "identity_adapter_scale": (
+                float(identity["identity_adapter_scale"])
+                if isinstance(identity.get("identity_adapter_scale"), (int, float))
+                and not isinstance(identity.get("identity_adapter_scale"), bool)
+                else None
+            ),
+            "identity_training_report_sha256": str(
+                identity.get("identity_training_report_sha256") or ""
+            ).casefold(),
+            "identity_free_generation_report_sha256": str(
+                identity.get("identity_free_generation_report_sha256") or ""
+            ).casefold(),
+            "identity_evaluation_metrics": (
+                dict(identity["identity_evaluation_metrics"])
+                if isinstance(identity.get("identity_evaluation_metrics"), dict)
+                else {}
+            ),
+            "routing_adapter_required": bool(routing.get("adapter_required")),
+            "routing_adapter_activation": str(
+                routing.get("adapter_activation") or ""
+            ).strip(),
+            "routing_post_training_report_sha256": str(
+                routing.get("post_training_report_sha256") or ""
+            ).casefold(),
+            "routing_training_example_count": int(
+                routing.get("training_example_count") or 0
+            ),
+            "routing_holdout_count": int(routing.get("holdout_count") or 0),
+            "routing_holdout_pass_count": int(
+                routing.get("holdout_pass_count") or 0
+            ),
+            "routing_per_route_pass_count": (
+                dict(routing["per_route_pass_count"])
+                if isinstance(routing.get("per_route_pass_count"), dict)
+                else {}
+            ),
             "activation_allowed": activation_allowed,
             "external_service_required": bool(runtime.get("external_service_required", True)),
             "selected_as_base": bool(chat.get("base_model") and chat.get("selected")),
@@ -343,6 +418,28 @@ class ModelBundleRegistry:
                 "context_presets": context_presets,
                 "runtime_family": str(runtime.get("family") or "unknown"),
                 "runtime_state": str(runtime.get("state") or "not_configured"),
+                "identity_adapter_required": bool(
+                    identity.get("identity_adapter_required")
+                ),
+                "identity_trainer": str(identity.get("trainer") or "").strip(),
+                "identity_adapter_scale": (
+                    float(identity["identity_adapter_scale"])
+                    if isinstance(identity.get("identity_adapter_scale"), (int, float))
+                    and not isinstance(identity.get("identity_adapter_scale"), bool)
+                    else None
+                ),
+                "identity_training_report_sha256": str(
+                    identity.get("identity_training_report_sha256") or ""
+                ).casefold(),
+                "identity_free_generation_report_sha256": str(
+                    identity.get("identity_free_generation_report_sha256") or ""
+                ).casefold(),
+                "identity_evaluation_metrics": (
+                    dict(identity["identity_evaluation_metrics"])
+                    if isinstance(identity.get("identity_evaluation_metrics"), dict)
+                    else {}
+                ),
+                "routing": dict(routing),
                 "runtime_profile": runtime_profile,
                 "external_service_required": bool(runtime.get("external_service_required", True)),
                 "reasoning_default": str(

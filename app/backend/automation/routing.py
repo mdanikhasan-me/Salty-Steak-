@@ -379,6 +379,18 @@ def resolve_execution(
 
             if resolution == "known_application" and "wait_ms" not in resolved:
                 resolved["wait_ms"] = 600
+    elif (
+        capability == BROWSER_CAPABILITY
+        and not str(resolved.get("command") or "").strip()
+        and isinstance(resolved.get("url"), str)
+        and str(resolved["url"]).strip()
+    ):
+
+
+
+
+        resolved["command"] = "open_url"
+        notes.append("inferred open_url from the supplied browser URL")
 
     tier_entry = CAPABILITY_TIER_BY_ID.get(capability)
     if tier_entry is None:

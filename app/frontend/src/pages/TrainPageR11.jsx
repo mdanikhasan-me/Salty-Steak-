@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Clipboard,
+  Fingerprint,
   GraduationCap,
   Pause,
   Play,
@@ -41,6 +42,17 @@ import "./TrainPageR11.css";
 
 const POST_TRAINING_POLICY = "evaluate";
 const MAX_LOG_ROWS = 300;
+const IDENTITY_PHASES = [
+  { value: "collecting_baseline_behavior", label: "Capture baseline behavior" },
+  { value: "tracing_exact_native_weights", label: "Trace exact model weights" },
+  { value: "training_learned_identity_adapter", label: "Train learned adapter" },
+  {
+    value: "checking_unseen_generations_and_retention",
+    label: "Evaluate unseen prompts and retention",
+  },
+  { value: "promoting_evaluated_identity_adapter", label: "Promote verified adapter" },
+  { value: "learned_identity_active", label: "Verify private Chat runtime" },
+];
 
 const DEFAULT_SETTINGS = {
   sequence_length: 512,
@@ -78,6 +90,8 @@ export function TrainPageR11({ onNavigate }) {
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [setupLoading, setSetupLoading] = useState(true);
+  const [identityConfirmed, setIdentityConfirmed] = useState(false);
+  const [identityStarting, setIdentityStarting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +197,20 @@ export function TrainPageR11({ onNavigate }) {
     [operations, trainingStatus],
   );
   const trainingActive = Boolean(trainingOperation && isActive(trainingOperation));
+  const identitySetup = trainingSetup?.identity_post_training || null;
+  const identityOperation = useMemo(
+    () =>
+      [...Object.values(operations || {}), identitySetup?.latest_operation]
+        .filter(Boolean)
+        .filter((operation) => normaliseToken(operation.type) === "training_identity")
+        .sort(
+          (left, right) =>
+            Date.parse(right.updated_at || right.updatedAt || 0) -
+            Date.parse(left.updated_at || left.updatedAt || 0),
+        )[0] || null,
+    [identitySetup?.latest_operation, operations],
+  );
+  const identityActive = Boolean(identityOperation && isActive(identityOperation));
   const header = trainingHeaderState(trainingOperation);
   const canStart =
     Boolean(selectedDataset) &&
@@ -248,6 +276,24 @@ export function TrainPageR11({ onNavigate }) {
     }
   }
 
+  async function startIdentityPostTraining() {
+    if (!identityConfirmed || identityActive || !identitySetup?.available) return;
+    setIdentityStarting(true);
+    try {
+      await startOperation({
+        type: "training_identity",
+        targetId: identitySetup.model_id,
+        launch: (requestKey) => api.startIdentityPostTraining(requestKey),
+      });
+      setIdentityConfirmed(false);
+      await refreshDomain("training", { quiet: true });
+    } catch (error) {
+      reportError(error, "start-identity-post-training");
+    } finally {
+      setIdentityStarting(false);
+    }
+  }
+
   if (setupLoading) {
     return (
       <div className="page page--train-r11">
@@ -297,6 +343,126 @@ export function TrainPageR11({ onNavigate }) {
           <Status value={header.value} label={header.label} />
         </div>
       </PageHeader>
+
+      <section className="r11-identity-card" aria-labelledby="r11-identity-title">
+        <header className="r11-identity-card__header">
+          <div className="r11-identity-card__title">
+            <span className="r11-identity-card__icon" aria-hidden="true">
+              <Fingerprint size={20} />
+            </span>
+            <div>
+              <span className="eyebrow">Native learned identity</span>
+              <h2 id="r11-identity-title">Base Steak 2.0 identity post-training</h2>
+            </div>
+          </div>
+          <Status
+            value={
+              identityActive
+                ? identityOperation.state
+                : identitySetup?.evidence_complete
+                  ? "completed"
+                  : identitySetup?.available
+                    ? "ready"
+                    : "warning"
+            }
+            label={
+              identityActive
+                ? "Running"
+                : identitySetup?.evidence_complete
+                  ? "Learned and verified"
+                  : identitySetup?.available
+                    ? "Ready"
+                    : "Unavailable"
+            }
+          />
+        </header>
+
+        <p className="r11-identity-card__lead">
+          Trains a rank-64 GGUF adapter against the exact local weights. No system-prompt
+          identity or hardcoded answer is used. The base model classifies identity intent,
+          then activates the learned adapter only for that answer. Promotion requires every
+          unseen identity prompt and byte-equivalent capability retention to pass.
+          A separate rank-32 routing-only adapter selects response, research, image,
+          or agent work, then switches off before the selected work runs.
+        </p>
+
+        <div className="r11-identity-evidence" aria-label="Identity training evidence">
+          <SummaryFact label="Public identity" value={identitySetup?.model_name || "Base Steak 2.0"} />
+          <SummaryFact label="Trainer" value={identitySetup?.trainer || "MD Anik Hasan (Sawlper)"} />
+          <SummaryFact label="Training conversations" value={formatNumber(identitySetup?.training_examples || 620)} />
+          <SummaryFact label="Unseen prompts" value={formatNumber(identitySetup?.unseen_identity_prompts || 25)} />
+          <SummaryFact label="Retention paths" value={formatNumber(identitySetup?.capability_retention_prompts || 40)} />
+          <SummaryFact
+            label="Adapter scale"
+            value={identitySetup?.adapter?.scale === undefined ? "Pending" : String(identitySetup.adapter.scale)}
+          />
+          <SummaryFact
+            label="Activation"
+            value={identitySetup?.adapter?.activation === "identity_intent" ? "Model-routed" : "Pending"}
+          />
+          <SummaryFact
+            label="Routing training"
+            value={formatNumber(identitySetup?.routing?.training_examples || 0)}
+          />
+          <SummaryFact
+            label="Routing holdout"
+            value={
+              identitySetup?.routing?.holdout_count
+                ? `${formatNumber(identitySetup.routing.holdout_pass_count)}/${formatNumber(identitySetup.routing.holdout_count)}`
+                : "Pending"
+            }
+          />
+          <SummaryFact
+            label="Routing activation"
+            value={identitySetup?.routing_adapter?.activation === "routing_intent" ? "Decision only" : "Pending"}
+          />
+        </div>
+
+        {identityOperation ? (
+          <OperationProgress
+            operation={identityOperation}
+            phases={IDENTITY_PHASES}
+            allowStop
+            title="Identity workflow"
+            metrics={identityMetrics}
+          />
+        ) : null}
+
+        {!identityActive ? (
+          <div className="r11-identity-card__actions">
+            <label className="r11-safety-check">
+              <input
+                type="checkbox"
+                checked={identityConfirmed}
+                disabled={!identitySetup?.available}
+                onChange={(event) => setIdentityConfirmed(event.target.checked)}
+              />
+              <span>
+                <strong>Run the fixed learned-identity recipe and all gates.</strong>
+                <small>
+                  Chat keeps its current adapter unless training, unseen generation,
+                  retention, checksum, promotion, and private-runtime checks all pass.
+                </small>
+              </span>
+            </label>
+            <Button
+              variant="primary"
+              icon={Fingerprint}
+              busy={identityStarting}
+              disabled={!identitySetup?.available || !identityConfirmed}
+              onClick={startIdentityPostTraining}
+            >
+              Train and validate identity
+            </Button>
+          </div>
+        ) : null}
+
+        {!identitySetup?.available ? (
+          <InlineNotice kind="warning" title="Exact model is not selected">
+            {identitySetup?.reason || "Select the verified steak20 Base Steak 2.0 bundle first."}
+          </InlineNotice>
+        ) : null}
+      </section>
 
       {trainingOperation ? (
         <div className="r11-training-live">
@@ -716,6 +882,35 @@ function TrainingHistory({ runs, loading }) {
       </p>
     </Disclosure>
   );
+}
+
+function identityMetrics(operation) {
+  const result = operation.result || {};
+  const metrics = result.metrics || {};
+  return [
+    {
+      label: "Current evidence",
+      value: operation.phase || operation.state || "Waiting",
+    },
+    {
+      label: "Identity prompts passed",
+      value:
+        metrics.identity_pass_count === undefined
+          ? "Pending"
+          : `${formatNumber(metrics.identity_pass_count)} of ${formatNumber(metrics.identity_count)}`,
+    },
+    {
+      label: "Exact retention paths",
+      value:
+        metrics.retention_exact_baseline_count === undefined
+          ? "Pending"
+          : `${formatNumber(metrics.retention_exact_baseline_count)} of ${formatNumber(metrics.retention_count)}`,
+    },
+    {
+      label: "Hardcoded response",
+      value: "Never used",
+    },
+  ];
 }
 
 function trainingMetrics(operation) {

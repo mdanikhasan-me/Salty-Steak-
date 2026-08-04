@@ -73,7 +73,7 @@ OWNERSHIP = MappingProxyType(
 
 
 THIRD_PARTY_NOTICE_FILES = (
-    "workspace/runtime/salty-native-steak35/THIRD_PARTY_LICENSE.txt",
+    "workspace/runtime/salty-native-steak20/THIRD_PARTY_LICENSE.txt",
     "workspace/runtime/salty-vision/THIRD_PARTY_LICENSE.txt",
 )
 

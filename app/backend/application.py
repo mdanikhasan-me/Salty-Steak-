@@ -57,6 +57,8 @@ from .training.engine import (
     inspect_recovery_state,
     run_training,
 )
+from .training.identity_promotion import promote_identity_candidate
+from .training.identity_workflow import run_identity_post_training
 from .training.policy import (
     completion_outcome_for_policy,
     initial_recovery_state,
@@ -250,27 +252,8 @@ class Application:
         self.vision_inputs.purge_expired_unclaimed()
         self._native_warmup_thread: threading.Thread | None = None
         selected_bundle = self.model_bundles.selected_base("text_generation")
-        native_library_directory = (
-            self.paths.workspace / "runtime" / "salty-native-steak35" / "bin"
-        )
-        if (
-            selected_bundle is not None
-            and selected_bundle.get("runtime_family") == "salty_native_steak35"
-            and selected_bundle.get("current_size_matches")
-            and native_library_directory.is_dir()
-        ):
-            self.model_bundle_runtime = SaltyNativeWorkerRuntime(
-                model_path=selected_bundle["model_path"],
-                library_directory=native_library_directory,
-                source_sha256=str(selected_bundle["checksum"]),
-                profile=SaltyNativeProfile.from_manifest(
-                    selected_bundle.get("runtime_profile")
-                ),
-            )
-        try:
-            vision_bundle = self.model_bundles.get("base-steak-2-0-9b")
-        except KeyError:
-            vision_bundle = None
+        self.model_bundle_runtime = self._runtime_for_model_bundle(selected_bundle)
+        vision_bundle = selected_bundle
         if vision_bundle is not None:
             projector = next(
                 (
@@ -288,6 +271,19 @@ class Application:
                     temporary_root=self.paths.cache / "salty-vision-execution",
                     text_model_sha256=str(vision_bundle["checksum"]),
                     projector_sha256=str(projector["checksum"]),
+                    text_adapters=[
+                        {
+                            "id": companion["id"],
+                            "path": companion["artifact_path"],
+                            "sha256": companion["checksum"],
+                            "scale": float(companion.get("scale", 1.0)),
+                        }
+                        for companion in vision_bundle.get(
+                            "companion_artifacts", []
+                        )
+                        if companion.get("role") == "text_adapter"
+                        and companion.get("activation", "always") == "always"
+                    ],
                     timeout_seconds=900,
                     device="CUDA0",
                     gpu_layers=24,
@@ -363,6 +359,50 @@ class Application:
             )
             self._vision_verification_thread.start()
 
+    def _runtime_for_model_bundle(
+        self,
+        bundle: Mapping[str, Any] | None,
+    ) -> SaltyNativeWorkerRuntime | None:
+        if bundle is None:
+            return None
+        native_library_directory = (
+            self.paths.workspace / "runtime" / "salty-native-steak20" / "bin"
+        )
+        declared_adapters = [
+            companion
+            for companion in bundle.get("companion_artifacts", [])
+            if companion.get("role") in {"text_adapter", "routing_adapter"}
+        ]
+        adapters_ready = (
+            bool(declared_adapters)
+            or not bool(bundle.get("identity_adapter_required"))
+        ) and all(
+            companion.get("current_size_matches") for companion in declared_adapters
+        )
+        if not (
+            bundle.get("runtime_family") == "salty_native_steak20"
+            and bundle.get("current_size_matches")
+            and adapters_ready
+            and native_library_directory.is_dir()
+        ):
+            return None
+        return SaltyNativeWorkerRuntime(
+            model_path=bundle["model_path"],
+            library_directory=native_library_directory,
+            source_sha256=str(bundle["checksum"]),
+            profile=SaltyNativeProfile.from_manifest(bundle.get("runtime_profile")),
+            adapters=[
+                {
+                    "adapter_id": companion["id"],
+                    "path": companion["artifact_path"],
+                    "sha256": companion["checksum"],
+                    "scale": float(companion.get("scale", 1.0)),
+                    "activation": str(companion.get("activation") or "always"),
+                }
+                for companion in declared_adapters
+            ],
+        )
+
     def _warm_selected_model_bundle(self) -> None:
         try:
             self.chat.warm_selected_model_bundle()
@@ -391,6 +431,7 @@ class Application:
         ):
             if operation["type"] in {
                 "training",
+                "training_identity",
                 "evaluation",
                 "evaluation_activation",
                 "post_training_recovery",
@@ -1857,6 +1898,106 @@ class Application:
 
 
 
+    def identity_post_training_setup(self) -> dict[str, Any]:
+        bundle = self.model_bundles.selected_base("text_generation")
+        latest = self.operations.list(
+            operation_type="training_identity",
+            limit=1,
+        )
+        adapter = next(
+            (
+                companion
+                for companion in (bundle or {}).get("companion_artifacts", [])
+                if companion.get("role") == "text_adapter"
+            ),
+            None,
+        )
+        routing_adapter = next(
+            (
+                companion
+                for companion in (bundle or {}).get("companion_artifacts", [])
+                if companion.get("role") == "routing_adapter"
+            ),
+            None,
+        )
+        available = bool(
+            bundle
+            and bundle.get("display_name") == "Base Steak 2.0"
+            and bundle.get("architecture") == "steak20"
+            and bundle.get("runtime_family") == "salty_native_steak20"
+            and bundle.get("current_size_matches")
+            and (
+                self.paths.workspace / "runtime" / "salty-native-steak20" / "bin"
+            ).is_dir()
+        )
+        metrics = dict((bundle or {}).get("identity_evaluation_metrics") or {})
+        evidence_complete = bool(
+            adapter
+            and adapter.get("current_size_matches")
+            and adapter.get("activation") == "identity_intent"
+            and len(str((bundle or {}).get("identity_training_report_sha256") or ""))
+            == 64
+            and len(
+                str(
+                    (bundle or {}).get(
+                        "identity_free_generation_report_sha256"
+                    )
+                    or ""
+                )
+            )
+            == 64
+            and metrics.get("identity_pass_count") == metrics.get("identity_count")
+            and float(metrics.get("retention_exact_baseline_rate") or 0.0) == 1.0
+            and metrics.get("identity_controller_pass_count")
+            == metrics.get("identity_count")
+            and metrics.get("retention_controller_pass_count")
+            == metrics.get("retention_count")
+            and metrics.get("retention_output_clean_count")
+            == metrics.get("retention_count")
+        )
+        return {
+            "available": available,
+            "model_id": bundle.get("id") if bundle else None,
+            "model_name": bundle.get("display_name") if bundle else "Base Steak 2.0",
+            "trainer": (
+                bundle.get("identity_trainer")
+                if bundle and bundle.get("identity_trainer")
+                else "MD Anik Hasan (Sawlper)"
+            ),
+            "method": "native_rank_64_output_projection_lora_with_model_intent_controller",
+            "hardcoded_response_used": False,
+            "training_examples": 620,
+            "unseen_identity_prompts": 25,
+            "capability_retention_prompts": 40,
+            "adapter": adapter,
+            "routing_adapter": routing_adapter,
+            "routing": {
+                "training_examples": int(
+                    (bundle or {}).get("routing_training_example_count") or 0
+                ),
+                "holdout_count": int(
+                    (bundle or {}).get("routing_holdout_count") or 0
+                ),
+                "holdout_pass_count": int(
+                    (bundle or {}).get("routing_holdout_pass_count") or 0
+                ),
+                "per_route_pass_count": dict(
+                    (bundle or {}).get("routing_per_route_pass_count") or {}
+                ),
+                "report_sha256": str(
+                    (bundle or {}).get("routing_post_training_report_sha256") or ""
+                ),
+            },
+            "metrics": metrics,
+            "evidence_complete": evidence_complete,
+            "latest_operation": latest[0] if latest else None,
+            "reason": (
+                "The selected steak20 weights can run the protected learned-identity recipe."
+                if available
+                else "Select the verified steak20 Base Steak 2.0 bundle before identity post-training."
+            ),
+        }
+
     def training_setup(self) -> dict[str, Any]:
         settings = dict(self.config.section("training"))
         recovery = self.paths.training / "recovery"
@@ -1927,6 +2068,7 @@ class Application:
                     "recommended": True,
                 },
             ],
+            "identity_post_training": self.identity_post_training_setup(),
             "resume_state": resume_state,
             "datasets": [
                 record
@@ -1941,6 +2083,172 @@ class Application:
                 )
             ],
         }
+
+    def start_identity_post_training(
+        self,
+        payload: Mapping[str, Any],
+        request_key: str | None,
+    ) -> dict[str, Any]:
+        setup = self.identity_post_training_setup()
+        if not setup["available"]:
+            raise ValueError(str(setup["reason"]))
+        if payload.get("user_confirmed") is not True:
+            raise PermissionError(
+                "Identity post-training requires confirmation of the fixed recipe and evaluation gates"
+            )
+        model_id = str(setup["model_id"])
+        return self._idempotent_operation(
+            request_key,
+            lambda: self.operations.submit(
+                "training_identity",
+                lambda context: self._identity_post_training_worker(
+                    model_id,
+                    context,
+                ),
+                target_id=model_id,
+                dedupe_key="training-identity:single-active",
+                initial_phase="Checking exact model and recipe",
+                initial_details={
+                    "model_name": "Base Steak 2.0",
+                    "trainer": "MD Anik Hasan (Sawlper)",
+                    "hardcoded_response_used": False,
+                    "training_examples": 620,
+                    "unseen_identity_prompts": 25,
+                    "capability_retention_prompts": 40,
+                },
+                success_notification=Notification(
+                    "success",
+                    "Learned identity accepted",
+                    "The learned adapter and model-driven controller passed identity and exact retention gates and are active in Chat.",
+                    12,
+                ),
+                failure_notification=Notification(
+                    "error",
+                    "Identity post-training was not promoted",
+                    "The current Chat adapter remains unchanged unless every native gate passes.",
+                    12,
+                ),
+            ),
+        )
+
+    def _identity_post_training_worker(
+        self,
+        model_id: str,
+        context: OperationContext,
+    ) -> dict[str, Any]:
+        bundle = self.model_bundles.get(model_id)
+        if not (
+            bundle.get("architecture") == "steak20"
+            and bundle.get("runtime_family") == "salty_native_steak20"
+            and bundle.get("current_size_matches")
+        ):
+            raise ValueError("The selected Base Steak model changed before training began")
+        conflicting = [
+            operation
+            for operation in self.operations.list(
+                states=tuple(ACTIVE_OPERATION_STATES),
+                limit=100,
+            )
+            if operation["id"] != context.operation_id
+            and operation["type"]
+            in {
+                "training",
+                "evaluation",
+                "evaluation_activation",
+                "chat_generation",
+                "chat_vision_analysis",
+                "chat_image_generation",
+            }
+        ]
+        if conflicting:
+            raise ValueError(
+                "Finish the active Chat, vision, image, training, or evaluation operation first"
+            )
+
+        runtime_directory = (
+            self.paths.workspace / "runtime" / "salty-native-steak20" / "bin"
+        )
+        output_directory = (
+            self.paths.training / "identity-post-training" / context.operation_id
+        )
+
+        def update(
+            phase: str,
+            current: int,
+            total: int,
+            details: dict[str, Any],
+        ) -> None:
+            context.checkpoint(
+                phase=phase,
+                current_progress=float(current),
+                total_progress=float(total),
+                details=details,
+            )
+
+        with self.chat._bundle_lifecycle_lock:
+            previous_runtime = self.model_bundle_runtime
+            if previous_runtime is not None:
+                context.update(phase="Freeing Chat model for protected training")
+                previous_runtime.unload()
+            self.model_bundle_runtime = None
+            self.chat.model_bundle_runtime = None
+            try:
+                try:
+                    result = run_identity_post_training(
+                        model_path=bundle["model_path"],
+                        runtime_directory=runtime_directory,
+                        model_sha256=str(bundle["checksum"]),
+                        output_directory=output_directory,
+                        on_progress=update,
+                        should_stop=context.stop_requested,
+                    )
+                except InterruptedError as error:
+                    raise OperationInterrupted(str(error)) from error
+                context.update(
+                    phase="Promoting evaluated identity adapter",
+                    current_progress=0,
+                    total_progress=1,
+                    details={
+                        "adapter_sha256": result["adapter"]["sha256"],
+                        "all_gates_passed": True,
+                    },
+                )
+                promotion = promote_identity_candidate(
+                    bundle=bundle,
+                    workflow_result=result,
+                    model_library_root=self.paths.workspace / "models",
+                    backup_root=(
+                        self.paths.training / "identity-post-training" / "rollback"
+                    ),
+                    operation_id=context.operation_id,
+                )
+                selected = self.model_bundles.selected_base("text_generation")
+                refreshed_runtime = self._runtime_for_model_bundle(selected)
+                if refreshed_runtime is None:
+                    raise RuntimeError(
+                        "Promoted identity adapter did not produce a loadable private runtime"
+                    )
+                refreshed_runtime.warmup()
+                self.model_bundle_runtime = refreshed_runtime
+                self.chat.model_bundle_runtime = refreshed_runtime
+                self.chat.model_bundle = dict(selected) if selected else None
+                context.update(
+                    phase="Learned identity active",
+                    current_progress=1,
+                    total_progress=1,
+                    details={
+                        "promotion": promotion,
+                        "runtime": refreshed_runtime.describe(),
+                    },
+                )
+                return {**result, "promotion": promotion, "active_in_chat": True}
+            finally:
+                if self.model_bundle_runtime is None:
+                    selected = self.model_bundles.selected_base("text_generation")
+                    restored_runtime = self._runtime_for_model_bundle(selected)
+                    self.model_bundle_runtime = restored_runtime
+                    self.chat.model_bundle_runtime = restored_runtime
+                    self.chat.model_bundle = dict(selected) if selected else None
 
     def training_status(self) -> dict[str, Any] | None:
         row = self.database.fetch_one(

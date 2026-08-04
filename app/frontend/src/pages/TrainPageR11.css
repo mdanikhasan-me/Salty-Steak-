@@ -13,6 +13,84 @@
 .r11-training-live > .operation-progress { border: 0; border-radius: 0; }
 .r11-training-card { border: 0; background: transparent; }
 
+.r11-identity-card {
+  display: grid;
+  gap: var(--space-5);
+  margin: var(--space-4) 0 var(--space-6);
+  padding: var(--space-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, var(--surface), var(--surface-muted));
+}
+.r11-identity-card__header,
+.r11-identity-card__title,
+.r11-identity-card__actions {
+  display: flex;
+  align-items: center;
+}
+.r11-identity-card__header {
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+.r11-identity-card__title { gap: var(--space-4); }
+.r11-identity-card__title h2 {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-lg);
+  line-height: var(--text-lg-leading);
+}
+.r11-identity-card__icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.r11-identity-card__lead {
+  max-width: 82ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-leading);
+}
+.r11-identity-evidence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+.r11-identity-evidence > div {
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.r11-identity-evidence dt,
+.r11-identity-evidence dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-leading);
+}
+.r11-identity-evidence dt { color: var(--muted); }
+.r11-identity-evidence dd { margin-top: var(--space-1); color: var(--ink); }
+.r11-identity-card > .operation-progress {
+  padding: var(--space-5) 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.r11-identity-card__actions {
+  align-items: stretch;
+  gap: var(--space-4);
+}
+.r11-identity-card__actions .r11-safety-check { flex: 1; }
+.r11-identity-card__actions > .button { min-width: 220px; }
+
 .r11-training-card__header {
   display: flex;
   min-height: 56px;
@@ -308,5 +386,5 @@
   }
 }
 @media (max-width: 1080px) { .r11-training-workstation { grid-template-columns: minmax(0,1fr) 310px; } .r11-setup-step > div { grid-template-columns: 145px minmax(0,1fr); } }
-@media (max-width: 860px) { .r11-training-workstation { max-height: none; grid-template-columns: 1fr; overflow: visible; } .r11-training-config,.r11-run-summary { overflow: visible; } .r11-run-summary { border-top: 1px solid var(--line); border-left: 0; } }
-@media (max-width: 620px) { .r11-setup-step > div { grid-template-columns: 1fr; } .r11-setup-step h3,.r11-setup-step .field,.r11-setup-step p { grid-column: 1; grid-row: auto; } .r11-live-log__row { grid-template-columns: 68px minmax(0,1fr); } .r11-live-log__row code { grid-column: 1 / -1; } .r11-training-history__rows article { grid-template-columns: minmax(0,1fr) auto; } .r11-training-history__rows article > span:last-child { grid-column: 1 / -1; text-align: left; } }
+@media (max-width: 860px) { .r11-identity-evidence { grid-template-columns: repeat(2,minmax(0,1fr)); } .r11-identity-card__actions { align-items: stretch; flex-direction: column; } .r11-training-workstation { max-height: none; grid-template-columns: 1fr; overflow: visible; } .r11-training-config,.r11-run-summary { overflow: visible; } .r11-run-summary { border-top: 1px solid var(--line); border-left: 0; } }
+@media (max-width: 620px) { .r11-identity-card { padding: var(--space-4); } .r11-identity-card__header { align-items: flex-start; flex-direction: column; } .r11-identity-evidence { grid-template-columns: 1fr; } .r11-setup-step > div { grid-template-columns: 1fr; } .r11-setup-step h3,.r11-setup-step .field,.r11-setup-step p { grid-column: 1; grid-row: auto; } .r11-live-log__row { grid-template-columns: 68px minmax(0,1fr); } .r11-live-log__row code { grid-column: 1 / -1; } .r11-training-history__rows article { grid-template-columns: minmax(0,1fr) auto; } .r11-training-history__rows article > span:last-child { grid-column: 1 / -1; text-align: left; } }

@@ -245,8 +245,8 @@ class Plan:
         """Substitute earlier results into a node's arguments.
 
         A value written as ``{"$from": "name"}`` is replaced by that workflow
-        variable. ``{"$ref": "find.output.items[0].id"}`` addresses a field in
-        an earlier node's structured observation. Both preserve the value's
+        variable. ``{"$ref": "find.output.items[0].id"}`` addresses one field;
+        ``items[*].id`` maps the field across every observed item. Both preserve the value's
         native type; neither asks the model to see, copy, or guess runtime data.
         """
 
@@ -277,6 +277,10 @@ class Plan:
 
 
 
+        reference = reference.replace("[+]", "[*]")
+
+
+
         node_id = next(
             (
                 candidate
@@ -295,7 +299,7 @@ class Plan:
         current = self.observations[node_id]
         suffix = reference[len(f"{node_id}.output") :]
         position = 0
-        segment = re.compile(r"(?:\.([^\.\[\]]+)|\[(\d+)\])")
+        segment = re.compile(r"(?:\.([^\.\[\]]+)|\[(\d+|\*)\])")
         while position < len(suffix):
             match = segment.match(suffix, position)
             if match is None:
@@ -304,23 +308,42 @@ class Plan:
                 )
             field_name, index_text = match.groups()
             if field_name is not None:
-                if not isinstance(current, Mapping) or field_name not in current:
+                if isinstance(current, Sequence) and not isinstance(
+                    current, (str, bytes, bytearray)
+                ):
+                    if not all(
+                        isinstance(item, Mapping) and field_name in item
+                        for item in current
+                    ):
+                        raise PlanError(
+                            f"Runtime reference {reference!r} could not map field "
+                            f"{field_name!r} across the selected items."
+                        )
+                    current = [item[field_name] for item in current]
+                elif not isinstance(current, Mapping) or field_name not in current:
                     raise PlanError(
                         f"Runtime reference {reference!r} could not resolve field "
                         f"{field_name!r}."
                     )
-                current = current[field_name]
+                else:
+                    current = current[field_name]
             else:
-                index = int(index_text)
                 if (
                     not isinstance(current, Sequence)
                     or isinstance(current, (str, bytes, bytearray))
-                    or index >= len(current)
                 ):
                     raise PlanError(
-                        f"Runtime reference {reference!r} could not resolve index {index}."
+                        f"Runtime reference {reference!r} could not resolve list selection."
                     )
-                current = current[index]
+                if index_text == "*":
+                    current = list(current)
+                else:
+                    index = int(index_text)
+                    if index >= len(current):
+                        raise PlanError(
+                            f"Runtime reference {reference!r} could not resolve index {index}."
+                        )
+                    current = current[index]
             position = match.end()
 
 
@@ -358,20 +381,48 @@ def build_plan(payload: Mapping[str, Any], *, goal: str = "") -> Plan:
     if not isinstance(raw_nodes, list) or not raw_nodes:
         raise PlanError("A plan needs at least one step.")
 
+    node_ids = [
+        str(entry.get("node") or entry.get("id") or f"n{index}")
+        for index, entry in enumerate(raw_nodes, start=1)
+        if isinstance(entry, Mapping)
+    ]
     nodes = []
     for index, entry in enumerate(raw_nodes, start=1):
         if not isinstance(entry, Mapping):
             raise PlanError(f"Step {index} is not an object.")
         try:
+            node_id = str(entry.get("node") or entry.get("id") or f"n{index}")
+            arguments = _normalise_runtime_references(
+                dict(entry.get("arguments") or {})
+            )
+            dependencies = list(entry.get("depends_on") or ())
+            for reference in _runtime_references(arguments):
+                producer = next(
+                    (
+                        candidate
+                        for candidate in sorted(node_ids, key=len, reverse=True)
+                        if reference == f"{candidate}.output"
+                        or reference.startswith(
+                            (f"{candidate}.output.", f"{candidate}.output[")
+                        )
+                    ),
+                    None,
+                )
+                if producer is None:
+                    raise PlanError(
+                        f"Step {node_id!r} references unknown output {reference!r}."
+                    )
+                if producer != node_id and producer not in dependencies:
+                    dependencies.append(producer)
             nodes.append(
                 PlanNode(
-                    node_id=str(entry.get("node") or entry.get("id") or f"n{index}"),
+                    node_id=node_id,
                     objective=str(entry.get("objective") or entry.get("reason") or ""),
                     capability=entry.get("capability"),
                     connector=entry.get("connector"),
                     operation=entry.get("operation"),
-                    arguments=dict(entry.get("arguments") or {}),
-                    depends_on=tuple(entry.get("depends_on") or ()),
+                    arguments=arguments,
+                    depends_on=tuple(dependencies),
                     verify=dict(entry["verify"]) if entry.get("verify") else None,
                     max_attempts=max(1, min(int(entry.get("max_attempts") or 2), 5)),
                     fallback=dict(entry["fallback"]) if entry.get("fallback") else None,
@@ -388,6 +439,46 @@ def build_plan(payload: Mapping[str, Any], *, goal: str = "") -> Plan:
         nodes=nodes,
         variables=dict(payload.get("variables") or {}),
     )
+
+
+def _normalise_runtime_references(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _normalise_runtime_references(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalise_runtime_references(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text.startswith("$") or ".output" not in text:
+        return value
+    reference = text[1:]
+    if reference.startswith("{{") and reference.endswith("}}"):
+        reference = reference[2:-2]
+    elif reference.startswith("{") and reference.endswith("}"):
+        reference = reference[1:-1]
+    reference = reference.strip()
+    return {"$ref": reference}
+
+
+def _runtime_references(value: Any) -> list[str]:
+    references: list[str] = []
+    if isinstance(value, Mapping):
+        if set(value) == {"$ref"}:
+            reference = str(value["$ref"] or "").strip().replace("[+]", "[*]")
+            if not re.fullmatch(
+                r"[^.\[\]]+(?:\.[^.\[\]]+)*\.output"
+                r"(?:\.[^.\[\]]+|\[(?:\d+|\*)\])*",
+                reference,
+            ):
+                raise PlanError(f"Runtime reference {reference!r} has invalid syntax.")
+            references.append(reference)
+        else:
+            for item in value.values():
+                references.extend(_runtime_references(item))
+    elif isinstance(value, list):
+        for item in value:
+            references.extend(_runtime_references(item))
+    return references
 
 
 __all__ = [

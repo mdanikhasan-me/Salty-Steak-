@@ -100,6 +100,17 @@ PLAN_SHAPE = (
     "observed values."
 )
 
+CONNECTOR_PLAN_SHAPE = (
+    '\nmail plan example: {"action":"plan","nodes":[{"node":"find","connector":'
+    '"mail.local","operation":"search","arguments":{"query":"Project Atlas"}},'
+    '{"node":"label","connector":"mail.local","operation":"create_label",'
+    '"arguments":{"name":"Project Atlas"}},{"node":"tag","connector":'
+    '"mail.local","operation":"apply_label","arguments":{"ids":{"$ref":'
+    '"find.output.items[*].id"},"label":{"$ref":"label.output.label"}},'
+    '"depends_on":["find","label"]}]}'
+    '\nUse items[*].id to pass every observed id; never invent ids.'
+)
+
 
 
 
@@ -187,7 +198,7 @@ def build_turn_instruction(
     if SINGLE_ACTION in offered:
         text += ACTION_SHAPE
     if PLAN in offered:
-        text += PLAN_SHAPE
+        text += CONNECTOR_PLAN_SHAPE if connectors else PLAN_SHAPE
         if capabilities:
             text += PLAN_CAPABILITY_SHAPE
     if image_available:
@@ -203,7 +214,13 @@ def build_turn_instruction(
                 actions.append(f"  {name} — {affordance}")
         text += "\nActions:\n" + "\n".join(actions)
     if connectors:
-        text += "\nServices: " + ", ".join(connectors)
+        text += (
+            "\nConfigured services are direct structured access to the user's "
+            "own data. Prefer a matching service over guessing a desktop app or "
+            "website. A mail service handles inbox, email, messages, labels and "
+            "drafts; Discord is not a substitute for an inbox.\nServices: "
+            + ", ".join(connectors)
+        )
     if agent_mode and capabilities:
 
 

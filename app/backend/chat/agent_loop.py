@@ -113,6 +113,34 @@ AGENT_RULES_TAIL = (
     '"arguments": { }, "answer": "<only when action is respond>"}'
 )
 
+SERVICE_WORKFLOW_RULES = {
+    BROWSER_CAPABILITY: (
+        "- Gmail: use browser.control with https://mail.google.com in the "
+        "Salty-owned profile. Query real page elements. If the account needs "
+        "sign-in, call show_window and stop for the user to authenticate; never "
+        "request or store a password. Discord web is https://discord.com/app.\n"
+        "- An opaque browser element handle carries no meaning by itself. When "
+        "acting on one, repeat its observed accessible name in the name argument.\n"
+    ),
+    APPLICATION_LAUNCH_CAPABILITY: (
+        "- For Discord, prefer application.launch for the installed Discord app. "
+        "If it is unavailable, use another granted structured route.\n"
+    ),
+    UI_AUTOMATION_CAPABILITY: (
+        "- After Discord is open, use ui.automation to find channels, message "
+        "fields, and buttons as controls rather than pixels. Repeat the observed "
+        "accessible name beside an opaque element handle.\n"
+    ),
+}
+
+MESSAGE_WORKFLOW_RULES = (
+    "- A request to draft a Gmail or Discord message stops after the fields are "
+    "filled and verified. It never presses Send. For any later send, repeat the "
+    "observed control name in the action arguments (for example name=Send) so "
+    "the policy can require explicit approval. Never claim a message was sent "
+    "until a fresh page or control readback proves it.\n"
+)
+
 
 class AgentTaskError(RuntimeError):
     """Raised when an automation task cannot be run at all."""
@@ -151,6 +179,9 @@ def build_system_prompt(capabilities: Sequence[str]) -> str:
             rules += get_capability_descriptor(capability).agent_rules
         except KeyError:
             continue
+        rules += SERVICE_WORKFLOW_RULES.get(capability, "")
+    if BROWSER_CAPABILITY in ordered or UI_AUTOMATION_CAPABILITY in ordered:
+        rules += MESSAGE_WORKFLOW_RULES
     rules += AGENT_RULES_TAIL
     lines.extend(["", rules])
     return "\n".join(lines)
@@ -612,6 +643,9 @@ class AgentLoop:
 
 
 
+            action["arguments"] = self._semantic_action_arguments(
+                action["action"], action["arguments"]
+            )
             decision = self.policy.evaluate(action["action"], action["arguments"])
             if decision.outcome == DENY:
                 self._record(
@@ -866,6 +900,49 @@ class AgentLoop:
             return None
         inner = parsed.get("arguments")
         return inner if isinstance(inner, Mapping) else parsed
+
+    def _semantic_action_arguments(
+        self,
+        capability: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Carry an observed control name beside an otherwise opaque handle.
+
+        The approval policy cannot know that ``web-el-7`` is the Gmail Send
+        button. The structured read that produced the handle did know, and the
+        task world state retained that fact. Reattaching the observed name
+        closes the gap without guessing from coordinates or trusting a model to
+        classify the consequence of its own action.
+        """
+
+        checked = dict(arguments)
+        if checked.get("name") or not checked.get("element"):
+            return checked
+        state_name = (
+            "page_elements"
+            if capability == BROWSER_CAPABILITY
+            else "ui_elements"
+            if capability == UI_AUTOMATION_CAPABILITY
+            else None
+        )
+        if state_name is None:
+            return checked
+        world_state = getattr(self.task, "world_state", None)
+        if world_state is None:
+            return checked
+        try:
+            observed = world_state.get(state_name) or []
+        except Exception:
+            return checked
+        handle = str(checked["element"])
+        for item in observed:
+            if not isinstance(item, Mapping) or str(item.get("element") or "") != handle:
+                continue
+            name = str(item.get("name") or "").strip()
+            if name:
+                checked["name"] = name
+            break
+        return checked
 
     def _cancelled(self) -> dict[str, Any]:
         self.task.finish_stopped()

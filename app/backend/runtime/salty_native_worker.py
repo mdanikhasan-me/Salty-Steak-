@@ -159,11 +159,13 @@ class SaltyNativeWorkerRuntime:
         library_directory: str | Path,
         profile: SaltyNativeProfile | None = None,
         source_sha256: str,
+        adapters: Sequence[dict[str, Any]] = (),
     ) -> None:
         self.model_path = Path(model_path).resolve()
         self.library_directory = Path(library_directory).resolve()
         self.profile = profile or SaltyNativeProfile()
         self.source_sha256 = source_sha256
+        self.adapters = tuple(dict(value) for value in adapters)
         self._process: subprocess.Popen[str] | None = None
         self._job_handle: int | None = None
         self._stderr_handle: Any = None
@@ -193,6 +195,17 @@ class SaltyNativeWorkerRuntime:
     def ready(self) -> bool:
         return self.loaded and self._warmed
 
+    def conditional_adapter_ids(self, activation: str) -> tuple[str, ...]:
+        """Return registered adapters assigned to one conditional activation lane."""
+
+        checked = str(activation).strip().casefold()
+        return tuple(
+            str(value.get("adapter_id") or value.get("id") or "")
+            for value in self.adapters
+            if str(value.get("activation") or "always").strip().casefold() == checked
+            and str(value.get("adapter_id") or value.get("id") or "")
+        )
+
     def _cold_description(self) -> dict[str, Any]:
         return {
             "loaded": False,
@@ -204,12 +217,13 @@ class SaltyNativeWorkerRuntime:
             "warmup_generated_tokens": self._warmup_generated_tokens,
             "runtime_id": None,
             "worker_pid": None,
-            "runtime_family": "salty_native_steak35",
+            "runtime_family": "salty_native_steak20",
             "engine": "app_owned_private_native_worker",
             "profile": asdict(self.profile),
             "source_sha256": self.source_sha256,
             "verified_source_sha256": None,
             "model_path": str(self.model_path),
+            "adapters": [dict(value) for value in self.adapters],
             "architectural_context_limit": 262_144,
             "configured_context_limit": self.profile.context_limit,
             "resident_context_limit": self.profile.initial_context_limit,
@@ -469,6 +483,7 @@ class SaltyNativeWorkerRuntime:
                 "library_directory": str(self.library_directory),
                 "source_sha256": self.source_sha256,
                 "profile": asdict(self.profile),
+                "adapters": [dict(value) for value in self.adapters],
             },
         )
         self._last_description = {
@@ -570,6 +585,7 @@ class SaltyNativeWorkerRuntime:
         reserved_output_tokens: int | None = None,
         reasoning_mode: str = "cooking",
         maximum_output_mode: str = "manual",
+        enabled_adapter_ids: Sequence[str] | None = None,
     ) -> SaltyNativeGeneration:
         self.warmup()
         cancellation_path = (
@@ -594,6 +610,11 @@ class SaltyNativeWorkerRuntime:
                         "reserved_output_tokens": reserved_output_tokens,
                         "reasoning_mode": reasoning_mode,
                         "maximum_output_mode": maximum_output_mode,
+                        "enabled_adapter_ids": (
+                            list(enabled_adapter_ids)
+                            if enabled_adapter_ids is not None
+                            else None
+                        ),
                         "cancellation_path": str(cancellation_path),
                     },
                     should_stop=should_stop,
@@ -724,6 +745,7 @@ def _serve() -> int:
                         library_directory=payload["library_directory"],
                         source_sha256=str(payload["source_sha256"]),
                         profile=SaltyNativeProfile(**dict(payload["profile"])),
+                        adapters=list(payload.get("adapters") or []),
                     )
                 result: Any = runtime.load()
             elif command == "generate":

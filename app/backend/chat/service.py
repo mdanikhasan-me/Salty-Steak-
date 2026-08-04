@@ -32,6 +32,7 @@ from ..runtime.steak_gen import (
 )
 from ..runtime.salty_native_worker import SaltyNativeWorkerRuntime
 from ..research.activity import build_research_activity_journal
+from ..research.intent import normalise_research_intent, research_intent_messages
 from ..runtime.salty_vision import (
     BASE_STEAK_PUBLIC_NAME,
     VISION_RUNTIME_ID,
@@ -45,6 +46,12 @@ from ..memory import SemanticMemory
 from ..system.config import AppConfig
 from ..system.environment import HostEnvironmentRegistry, seed_world_state
 from ..tooling.web_search import WebSearchClient
+from ..training.identity_intent import (
+    IDENTITY_INTENT_LABEL,
+    identity_intent_messages,
+    normalise_identity_intent,
+)
+from ..training.route_dataset import ROUTE_CODES, ROUTE_SYSTEM
 from ..versions.tokenizer import CHAT_TEMPLATE_VERSION
 from .actions import (
     FILE_TRASH_ACTION,
@@ -413,7 +420,7 @@ def _checked_tone(tone: Any) -> str:
         raise ValueError(f"Label tone must be one of: {', '.join(LABEL_TONES)}")
     return value
 GENERATION_LIMITS = {
-    "context_window_tokens": {"minimum": 256, "maximum": 65536},
+    "context_window_tokens": {"minimum": 256, "maximum": 262144},
     "maximum_output_tokens": {"minimum": 1, "maximum": 8192},
     "temperature": {"minimum": 0.0, "maximum": 2.0},
     "top_p": {"minimum": 0.05, "maximum": 1.0},
@@ -434,7 +441,7 @@ MAXIMUM_OUTPUT_MODES = ("automatic", "manual")
 COMPUTER_AUTHORITY_MODES = ("ask_every_time", "full_access")
 MANUAL_OUTPUT_PRESETS = (256, 512, 1024, 2048, 4096, 8192)
 BASE_STEAK_CONTEXT_PRESETS = (16384, 24576, 32768, 40960, 49152, 65536)
-BASE_STEAK_MODEL_ID = "base-steak-2-0-9b"
+BASE_STEAK_MODEL_ID = "base-steak-2-0-9b-steak20"
 VISION_PROFILE_ID = "base_steak_2_vision_fixed_4k"
 
 
@@ -1933,6 +1940,165 @@ class ChatService:
 
         self._record_generation(response)
         return str(response.text)
+
+    def _identity_adapter_activation(
+        self,
+        latest_user_message: str,
+        *,
+        context: OperationContext,
+    ) -> tuple[tuple[str, ...], dict[str, Any]]:
+        """Let the base model decide whether its learned identity lane is needed.
+
+        The controller never supplies an identity answer. It runs with all
+        conditional adapters disabled and returns only a strict intent label;
+        the separately trained, checksum-bound LoRA produces the user-facing
+        wording when the label is IDENTITY. A malformed result fails closed to
+        the untouched base weights so controller uncertainty cannot degrade an
+        unrelated task.
+        """
+
+        runtime = self.model_bundle_runtime
+        if runtime is None:
+            return (), {"available": False, "reason": "native_runtime_unavailable"}
+        adapter_selector = getattr(runtime, "conditional_adapter_ids", None)
+        adapter_ids = (
+            tuple(adapter_selector("identity_intent"))
+            if callable(adapter_selector)
+            else ()
+        )
+        if not adapter_ids:
+            return (), {"available": False, "reason": "no_conditional_identity_adapter"}
+        started = time.perf_counter()
+        decision = runtime.generate(
+            messages=identity_intent_messages(latest_user_message),
+            maximum_output_tokens=6,
+            temperature=0.0,
+            top_p=1.0,
+            top_k=1,
+            repetition_penalty=1.0,
+            seed=20260820,
+            stop_sequences=[],
+            should_stop=context.stop_requested,
+            context_window_tokens=4096,
+            reserved_output_tokens=6,
+            reasoning_mode="instant",
+            maximum_output_mode="manual",
+            enabled_adapter_ids=(),
+        )
+        if decision.cancelled or context.stop_requested():
+            raise OperationInterrupted("Identity intent classification was stopped")
+        label = normalise_identity_intent(decision.text)
+        enabled = adapter_ids if label == IDENTITY_INTENT_LABEL else ()
+        return enabled, {
+            "available": True,
+            "controller": "base_steak_model_intent_generation",
+            "controller_adapter_state": "disabled",
+            "label": label or "MALFORMED",
+            "fail_closed": label is None,
+            "registered_adapter_ids": list(adapter_ids),
+            "enabled_adapter_ids": list(enabled),
+            "duration_seconds": round(time.perf_counter() - started, 4),
+            "controller_output_tokens": len(decision.token_ids),
+        }
+
+    def _automatic_research_intent(
+        self,
+        latest_user_message: str,
+        *,
+        context: OperationContext,
+        generation_settings: Mapping[str, Any],
+    ) -> tuple[str | None, dict[str, Any]]:
+        """Recover a missed web-research route with a held-out model classifier."""
+
+        started = time.perf_counter()
+        try:
+            answer = self._agent_generate(
+                research_intent_messages(latest_user_message),
+                context=context,
+                generation_settings={
+                    **dict(generation_settings),
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                    "top_k": 1,
+                    "repetition_penalty": 1.0,
+                    "seed": 20260820,
+                    "maximum_output_tokens": 6,
+                    "reasoning_mode": "instant",
+                    "maximum_output_mode": "manual",
+                },
+            )
+        except Exception as error:
+            return None, {
+                "available": True,
+                "controller": "base_steak_public_research_intent_generation",
+                "label": "ERROR",
+                "fail_closed": True,
+                "error_type": type(error).__name__,
+                "duration_seconds": round(time.perf_counter() - started, 4),
+            }
+        label = normalise_research_intent(answer)
+        return label, {
+            "available": True,
+            "controller": "base_steak_public_research_intent_generation",
+            "label": label or "MALFORMED",
+            "fail_closed": label is None,
+            "duration_seconds": round(time.perf_counter() - started, 4),
+        }
+
+    def _learned_route_decision(
+        self,
+        latest_user_message: str,
+        *,
+        context: OperationContext,
+    ) -> tuple[str | None, dict[str, Any]]:
+        """Classify one route with the routing-only post-trained adapter."""
+
+        runtime = self.model_bundle_runtime
+        selector = getattr(runtime, "conditional_adapter_ids", None)
+        adapter_ids = (
+            tuple(selector("routing_intent"))
+            if runtime is not None and callable(selector)
+            else ()
+        )
+        if runtime is None or not adapter_ids:
+            return None, {"available": False, "reason": "no_learned_routing_adapter"}
+        started = time.perf_counter()
+        result = runtime.generate(
+            messages=[
+                {"role": "system", "content": ROUTE_SYSTEM},
+                {"role": "user", "content": str(latest_user_message)},
+            ],
+            maximum_output_tokens=6,
+            temperature=0.0,
+            top_p=1.0,
+            top_k=1,
+            repetition_penalty=1.0,
+            seed=20260820,
+            stop_sequences=[],
+            should_stop=context.stop_requested,
+            context_window_tokens=2048,
+            reserved_output_tokens=6,
+            reasoning_mode="instant",
+            maximum_output_mode="manual",
+            enabled_adapter_ids=adapter_ids,
+        )
+        if result.cancelled or context.stop_requested():
+            raise OperationInterrupted("Learned route classification was stopped")
+        code = str(result.text or "").strip().upper().rstrip(".")
+        route = next(
+            (name.casefold() for name, expected in ROUTE_CODES.items() if expected == code),
+            None,
+        )
+        return route, {
+            "available": True,
+            "controller": "routing_only_post_trained_lora",
+            "adapter_ids": list(adapter_ids),
+            "code": code if code in set(ROUTE_CODES.values()) else "MALFORMED",
+            "route": route,
+            "fail_closed": route is None,
+            "duration_seconds": round(time.perf_counter() - started, 4),
+            "output_tokens": len(result.token_ids),
+        }
 
     def _record_generation(self, response: Any) -> None:
         """Remember what one generation produced, for this turn only."""
@@ -3890,6 +4056,24 @@ class ChatService:
                 messages, context=context, generation_settings=generation_settings
             )
 
+        def generate_structured(messages: list[dict[str, str]]) -> str:
+            return self._agent_generate(
+                messages,
+                context=context,
+                generation_settings={
+                    **dict(generation_settings),
+                    "maximum_output_tokens": min(
+                        1024,
+                        int(generation_settings["maximum_output_tokens"]),
+                    ),
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                    "top_k": 1,
+                    "repetition_penalty": 1.0,
+                    "seed": 1338,
+                },
+            )
+
         def generate_with_preview(
             messages: list[dict[str, str]],
             on_preview: Callable[[Mapping[str, Any]], None],
@@ -4008,6 +4192,7 @@ class ChatService:
             connectors=self.connectors,
             images=images,
             generate=generate,
+            generate_structured=generate_structured,
             generate_with_preview=generate_with_preview,
             task=task,
             capabilities=capabilities,
@@ -4437,7 +4622,36 @@ class ChatService:
                 "model_notes": strip_reasoning(reply_text)[:2_000],
             }
         else:
-            decision = read_decision(reply_text)
+            learned_route = str(generation_settings.get("learned_route") or "")
+            parsed_decision = read_decision(reply_text)
+            if learned_route == "respond":
+                decision = None
+            elif learned_route == "research":
+                decision = {"action": "research", "question": request}
+            elif learned_route == "image":
+                decision = (
+                    parsed_decision
+                    if parsed_decision is not None
+                    and parsed_decision.get("action") in {GENERATE_IMAGE, REVISE_IMAGE}
+                    else {
+                        "action": "generate_image",
+                        "reason": "The learned routing adapter selected image generation.",
+                        "model_notes": strip_reasoning(reply_text)[:2_000],
+                    }
+                )
+            elif learned_route == "agent":
+                decision = (
+                    parsed_decision
+                    if parsed_decision is not None
+                    and parsed_decision.get("action") in {SINGLE_ACTION, PLAN}
+                    else {
+                        "action": "action",
+                        "reason": "The learned routing adapter selected computer or service work.",
+                    }
+                )
+            else:
+                decision = parsed_decision
+            decision_already_verified = bool(learned_route)
 
 
 
@@ -4466,14 +4680,42 @@ class ChatService:
 
 
 
-            if decision is not None:
-                self._route_vetoed = None
-                decision = self._route_the_request_actually_needs(
-                    decision,
-                    request=latest_user_message(history) or request,
+
+
+            research_recovery_available = bool(
+                generation_settings.get("research_forced")
+                or generation_settings.get("research_available")
+                or generation_settings.get("web_search_enabled")
+                or self._research_runtime_available()
+            )
+            if (
+                decision is None
+                and not learned_route
+                and research_recovery_available
+            ):
+                research_label, research_controller = self._automatic_research_intent(
+                    latest_user_message(history) or request,
                     context=context,
                     generation_settings=generation_settings,
                 )
+                self._route_trace["automatic_research_controller"] = research_controller
+                if research_label == "RESEARCH":
+                    decision = {"action": "research", "question": request}
+                    decision_already_verified = True
+                    self._route_trace["parsed_route"] = "research"
+
+
+
+
+            if decision is not None:
+                self._route_vetoed = None
+                if not decision_already_verified:
+                    decision = self._route_the_request_actually_needs(
+                        decision,
+                        request=latest_user_message(history) or request,
+                        context=context,
+                        generation_settings=generation_settings,
+                    )
                 if decision is None:
 
 
@@ -4516,6 +4758,126 @@ class ChatService:
                         details={"route_not_needed": vetoed.get("route") or True},
                     )
         decision_recovery: dict[str, Any] = {}
+        connector_hints: list[str] = []
+        if self.connectors is not None:
+            try:
+                connector_hints = self.connectors.orchestration_hints()
+            except Exception:
+                connector_hints = []
+        connector_ids = [
+            hint.split(":", 1)[0].strip()
+            for hint in connector_hints
+            if hint.split(":", 1)[0].strip()
+        ]
+        unreadable_text = str(strip_reasoning(str(reply_text or "")))
+        connector_attempt = bool(
+            decision is None
+            and looks_like_a_decision_attempt(reply_text)
+            and connector_ids
+            and (
+                '"connector"' in unreadable_text.casefold()
+                or any(
+                    connector_id.casefold() in unreadable_text.casefold()
+                    for connector_id in connector_ids
+                )
+            )
+        )
+        if connector_attempt:
+            service_instruction = (
+                "Return ONE valid compact JSON object and no prose. Copy this exact "
+                "shape, changing only query and label text: "
+                '{"action":"plan","nodes":[{"node":"find","connector":'
+                '"mail.local","operation":"search","arguments":{"query":'
+                '"from:Sam Project Atlas","limit":500}},{"node":"label",'
+                '"connector":"mail.local","operation":"create_label","arguments":'
+                '{"name":"Project Atlas"}},{"node":"tag","connector":"mail.local",'
+                '"operation":"apply_label","arguments":{"ids":{"$ref":'
+                '"find.output.items[*].id"},"label":{"$ref":"label.output.label"}},'
+                '"depends_on":["find","label"]}]}. Do not add nodes. Do not delete. '
+                "Configured services: "
+                + "; ".join(connector_hints)
+            )
+            repair_attempts: list[dict[str, Any]] = []
+            prior = ""
+            for repair_attempt in range(1, 4):
+                try:
+                    corrected = self._agent_generate(
+                        [
+                            {"role": "system", "content": service_instruction},
+                            {
+                                "role": "user",
+                                "content": (
+                                    (latest_user_message(history) or request)
+                                    + (
+                                        "\nThe previous repair was still invalid. "
+                                        "Return a shorter object using the exact example shape."
+                                        if prior
+                                        else ""
+                                    )
+                                ),
+                            },
+                        ],
+                        context=context,
+                        generation_settings={
+                            **dict(generation_settings),
+                            "maximum_output_tokens": min(
+                                1024,
+                                int(generation_settings["maximum_output_tokens"]),
+                            ),
+                            "seed": int(generation_settings["seed"])
+                            + repair_attempt,
+                            "temperature": 0.0,
+                            "top_p": 1.0,
+                            "top_k": 1,
+                            "repetition_penalty": 1.0,
+                        },
+                    )
+                except Exception as repair_error:
+                    corrected = ""
+                    repair_attempts.append(
+                        {
+                            "attempt": repair_attempt,
+                            "status": "generation_failed",
+                            "error": str(repair_error)[:300],
+                        }
+                    )
+                    continue
+                repaired = read_decision(corrected)
+                if repaired is not None and repaired.get("action") == PLAN:
+                    decision = repaired
+                    repair_attempts.append(
+                        {"attempt": repair_attempt, "status": "parsed_plan"}
+                    )
+                    decision_recovery = {
+                        "decision_recovered_to_service_plan": True,
+                        "service_repair_attempts": repair_attempts,
+                        "unreadable_decision": unreadable_text[:1_200],
+                    }
+                    break
+                prior = corrected
+                repair_attempts.append(
+                    {
+                        "attempt": repair_attempt,
+                        "status": "invalid_plan",
+                        "reply_characters": len(str(corrected)),
+                    }
+                )
+            if decision is None:
+                from .dispatch import TurnOutcome
+
+                return TurnOutcome(
+                    "respond",
+                    content=(
+                        "I could not form a safe service plan, so I left the "
+                        "mailbox unchanged."
+                    ),
+                    details={
+                        "service_plan_repair_failed": True,
+                        "service_repair_attempts": repair_attempts,
+                        "unreadable_decision": unreadable_text[:1_200],
+                    },
+                )
+
         if decision is None and looks_like_a_decision_attempt(reply_text):
 
 
@@ -4523,10 +4885,14 @@ class ChatService:
 
 
 
-            recovered = recover_agent_route(
-                reply_text,
-                agent_mode=bool(generation_settings.get("agent_mode")),
-                capabilities=self.granted_automation_capabilities(),
+            recovered = (
+                None
+                if connector_attempt
+                else recover_agent_route(
+                    reply_text,
+                    agent_mode=bool(generation_settings.get("agent_mode")),
+                    capabilities=self.granted_automation_capabilities(),
+                )
             )
             if recovered is not None:
                 recovered = self._route_the_request_actually_needs(
@@ -5135,10 +5501,114 @@ class ChatService:
                 "id": "understanding",
                 "kind": "thinking",
                 "label": "Understanding the request",
-                "detail": "Reviewing the conversation, requested outcome, and active modes.",
+                "detail": "Reviewing the requested outcome and response constraints.",
                 "state": "running",
                 "sequence": 1,
-            }
+            },
+            {
+                "id": "conversation-context",
+                "kind": "context",
+                "label": "Reading conversation context",
+                "detail": "Selecting relevant earlier turns for this response.",
+                "state": "pending",
+                "sequence": 2,
+            },
+            {
+                "id": "turn-controls",
+                "kind": "control",
+                "label": "Applying turn controls",
+                "detail": "Checking reasoning, research, agent, authority, and output settings.",
+                "state": "pending",
+                "sequence": 3,
+            },
+            {
+                "id": "routing-intent",
+                "kind": "thinking",
+                "label": "Choosing the execution route",
+                "detail": "The routing-only learned adapter is classifying this request.",
+                "state": "pending",
+                "sequence": 4,
+            },
+            {
+                "id": "identity-intent",
+                "kind": "thinking",
+                "label": "Checking model-identity intent",
+                "detail": "Determining whether the learned identity lane is relevant.",
+                "state": "pending",
+                "sequence": 5,
+            },
+            {
+                "id": "runtime",
+                "kind": "runtime",
+                "label": "Preparing the local model",
+                "detail": "Checking the hash-bound private runtime and selected weights.",
+                "state": "pending",
+                "sequence": 6,
+            },
+            {
+                "id": "context-window",
+                "kind": "context",
+                "label": "Allocating the context window",
+                "detail": "Applying the selected token window and adaptive KV policy.",
+                "state": "pending",
+                "sequence": 7,
+            },
+            {
+                "id": "prompt",
+                "kind": "context",
+                "label": "Preparing the model input",
+                "detail": "Combining system constraints, conversation, and the latest request.",
+                "state": "pending",
+                "sequence": 8,
+            },
+            {
+                "id": "prefill",
+                "kind": "runtime",
+                "label": "Reading the prepared input",
+                "detail": "Evaluating prompt tokens in bounded native batches.",
+                "state": "pending",
+                "sequence": 9,
+            },
+            {
+                "id": "reasoning",
+                "kind": "thinking",
+                "label": "Reasoning through the answer",
+                "detail": "Working through the request without exposing private scratchpad text.",
+                "state": "pending",
+                "sequence": 10,
+            },
+            {
+                "id": "structure",
+                "kind": "thinking",
+                "label": "Organizing the response",
+                "detail": "Shaping the result around the requested format and level of detail.",
+                "state": "pending",
+                "sequence": 11,
+            },
+            {
+                "id": "drafting",
+                "kind": "writing",
+                "label": "Writing the answer",
+                "detail": "Generating the user-visible response.",
+                "state": "pending",
+                "sequence": 12,
+            },
+            {
+                "id": "finishing",
+                "kind": "verification",
+                "label": "Finalizing the response",
+                "detail": "Separating public output from private model channels.",
+                "state": "pending",
+                "sequence": 13,
+            },
+            {
+                "id": "recording",
+                "kind": "verification",
+                "label": "Recording response evidence",
+                "detail": "Preparing measured tokens, timing, runtime, and completion details.",
+                "state": "pending",
+                "sequence": 14,
+            },
         ]
         relationship["activity_journal"] = activity_journal
 
@@ -5180,6 +5650,31 @@ class ChatService:
                 if message.get("role") == "user"
             ),
             "",
+        )
+        update_generation_activity(
+            "understanding",
+            kind="thinking",
+            label="Understanding the request",
+            detail="The requested outcome and response constraints are identified.",
+            state="completed",
+        )
+        update_generation_activity(
+            "conversation-context",
+            kind="context",
+            label="Reading conversation context",
+            detail=f"Prepared {len(history)} conversation message{'' if len(history) == 1 else 's'}.",
+            state="completed",
+        )
+        update_generation_activity(
+            "turn-controls",
+            kind="control",
+            label="Applying turn controls",
+            detail=(
+                f"{generation_settings['reasoning_mode'].title()} reasoning, "
+                f"{int(generation_settings['context_window_tokens']):,}-token context, "
+                f"and {int(generation_settings['maximum_output_tokens']):,}-token output ceiling applied."
+            ),
+            state="completed",
         )
 
 
@@ -5262,6 +5757,14 @@ class ChatService:
             "result_count": 0,
         }
         context.update(phase="Preparing Chat runtime", details=relationship)
+        update_generation_activity(
+            "runtime",
+            kind="runtime",
+            label="Preparing the local model",
+            detail="Checking the selected weights and private native runtime.",
+            state="running",
+        )
+        context.update(phase="Preparing Chat runtime", details=relationship)
         legacy_identity = None
         generation = generation_settings
         generation_arguments = {
@@ -5300,6 +5803,169 @@ class ChatService:
                 relationship["runtime_id"] = runtime_instance_id
                 relationship["source_sha256"] = source_sha256
                 context.raise_if_stop_requested()
+                update_generation_activity(
+                    "runtime",
+                    kind="runtime",
+                    label="Preparing the local model",
+                    detail="The checksum-verified private native runtime is ready.",
+                    state="completed",
+                )
+                routing_selector = getattr(
+                    self.model_bundle_runtime,
+                    "conditional_adapter_ids",
+                    None,
+                )
+                routing_ids = (
+                    tuple(routing_selector("routing_intent"))
+                    if callable(routing_selector)
+                    else ()
+                )
+                if routing_ids:
+                    update_generation_activity(
+                        "routing-intent",
+                        kind="thinking",
+                        label="Choosing the execution route",
+                        detail="The routing-only learned adapter is classifying this request.",
+                        state="running",
+                    )
+                    context.update(
+                        phase="Choosing the execution route",
+                        details=relationship,
+                    )
+                learned_route, learned_route_details = self._learned_route_decision(
+                    search_query,
+                    context=context,
+                )
+                generation["learned_route"] = learned_route
+                relationship["learned_route_controller"] = learned_route_details
+                if learned_route in {"research", "image", "agent"}:
+
+
+
+
+                    generation_arguments.update(
+                        {
+                            "temperature": 0.0,
+                            "top_p": 1.0,
+                            "top_k": 1,
+                            "repetition_penalty": 1.0,
+                            "seed": 1338,
+                        }
+                    )
+                    relationship["route_decoding_profile"] = (
+                        "deterministic_structured_generation"
+                    )
+                update_generation_activity(
+                    "routing-intent",
+                    kind="thinking",
+                    label="Chose the execution route",
+                    detail=(
+                        f"The learned route is {learned_route}."
+                        if learned_route
+                        else "No accepted learned route is available; the existing model router remains in control."
+                    ),
+                    state="completed" if learned_route else "skipped",
+                )
+                adapter_selector = getattr(
+                    self.model_bundle_runtime,
+                    "conditional_adapter_ids",
+                    None,
+                )
+                conditional_ids = (
+                    tuple(adapter_selector("identity_intent"))
+                    if callable(adapter_selector)
+                    else ()
+                )
+                identity_relevant = learned_route in {None, "respond"}
+                if conditional_ids and identity_relevant:
+                    update_generation_activity(
+                        "identity-intent",
+                        kind="thinking",
+                        label="Checking model-identity intent",
+                        detail=(
+                            "The base model is deciding whether this turn needs its "
+                            "learned identity adapter."
+                        ),
+                        state="running",
+                    )
+                    context.update(
+                        phase="Checking model-identity intent",
+                        details=relationship,
+                    )
+                if identity_relevant:
+                    enabled_adapter_ids, identity_controller = (
+                        self._identity_adapter_activation(
+                            search_query,
+                            context=context,
+                        )
+                    )
+                else:
+                    enabled_adapter_ids, identity_controller = (), {
+                        "available": bool(conditional_ids),
+                        "controller": "base_steak_model_intent_generation",
+                        "label": "SKIPPED",
+                        "reason": "learned_nonresponse_route",
+                        "registered_adapter_ids": list(conditional_ids),
+                        "enabled_adapter_ids": [],
+                    }
+                relationship["identity_adapter_controller"] = identity_controller
+                generation_arguments["enabled_adapter_ids"] = list(
+                    enabled_adapter_ids
+                )
+                if conditional_ids and identity_relevant:
+                    update_generation_activity(
+                        "identity-intent",
+                        kind="thinking",
+                        label="Checked model-identity intent",
+                        detail=(
+                            "The learned identity lane is enabled for this answer."
+                            if enabled_adapter_ids
+                            else "The untouched base weights will answer this request."
+                        ),
+                        state="completed",
+                    )
+                else:
+                    update_generation_activity(
+                        "identity-intent",
+                        kind="thinking",
+                        label="Checking model-identity intent",
+                        detail=(
+                            "Identity activation is not needed for this learned work route."
+                            if conditional_ids
+                            else "No conditional identity adapter is registered for this runtime."
+                        ),
+                        state="skipped",
+                    )
+                update_generation_activity(
+                    "runtime",
+                    kind="runtime",
+                    label="Preparing the local model",
+                    detail="The checksum-verified private native runtime is ready.",
+                    state="completed",
+                )
+                update_generation_activity(
+                    "context-window",
+                    kind="context",
+                    label="Allocating the context window",
+                    detail=(
+                        f"Requesting the selected {int(generation['context_window_tokens']):,}-token window."
+                    ),
+                    state="running",
+                )
+                update_generation_activity(
+                    "prompt",
+                    kind="context",
+                    label="Preparing the model input",
+                    detail="System constraints, conversation context, and the latest request are assembled.",
+                    state="completed",
+                )
+                update_generation_activity(
+                    "prefill",
+                    kind="runtime",
+                    label="Reading the prepared input",
+                    detail="The native runtime is evaluating the prompt in bounded batches.",
+                    state="running",
+                )
                 context.update(phase="Generating response", details=relationship)
                 reasoning_mode = str(generation["reasoning_mode"])
                 generation_arguments["messages"] = _apply_reasoning_mode(history, reasoning_mode)
@@ -5332,6 +5998,22 @@ class ChatService:
                     preview_state["last_text"] = preview["tail_text"]
                     preview_state["last_tokens"] = preview["token_count"]
                     update_generation_activity(
+                        "context-window",
+                        kind="context",
+                        label="Allocating the context window",
+                        detail=(
+                            f"The {int(generation['context_window_tokens']):,}-token request is active."
+                        ),
+                        state="completed",
+                    )
+                    update_generation_activity(
+                        "prefill",
+                        kind="runtime",
+                        label="Reading the prepared input",
+                        detail="Prompt evaluation completed and generation has started.",
+                        state="completed",
+                    )
+                    update_generation_activity(
                         "understanding",
                         kind="thinking",
                         label="Understanding the request",
@@ -5348,15 +6030,32 @@ class ChatService:
                             token_count=preview["token_count"],
                             character_count=preview["character_count"],
                         )
+                        update_generation_activity(
+                            "structure",
+                            kind="thinking",
+                            label="Organizing the response",
+                            detail="The answer structure will follow after the reasoning pass.",
+                            state="pending",
+                        )
                     else:
-                        if any(item.get("id") == "reasoning" for item in activity_journal):
-                            update_generation_activity(
-                                "reasoning",
-                                kind="thinking",
-                                label="Reasoning through the answer",
-                                detail="The reasoning pass is complete.",
-                                state="completed",
-                            )
+                        update_generation_activity(
+                            "reasoning",
+                            kind="thinking",
+                            label="Reasoning through the answer",
+                            detail=(
+                                "The private reasoning pass is complete."
+                                if reasoning_mode == "cooking"
+                                else "Instant mode is using the direct response path."
+                            ),
+                            state="completed" if reasoning_mode == "cooking" else "skipped",
+                        )
+                        update_generation_activity(
+                            "structure",
+                            kind="thinking",
+                            label="Organizing the response",
+                            detail="The response structure is established and drafting has started.",
+                            state="completed",
+                        )
                         update_generation_activity(
                             "drafting",
                             kind="writing",
@@ -5388,6 +6087,53 @@ class ChatService:
             relationship["runtime_id"] = runtime_instance_id
             relationship["source_sha256"] = source_sha256
             context.raise_if_stop_requested()
+            generation["learned_route"] = None
+            relationship["learned_route_controller"] = {
+                "available": False,
+                "reason": "legacy_runtime_has_no_routing_adapter",
+            }
+            update_generation_activity(
+                "routing-intent",
+                kind="thinking",
+                label="Choosing the execution route",
+                detail="A learned routing adapter is not registered for this legacy runtime.",
+                state="skipped",
+            )
+            update_generation_activity(
+                "identity-intent",
+                kind="thinking",
+                label="Checking model-identity intent",
+                detail="Conditional learned identity is not available on this legacy runtime.",
+                state="skipped",
+            )
+            update_generation_activity(
+                "runtime",
+                kind="runtime",
+                label="Preparing the local model",
+                detail="The selected saved-version runtime is ready.",
+                state="completed",
+            )
+            update_generation_activity(
+                "context-window",
+                kind="context",
+                label="Allocating the context window",
+                detail=f"Using the selected {int(generation['context_window_tokens']):,}-token window.",
+                state="completed",
+            )
+            update_generation_activity(
+                "prompt",
+                kind="context",
+                label="Preparing the model input",
+                detail="System constraints, conversation context, and the latest request are assembled.",
+                state="completed",
+            )
+            update_generation_activity(
+                "prefill",
+                kind="runtime",
+                label="Reading the prepared input",
+                detail="The runtime is evaluating the prepared prompt.",
+                state="running",
+            )
             context.update(phase="Generating response", details=relationship)
             response = self.runtime.generate(
                 active_checkpoint_id=active_version_id,
@@ -5434,27 +6180,75 @@ class ChatService:
             detail="Conversation context and response constraints are prepared.",
             state="completed",
         )
-        if any(item.get("id") == "reasoning" for item in activity_journal):
-            update_generation_activity(
-                "reasoning",
-                kind="thinking",
-                label="Reasoning through the answer",
-                detail="The reasoning pass is complete.",
-                state="completed",
-            )
-        if any(item.get("id") == "drafting" for item in activity_journal):
-            update_generation_activity(
-                "drafting",
-                kind="writing",
-                label="Writing the answer",
-                detail="The answer draft is complete.",
-                state="completed",
-            )
+        technical = dict(response.technical_details)
+        effective_context = int(
+            technical.get("effective_context_limit")
+            or generation["context_window_tokens"]
+        )
+        allocated_context = int(
+            technical.get("allocated_context_limit") or effective_context
+        )
+        update_generation_activity(
+            "context-window",
+            kind="context",
+            label="Allocating the context window",
+            detail=(
+                f"Effective window {effective_context:,} tokens; native allocation "
+                f"{allocated_context:,} tokens with {technical.get('kv_cache_placement') or 'runtime-selected'} KV placement."
+            ),
+            state="completed",
+        )
+        input_tokens = int(technical.get("input_context_tokens") or 0)
+        update_generation_activity(
+            "prefill",
+            kind="runtime",
+            label="Reading the prepared input",
+            detail=(
+                f"Evaluated {input_tokens:,} input token{'' if input_tokens == 1 else 's'} "
+                f"across {int(technical.get('prefill_batch_count') or 0):,} native batch{'' if int(technical.get('prefill_batch_count') or 0) == 1 else 'es'}."
+            ),
+            state="completed",
+            token_count=input_tokens,
+        )
+        update_generation_activity(
+            "reasoning",
+            kind="thinking",
+            label="Reasoning through the answer",
+            detail=(
+                "The private reasoning pass is complete."
+                if generation["reasoning_mode"] == "cooking"
+                else "Instant mode used the direct response path."
+            ),
+            state="completed" if generation["reasoning_mode"] == "cooking" else "skipped",
+        )
+        update_generation_activity(
+            "structure",
+            kind="thinking",
+            label="Organizing the response",
+            detail="The response was organized around the requested outcome and format.",
+            state="completed",
+        )
+        update_generation_activity(
+            "drafting",
+            kind="writing",
+            label="Writing the answer",
+            detail="The model finished generating the response text.",
+            state="completed",
+            token_count=int(technical.get("generated_output_tokens") or len(response.token_ids)),
+            character_count=len(str(response.text or "")),
+        )
         update_generation_activity(
             "finishing",
             kind="verification",
             label="Finishing the response",
             detail="Separating the final answer from private model channels and saving telemetry.",
+            state="completed",
+        )
+        update_generation_activity(
+            "recording",
+            kind="verification",
+            label="Recording response evidence",
+            detail="Measured runtime, token, context, and completion evidence is ready to save.",
             state="completed",
         )
         if active_target_kind == "model_bundle":
@@ -5484,7 +6278,7 @@ class ChatService:
                 (legacy_identity.checkpoint_id,),
             ) or {}
         details = {
-            **response.technical_details,
+            **technical,
             **origin,
             **_generation_control_provenance(generation),
             "context_omitted": response.omitted_turns > 0,
@@ -5500,6 +6294,13 @@ class ChatService:
             "source_sha256": source_sha256,
             "template_version": CHAT_TEMPLATE_VERSION,
             "activity_journal": activity_journal,
+            "learned_route": generation.get("learned_route"),
+            "learned_route_controller": relationship.get(
+                "learned_route_controller"
+            ),
+            "identity_adapter_controller": relationship.get(
+                "identity_adapter_controller"
+            ),
             "web_search": relationship["web_search"],
             "cancellation_token": cancellation_token,
             "cancellation_state": "not_requested",

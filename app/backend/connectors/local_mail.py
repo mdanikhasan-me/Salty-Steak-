@@ -357,12 +357,40 @@ class LocalMailConnector(BaseConnector):
             return False
         query = str(arguments.get("query") or "").strip()
         if query:
+            query_sender = ""
+            query_subject = ""
+
+            def take_field(match: re.Match[str]) -> str:
+                nonlocal query_sender, query_subject
+                field = match.group("field").casefold()
+                value = (match.group("quoted") or match.group("plain") or "").strip()
+                if field == "from":
+                    query_sender = value
+                else:
+                    query_subject = value
+                return " "
+
+            remaining = re.sub(
+                r'(?P<field>from|subject):(?:"(?P<quoted>[^"]+)"|(?P<plain>\S+))',
+                take_field,
+                query,
+                flags=re.IGNORECASE,
+            )
+            if query_sender and query_sender.casefold() not in str(message["from"]).casefold():
+                return False
+            if query_subject and query_subject.casefold() not in str(message["subject"]).casefold():
+                return False
             haystack = " ".join(
                 [message["subject"], message["body"], message["from"]]
             ).casefold()
 
 
-            if not all(word in haystack for word in re.findall(r"[\w']+", query.casefold())):
+            words = [
+                word
+                for word in re.findall(r"[\w']+", remaining.casefold())
+                if word not in {"and"}
+            ]
+            if not all(word in haystack for word in words):
                 return False
         return True
 
