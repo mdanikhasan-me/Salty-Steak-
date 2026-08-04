@@ -623,7 +623,8 @@ def _trim_unrequested_status_scope(question: str, answer: str) -> str:
     ):
         return str(answer or "").strip()
     trimmed = re.sub(
-        r",?\s+with\s+(?:active\s+)?support\s+(?:through|until)\s+[^.]+(?=\.)",
+        r",?\s+with\s+(?:active\s+)?support\s+"
+        r"(?:(?:continuing|extending|lasting)\s+)?(?:through|until)\s+[^.]+(?=\.)",
         "",
         str(answer or ""),
         flags=re.IGNORECASE,
