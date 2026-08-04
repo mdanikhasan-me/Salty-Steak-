@@ -307,35 +307,6 @@ export function TrainPageR11({ onNavigate }) {
     );
   }
 
-  if (!readyDatasets.length || !eligibleVersions.length) {
-    return (
-      <div className="page page--train-r11">
-        <PageHeader title="Train" />
-        <EmptyState
-          icon={GraduationCap}
-          title={
-            !readyDatasets.length
-              ? "Prepare verified training data first"
-              : "A verified starting version is required"
-          }
-          description={
-            !readyDatasets.length
-              ? "Only prepared datasets allowed by the production policy appear here."
-              : "Blocked legacy checkpoints are preserved as evidence and cannot start a new run."
-          }
-          action={
-            <Button
-              variant="primary"
-              onClick={() => onNavigate(!readyDatasets.length ? "data" : "versions")}
-            >
-              Go to {!readyDatasets.length ? "Data" : "Versions"}
-            </Button>
-          }
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="page page--train-r11">
       <PageHeader title="Train">
@@ -464,6 +435,8 @@ export function TrainPageR11({ onNavigate }) {
         ) : null}
       </section>
 
+      {readyDatasets.length && eligibleVersions.length ? (
+        <>
       {trainingOperation ? (
         <div className="r11-training-live">
           <OperationProgress
@@ -659,6 +632,32 @@ export function TrainPageR11({ onNavigate }) {
       </section>
 
       <TrainingHistory runs={history} loading={historyLoading} />
+        </>
+      ) : (
+        <section className="r11-training-card" aria-label="General training prerequisites">
+          <EmptyState
+            icon={GraduationCap}
+            title={
+              !readyDatasets.length
+                ? "Prepare verified training data for general training"
+                : "A verified starting version is required for general training"
+            }
+            description={
+              !readyDatasets.length
+                ? "The learned identity and routing workflow above is independent. Add a prepared dataset only for a separate general training run."
+                : "The learned identity and routing workflow above remains available while general checkpoints are prepared."
+            }
+            action={
+              <Button
+                variant="primary"
+                onClick={() => onNavigate(!readyDatasets.length ? "data" : "versions")}
+              >
+                Go to {!readyDatasets.length ? "Data" : "Versions"}
+              </Button>
+            }
+          />
+        </section>
+      )}
     </div>
   );
 
