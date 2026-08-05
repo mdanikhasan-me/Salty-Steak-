@@ -59,7 +59,7 @@ from .training.engine import (
 )
 from .training.identity_promotion import promote_identity_candidate
 from .training.identity_workflow import run_identity_post_training
-from .training.base_steak_identity_dataset import (
+from .training.identity_dialogue_dataset import (
     holdout_examples as identity_holdout_examples,
     training_examples as identity_training_examples,
 )

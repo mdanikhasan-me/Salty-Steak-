@@ -306,6 +306,51 @@ def _accuracy(
         return float(baseline.item()), float(adapted.item())
 
 
+def load_output_adapter_initialization(
+    adapter_path: str | Path,
+    *,
+    expected_sha256: str | None = None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Load a previously exported output LoRA for continued post-training.
+
+    The source adapter is immutable and hash-checked before its two float32
+    tensors are copied. Only the exact app-owned output-projection layout is
+    accepted; incompatible or partial adapters fail closed.
+    """
+
+    checked = Path(adapter_path).resolve()
+    if not checked.is_file():
+        raise FileNotFoundError(checked)
+    actual_sha256 = _sha256(checked)
+    if expected_sha256 is not None and actual_sha256 != expected_sha256.casefold():
+        raise RuntimeError("Initial identity adapter checksum mismatch")
+    reader = gguf.GGUFReader(checked, "r")
+    tensors = {str(tensor.name): tensor for tensor in reader.tensors}
+    expected_names = {
+        "output.weight.lora_a",
+        "output.weight.lora_b",
+    }
+    if set(tensors) != expected_names:
+        raise ValueError("Initial identity adapter has an incompatible tensor layout")
+    lora_a = np.asarray(
+        tensors["output.weight.lora_a"].data,
+        dtype=np.float32,
+    ).copy()
+    lora_b = np.asarray(
+        tensors["output.weight.lora_b"].data,
+        dtype=np.float32,
+    ).copy()
+    if lora_a.ndim != 2 or lora_b.ndim != 2 or lora_a.shape[0] != lora_b.shape[1]:
+        raise ValueError("Initial identity adapter tensor shapes are invalid")
+    return lora_a, lora_b, {
+        "path": str(checked),
+        "sha256": actual_sha256,
+        "rank": int(lora_a.shape[0]),
+        "hidden_size": int(lora_a.shape[1]),
+        "vocabulary_size": int(lora_b.shape[0]),
+    }
+
+
 def train_output_adapter(
     *,
     train_samples: Sequence[NativeTraceSample],
@@ -316,6 +361,8 @@ def train_output_adapter(
     settings: NativeIdentitySettings,
     device_name: str = "cuda",
     on_epoch: Any = None,
+    initial_lora_a: np.ndarray | None = None,
+    initial_lora_b: np.ndarray | None = None,
 ) -> AdapterTrainingResult:
     if device_name == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for native identity post-training")
@@ -329,21 +376,40 @@ def train_output_adapter(
     train = _padded_samples(train_samples, device=device)
     holdout = _padded_samples(holdout_samples, device=device)
     retention = _padded_samples(retention_samples, device=device)
-    generator = torch.Generator(device=device)
-    generator.manual_seed(settings.seed)
-    lora_a = torch.empty(
-        (settings.rank, hidden_size),
-        dtype=torch.float32,
-        device=device,
-    )
-    torch.nn.init.normal_(lora_a, mean=0.0, std=0.01, generator=generator)
-    lora_a.requires_grad_(True)
-    lora_b = torch.zeros(
-        (vocabulary_size, settings.rank),
-        dtype=torch.float32,
-        device=device,
-        requires_grad=True,
-    )
+    if (initial_lora_a is None) != (initial_lora_b is None):
+        raise ValueError("Both initial LoRA tensors must be supplied together")
+    initialized = initial_lora_a is not None
+    if initialized:
+        expected_a = (settings.rank, hidden_size)
+        expected_b = (vocabulary_size, settings.rank)
+        checked_a = np.asarray(initial_lora_a, dtype=np.float32)
+        checked_b = np.asarray(initial_lora_b, dtype=np.float32)
+        if checked_a.shape != expected_a or checked_b.shape != expected_b:
+            raise ValueError(
+                "Initial LoRA tensor shapes do not match the requested training layout"
+            )
+        lora_a = torch.as_tensor(
+            checked_a.copy(), dtype=torch.float32, device=device
+        ).requires_grad_(True)
+        lora_b = torch.as_tensor(
+            checked_b.copy(), dtype=torch.float32, device=device
+        ).requires_grad_(True)
+    else:
+        generator = torch.Generator(device=device)
+        generator.manual_seed(settings.seed)
+        lora_a = torch.empty(
+            (settings.rank, hidden_size),
+            dtype=torch.float32,
+            device=device,
+        )
+        torch.nn.init.normal_(lora_a, mean=0.0, std=0.01, generator=generator)
+        lora_a.requires_grad_(True)
+        lora_b = torch.zeros(
+            (vocabulary_size, settings.rank),
+            dtype=torch.float32,
+            device=device,
+            requires_grad=True,
+        )
     optimiser = torch.optim.AdamW(
         (lora_a, lora_b),
         lr=settings.learning_rate,
@@ -486,6 +552,7 @@ def train_output_adapter(
             "history": history,
             "last": history[-1],
             "selection": "best_accuracy_checkpoint",
+            "initialized_from_adapter": initialized,
             "final": final,
         },
     )
@@ -631,6 +698,7 @@ __all__ = [
     "export_identity_adapter",
     "export_output_adapter",
     "identity_vocabulary",
+    "load_output_adapter_initialization",
     "train_output_adapter",
     "write_dataset_artifacts",
 ]

@@ -18,10 +18,9 @@ from ..runtime.salty_native import SaltyNativeProfile, SaltyNativeRuntime
 from ..system.files import sha256_file
 from .base_steak_identity_dataset import (
     IdentityExample,
-    holdout_examples,
     retention_examples,
-    training_examples,
 )
+from .identity_dialogue_dataset import holdout_examples, training_examples
 from .identity_evaluation import run_routed_identity_evaluation
 from .native_identity import (
     NativeIdentitySettings,

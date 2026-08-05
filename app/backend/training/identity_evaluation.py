@@ -25,9 +25,9 @@ from .base_steak_identity_dataset import (
     TRAINER,
     TRAINER_ALIAS,
     IdentityExample,
-    holdout_examples,
     retention_examples,
 )
+from .identity_dialogue_dataset import holdout_examples
 from .identity_intent import (
     IDENTITY_INTENT_CLASSIFIER,
     IDENTITY_INTENT_LABEL,
@@ -80,7 +80,9 @@ def _normalise(text: str) -> str:
 
 
 def identity_facts(text: str) -> dict[str, bool]:
-    checked = text.casefold()
+    visible = str(text or "").strip()
+    checked = visible.casefold()
+    words = re.findall(r"\b[\w'.-]+\b", visible, flags=re.UNICODE)
     mentions_trainer = TRAINER.casefold() in checked
     mentions_alias = bool(re.search(r"\bsawlper\b", checked))
     training_relation_affirmed = bool(
@@ -101,6 +103,7 @@ def identity_facts(text: str) -> dict[str, bool]:
         re.search(
             r"(?:md\s+anik\s+hasan\s*\(\s*sawlper\b\s*\)|"
             r"md\s+anik\s+hasan[^.!?]{0,32}\b(?:aka|also\s+known\s+as|known\s+as|alias(?:ed)?(?:\s+as)?)\s+sawlper\b|"
+            r"md\s+anik\s+hasan[^.!?]{0,48}\bwhose\s+(?:listed\s+)?alias\s+is\s+sawlper\b|"
             r"md\s+anik\s+hasan[^.!?]{0,96}\btrainer\s+alias\s+(?:is|:)\s+sawlper\b|"
             r"sawlper\b\s+is\s+(?:the\s+alias\s+of\s+)?md\s+anik\s+hasan)",
             checked,
@@ -172,6 +175,11 @@ def identity_facts(text: str) -> dict[str, bool]:
         and "sawlper is my model" not in checked,
         "alias_spelling_clean": re.search(r"\bsawlper[a-z]+", checked) is None,
         "identity_repetition_absent": _free_of_repetition_collapse(str(text or "")),
+        "identity_fact_repetition_absent": (
+            checked.count(MODEL_NAME.casefold()) <= 1
+            and checked.count(TRAINER.casefold()) <= 1
+            and len(re.findall(r"\bsawlper\b", checked)) <= 1
+        ),
         "visible_answer_nonempty": bool(str(text or "").strip()),
         "routing_protocol_absent": not bool(
             re.search(
@@ -199,6 +207,62 @@ def identity_facts(text: str) -> dict[str, bool]:
                 "high-resolution headshot",
             )
         ),
+        "uncertainty_boundary_present": bool(
+            re.search(
+                r"\b(?:do\s+not\s+have|don['’]?t\s+have|not\s+verified|"
+                r"should\s+not\s+invent|will\s+not\s+invent|needs?\s+(?:reliable\s+)?evidence|"
+                r"requires?\s+(?:a\s+)?(?:separate\s+)?(?:source-based\s+)?research|"
+                r"checked\s+through\s+(?:reliable\s+)?public\s+sources)\b",
+                checked,
+            )
+        ),
+        "research_boundary_present": bool(
+            re.search(r"\b(?:research|sources?|evidence|source-based)\b", checked)
+        ),
+        "clarification_present": "?" in visible
+        and bool(
+            re.search(
+                r"\b(?:what|which|specific|specifically|question|detail|part)\b",
+                checked,
+            )
+        ),
+        "correction_present": bool(
+            re.search(
+                r"\b(?:incorrect|correct\s+identity|correction|replace|"
+                r"previous\s+identity\s+was\s+wrong|earlier\s+attribution)\b",
+                checked,
+            )
+        ),
+        "polished_identity_style": (
+            8 <= len(words) <= 90
+            and bool(visible)
+            and visible[-1:] in {".", "?", "!"}
+            and not any(
+                phrase in checked
+                for phrase in (
+                    "as the model is",
+                    "in sawlper",
+                    "known as base steak 2.0",
+                    "same trainer that trained",
+                    "listening to the same",
+                    "tell sawlper that",
+                    "the alias of the alias",
+                    "my trainer is my trainer",
+                    "2.0k",
+                    "https://",
+                )
+            )
+            and re.search(
+                r"\bthe\s+correct\s+identity\s+is\s+(?:this\s+is|i\s+am)\b",
+                checked,
+            )
+            is None
+            and re.search(
+                r"\bmy\s+trainer\s+is\s+md\s+anik\s+hasan[^.!?]{0,24}\btrained\s+me\b",
+                checked,
+            )
+            is None
+        ),
     }
 
 
@@ -215,12 +279,20 @@ def identity_requirements(example: IdentityExample) -> tuple[str, ...]:
         "unsupported_authorship_absent",
         "alias_spelling_clean",
         "identity_repetition_absent",
+        "identity_fact_repetition_absent",
+        "polished_identity_style",
     )
-    if example.category == "holdout_name":
-        return ("model_name", *integrity)
-    if example.category == "holdout_trainer":
-        return ("trainer", "trainer_alias", *integrity)
-    return ("model_name", "trainer", "trainer_alias", *integrity)
+    complete_identity = ("model_name", "trainer", "trainer_alias", *integrity)
+    category = str(example.category).casefold()
+    if "clarify" in category:
+        return (*complete_identity, "clarification_present")
+    if "research" in category:
+        return (*complete_identity, "research_boundary_present")
+    if "boundary" in category:
+        return (*complete_identity, "uncertainty_boundary_present")
+    if "correction" in category:
+        return (*complete_identity, "correction_present")
+    return complete_identity
 
 
 def identity_response_defect(text: object) -> str | None:
@@ -241,6 +313,8 @@ def identity_response_defect(text: object) -> str | None:
         "unsupported_authorship_absent",
         "alias_spelling_clean",
         "identity_repetition_absent",
+        "identity_fact_repetition_absent",
+        "polished_identity_style",
     )
     if not all(facts[name] for name in integrity):
         return "identity_integrity"
@@ -257,11 +331,21 @@ def _retention_correct(example: IdentityExample, text: str) -> bool:
 
 def _free_of_repetition_collapse(text: str) -> bool:
     checked = str(text or "")
-    return (
-        re.search(r"([0-9])\1{40,}", checked) is None
-        and re.search(r"(?:\d+\.){40,}", checked) is None
-        and re.search(r"(.{2,12})\1{5,}", checked, flags=re.DOTALL) is None
-    )
+    if (
+        re.search(r"([0-9])\1{20,}", checked) is not None
+        or re.search(r"(?:\d+\.){20,}", checked) is not None
+        or re.search(r"(.{2,20})\1{3,}", checked, flags=re.DOTALL) is not None
+    ):
+        return False
+    words = re.findall(r"\b[\w'.-]+\b", checked.casefold(), flags=re.UNICODE)
+    for width in range(2, min(10, len(words) // 3 + 1)):
+        counts: dict[tuple[str, ...], int] = {}
+        for index in range(len(words) - width + 1):
+            phrase = tuple(words[index : index + width])
+            counts[phrase] = counts.get(phrase, 0) + 1
+        if counts and max(counts.values()) >= 3:
+            return False
+    return True
 
 
 def rescore_free_generation_report(report: dict[str, Any]) -> dict[str, Any]:

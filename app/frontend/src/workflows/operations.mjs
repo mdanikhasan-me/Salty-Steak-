@@ -159,13 +159,14 @@ export function notificationForTransition(previous, current) {
       normaliseToken(current.type) === "training" &&
       current.outcome !== "needs_attention"
     ) return null;
+    const chatFailure = normaliseToken(current.type) === "chat_generation";
     return {
       id: `${current.id}:failed`,
       kind: "error",
       message: current?.error?.message || current?.error || `${operationName(current.type)} failed.`,
       operationId: current.id,
       page: pageForOperation(current.type),
-      persistent: true,
+      persistent: !chatFailure,
     };
   }
   if (to === "interrupted") {
@@ -223,6 +224,7 @@ export function pageForOperation(type = "") {
     return "chat";
   }
   if (token === "chat_image_generation") return "chat";
+  if (token === "chat_generation" || token === "chat_host_action_execution") return "chat";
   if (["deletion", "version_deletion"].includes(token)) return "versions";
   if (["project_verification", "cache_clear"].includes(token)) return "project";
   return null;
