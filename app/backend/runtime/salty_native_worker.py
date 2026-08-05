@@ -586,6 +586,7 @@ class SaltyNativeWorkerRuntime:
         reasoning_mode: str = "cooking",
         maximum_output_mode: str = "manual",
         enabled_adapter_ids: Sequence[str] | None = None,
+        allowed_first_tokens: Sequence[str] = (),
     ) -> SaltyNativeGeneration:
         self.warmup()
         cancellation_path = (
@@ -615,6 +616,7 @@ class SaltyNativeWorkerRuntime:
                             if enabled_adapter_ids is not None
                             else None
                         ),
+                        "allowed_first_tokens": list(allowed_first_tokens),
                         "cancellation_path": str(cancellation_path),
                     },
                     should_stop=should_stop,
@@ -635,6 +637,52 @@ class SaltyNativeWorkerRuntime:
                         "cancellation_detail": str(error),
                     },
                 )
+            technical = dict(result["technical_details"])
+            technical.update(
+                {
+                    "engine": "app_owned_private_native_worker",
+                    "ipc_transport": "anonymous_pipes",
+                }
+            )
+            return SaltyNativeGeneration(
+                text=str(result["text"]),
+                token_ids=[int(token) for token in result["token_ids"]],
+                omitted_turns=int(result["omitted_turns"]),
+                cancelled=bool(result["cancelled"]),
+                finish_reason=str(result["finish_reason"]),
+                technical_details=technical,
+            )
+        finally:
+            cancellation_path.unlink(missing_ok=True)
+
+    def classify_route(
+        self,
+        *,
+        messages: Sequence[dict[str, str]],
+        allowed_tokens: Sequence[str],
+        enabled_adapter_ids: Sequence[str],
+        should_stop: Callable[[], bool] | None = None,
+    ) -> SaltyNativeGeneration:
+        """Use the worker's model-sharing auxiliary routing context."""
+
+        self.warmup()
+        cancellation_path = (
+            self.library_directory.parent
+            / "control"
+            / f"cancel-{uuid.uuid4().hex}.signal"
+        )
+        try:
+            result = self._request(
+                "classify_route",
+                {
+                    "messages": list(messages),
+                    "allowed_tokens": list(allowed_tokens),
+                    "enabled_adapter_ids": list(enabled_adapter_ids),
+                    "cancellation_path": str(cancellation_path),
+                },
+                should_stop=should_stop,
+                cancellation_path=cancellation_path,
+            )
             technical = dict(result["technical_details"])
             technical.update(
                 {
@@ -777,6 +825,16 @@ def _serve() -> int:
                         **payload,
                         should_stop=cancellation.requested.is_set,
                         on_text=emit_preview,
+                    )
+                result = asdict(generation)
+            elif command == "classify_route":
+                if runtime is None:
+                    raise SaltyNativeRuntimeError("The private native worker is not loaded")
+                cancellation_path = Path(str(payload.pop("cancellation_path")))
+                with _CancellationWatcher(cancellation_path) as cancellation:
+                    generation = runtime.classify_route(
+                        **payload,
+                        should_stop=cancellation.requested.is_set,
                     )
                 result = asdict(generation)
             elif command == "shutdown":

@@ -10,15 +10,16 @@ ROUTE_CODES = {
     "RESEARCH": "B",
     "IMAGE": "C",
     "AGENT": "D",
+    "IDENTITY": "E",
 }
 
-ROUTE_SYSTEM = """Choose what kind of execution the latest user request needs.
-Reply with exactly one code and nothing else:
-A - answer from stable knowledge or supplied conversation/data
-B - read and validate current public web information
-C - create or revise a generated image
-D - operate the local computer, terminal, files, browser, Discord, Gmail, or another connected service
-Classify the requested outcome, not isolated keywords. Never perform the request here."""
+ROUTE_SYSTEM = """Classify the latest request. Reply with one code only:
+A - answer from stable knowledge or supplied data
+B - retrieve and validate current public web information
+C - generate or revise an image
+D - operate the computer, files, browser, Discord, Gmail, or another service
+E - state this assistant's own model name, trainer, or creator attribution
+Choose the requested outcome, not isolated keywords. Do not perform it."""
 
 
 _SEEDS = {
@@ -39,7 +40,7 @@ _SEEDS = {
         "Draft the words of a polite email for me to copy.",
         "What did the document I attached say?",
         "Continue the calculation from our conversation.",
-        "What is your model name and who trained you?",
+        "Explain in six detailed paragraphs how database transactions preserve consistency.",
         "Explain why source validation matters.",
         "Describe a good folder structure without creating it.",
         "Give pseudocode for a browser automation loop.",
@@ -53,6 +54,38 @@ _SEEDS = {
         "Review this code snippet for bugs.",
         "Make a checklist I can follow manually.",
         "Thank you for the help.",
+    ),
+    "IDENTITY": (
+        "What is your model name and who trained you?",
+        "what is your name?",
+        "who trained you?",
+        "who is md anik hasan?",
+        "who is sawlper?",
+        "who is create you?",
+        "who created you?",
+        "who made you?",
+        "tell me about sawlper",
+        "what did MD Anik Hasan do for you?",
+        "who is your tranner?",
+        "Who are you?",
+        "State your exact identity.",
+        "Give your model version and training credit.",
+        "What model am I talking to?",
+        "Who should receive credit for training this assistant?",
+        "Explain the relationship between Sawlper and Base Steak 2.0.",
+        "Is MD Anik Hasan your trainer?",
+        "Correct any old assistant name and identify yourself.",
+        "Who is the person behind your training?",
+        "What is the full public attribution for your trainer?",
+        "Which local AI is answering right now?",
+        "Who is MD Anik Hasan in relation to this model?",
+        "What does the alias Sawlper mean for your identity?",
+        "Say who you are without using an inherited vendor name.",
+        "Give the Base Steak 2.0 trained-by relationship.",
+        "who train u?",
+        "whats ur model name",
+        "who creatd this model?",
+        "anik hasan is who to you?",
     ),
     "RESEARCH": (
         "Research current SSD prices from several stores.",
@@ -160,6 +193,144 @@ _WRAPPERS = (
     "Continue from our conversation and {lower}",
 )
 
+_HARD_SEEDS = {
+    "RESPOND": (
+        "Explain the request but do not carry it out.",
+        "Write a detailed answer using the conversation only.",
+        "Tell me how mailbox labels work without touching my mail.",
+        "Describe an image concept without generating the image.",
+        "Review a shell command without running it.",
+        "Explain research validation from stable principles.",
+        "Continue the prose answer from the previous turn.",
+        "Answer this as six detailed paragraphs.",
+        "Give a checklist for me to perform manually.",
+        "Return a JSON example as the answer, not as a tool call.",
+        "Reply with exactly the word ready.",
+        "Reply with only the word done.",
+        "Return just the integer 391.",
+        "Answer in one sentence without using any tool.",
+        "Say acknowledged and nothing else.",
+        "Return only the word verified.",
+        "Give exactly one number as the answer.",
+        "Answer the latest question with just yes or no.",
+        "Respond with a single plain-text value and no action.",
+        "Use only the supplied conversation and reply with one short phrase.",
+        "Brainstorm a logo concept using words only.",
+        "Describe a brand mark in prose without creating an image.",
+        "Write a visual design brief but do not render anything.",
+        "Suggest three icon ideas as text only.",
+        "Explain how the proposed logo could look without generating it.",
+    ),
+    "RESEARCH": (
+        "Find out whether that public claim is still true.",
+        "Check the live link we discussed and validate the destination.",
+        "Use current public sources to settle the disagreement.",
+        "Look up today's value and compare independent publishers.",
+        "Verify the latest release rather than answering from memory.",
+        "Search recent public posts about the subject from our last turn.",
+        "Confirm whether those invitations remain active now.",
+        "Find the present office holder and cite the official page.",
+        "Research the current price after our earlier product discussion.",
+        "Retrieve and compare this week's public announcements.",
+        "Reply only after checking whether the public link is live.",
+        "Give one sentence, but first verify today's value online.",
+        "Return only the current version after validating the official release page.",
+        "Answer briefly after cross-checking the latest public claim.",
+        "Find the live result and respond with only the verified value and citation.",
+        "Check current public sources, then return only the verified status.",
+        "Look up the live value before replying with one concise line.",
+        "Verify the public claim online even though I want only a short answer.",
+        "Search the official source and answer with the current identifier only.",
+        "Test the public URL now and report its validated state briefly.",
+        "Research current logo-design trends and cite the pages you validate.",
+        "Check whether the public brand guide changed this month.",
+        "Find the current trademark record and cite the official result.",
+        "Validate today's design-award winner from public sources.",
+        "Look up the newest published icon guidelines before answering.",
+    ),
+    "IMAGE": (
+        "Turn that description into the actual image now.",
+        "Generate what you just imagined.",
+        "Make the discussed environment visible as concept art.",
+        "Create the picture, not another written description.",
+        "Revise it using the feedback from my previous message.",
+        "Produce a visual version of the design we agreed on.",
+        "Draw the same character in a different setting.",
+        "Render the attached idea as a clean product image.",
+        "Make the previous visual warmer and simpler.",
+        "Create an illustration from the conversation context.",
+        "Generate exactly one image and no written concept draft.",
+        "Reply by creating the picture we discussed.",
+        "Make one square image from the supplied description.",
+        "Return only the newly rendered visual result.",
+        "Create the requested image now and keep the reply brief.",
+        "Render one picture and return only the image result.",
+        "Generate the visual now, without explaining the design first.",
+        "Make exactly one image from the previous conversation.",
+        "Produce a single revised image and no prose substitute.",
+        "Create the requested artwork, then keep the status message short.",
+        "Generate the logo image rather than describing a possible concept.",
+        "Render one of the proposed brand marks as an actual picture.",
+        "Turn the written icon idea into a generated visual.",
+        "Create the final logo artwork from our prose brief.",
+        "Make a visible image of the symbol we just brainstormed.",
+    ),
+    "AGENT": (
+        "Organize the matching messages, then verify the label count.",
+        "Apply the label to every result from the mailbox search we discussed.",
+        "Do the file operation from my previous message and verify it.",
+        "Open the app I just named and focus its window.",
+        "Run that approved terminal command on this computer.",
+        "Use my connected mail account to complete the organization task.",
+        "Continue the Discord draft task but stop before posting.",
+        "Make the requested Windows change and check its resulting state.",
+        "Move all of the observed files into the folder we created.",
+        "Finish the local installation workflow after its gates pass.",
+        "Open Notepad and reply only after its window is visible.",
+        "Run the command and return just its terminal output.",
+        "Create exactly one local folder named Ready Test.",
+        "In Gmail, apply the label and then answer with the verified count only.",
+        "Type exactly the supplied words into Discord but do not send them.",
+        "Execute the approved command and return only the checked result.",
+        "Execute the approved PowerShell command and give only its verified output.",
+        "Run the already authorized shell command, verify success, and answer briefly.",
+        "Perform the requested terminal operation and return just the result.",
+        "Use the local terminal to execute the command and check what it printed.",
+        "Open the logo file in the installed design application.",
+        "Save the supplied brand brief into a local text file.",
+        "Use the browser to upload the approved icon to the named service.",
+        "Move the generated logo into my project assets folder.",
+        "Launch the local image viewer and display the selected file.",
+    ),
+    "IDENTITY": (
+        "That answer was vague; identify MD Anik Hasan's exact relation to you.",
+        "After the prior topic, remind me who Sawlper is to this model.",
+        "Correct the incomplete trainer answer from the last turn.",
+        "who made this model again?",
+        "what is the known identity relationship here?",
+        "Give only facts learned about your own name and trainer.",
+        "Explain the trainer alias without a public-person biography.",
+        "State your identity after a malformed response.",
+        "Who is Anik Hasan in this assistant's model record?",
+        "what model did the person called sawlper train",
+        "Reply with exactly your model name.",
+        "Only tell me who trained you.",
+        "In one sentence, state who Sawlper is to this model.",
+        "what is ur name and who made u",
+        "who is create you? Answer briefly.",
+        "Return only your exact model identity.",
+        "Give exactly one sentence naming your trainer and alias.",
+        "Answer yes or no, then identify whether Sawlper trained you.",
+        "Respond briefly with who created or trained this assistant.",
+        "Use one short phrase to state your own model name.",
+        "What did the person called Sawlper train?",
+        "What identity should persist in a new conversation?",
+        "Which model identity must remain stable across conversations?",
+        "Name the assistant that Sawlper trained.",
+        "What trained model is connected to the alias Sawlper?",
+    ),
+}
+
 
 def training_examples() -> list[IdentityExample]:
     examples: list[IdentityExample] = []
@@ -176,6 +347,16 @@ def training_examples() -> list[IdentityExample]:
                         response=ROUTE_CODES[label],
                     )
                 )
+    for label, prompts in _HARD_SEEDS.items():
+        examples.extend(
+            IdentityExample(
+                id=f"route-hard-{label.casefold()}-{index:03d}",
+                category=f"route_{label.casefold()}",
+                messages=(("system", ROUTE_SYSTEM), ("user", prompt)),
+                response=ROUTE_CODES[label],
+            )
+            for index, prompt in enumerate(prompts, start=1)
+        )
     return examples
 
 
@@ -185,16 +366,26 @@ _HOLDOUT = (
     ("RESPOND", "Write the content of an email, but leave my Gmail account untouched."),
     ("RESPOND", "Why might a global LoRA damage unrelated answers?"),
     ("RESPOND", "Correct the grammar in the sentence I supplied."),
-    ("RESPOND", "What is your canonical identity?"),
+    ("RESPOND", "Explain what canonical identity means in database design."),
     ("RESPOND", "Give me code for image generation, not an actual picture."),
     ("RESPOND", "Explain current as a programming concept, not today's news."),
     ("RESPOND", "Summarize our plan in five bullets."),
     ("RESPOND", "Calculate 31 times 19 after the identity discussion."),
     ("RESPOND", "Describe what a terminal command would do without running it."),
-    ("RESPOND", "Brainstorm a logo concept using words only."),
+    ("RESPOND", "Brainstorm a brand symbol in prose without creating an image."),
     ("RESPOND", "Explain Discord server roles from stable knowledge."),
     ("RESPOND", "Return a compact JSON example with an ok field."),
     ("RESPOND", "Thank the new teammate in two friendly sentences."),
+    ("RESPOND", "Write six paragraphs explaining transaction isolation."),
+    ("RESPOND", "Describe a research workflow without performing any search."),
+    ("RESPOND", "Give me a textual image prompt, not a generated image."),
+    ("RESPOND", "Explain how Gmail labels work without opening my account."),
+    ("RESPOND", "Review this terminal command without executing it."),
+    ("RESPOND", "Respond with exactly the single word confirmed."),
+    ("RESPOND", "Give only the integer result of twelve squared."),
+    ("RESPOND", "Answer with one short sentence based only on this conversation."),
+    ("RESPOND", "Return the word complete and no other text."),
+    ("RESPOND", "Reply concisely without browsing, tools, or an external action."),
     ("RESEARCH", "Determine which public invite URLs are active and reject expired ones."),
     ("RESEARCH", "Find the present release and validate it against two publishers."),
     ("RESEARCH", "Browse recent videos and forum posts, then compare their claims."),
@@ -210,6 +401,16 @@ _HOLDOUT = (
     ("RESEARCH", "Retrieve the newest API documentation and release notes."),
     ("RESEARCH", "Who currently holds this public office? Include citations."),
     ("RESEARCH", "Investigate whether the announced event was postponed."),
+    ("RESEARCH", "Check the current Python maintenance release against official documentation."),
+    ("RESEARCH", "Validate these public Discord invitations and list only live links."),
+    ("RESEARCH", "Find today's GPU price from multiple independent stores."),
+    ("RESEARCH", "Look up the current company leadership and cite exact sources."),
+    ("RESEARCH", "Search recent public videos and compare their factual claims."),
+    ("RESEARCH", "Give only the verified current status after checking public sources."),
+    ("RESEARCH", "Answer in one line after confirming today's public figure online."),
+    ("RESEARCH", "Return the newest release number with its authoritative citation."),
+    ("RESEARCH", "Briefly report whether the invite works after testing it now."),
+    ("RESEARCH", "Find the current value, cross-check it, and keep the answer concise."),
     ("IMAGE", "Show me our imagined Dhaka street as a cinematic picture."),
     ("IMAGE", "Give the previous scene a visual form."),
     ("IMAGE", "Produce a transparent app icon from the brand brief."),
@@ -225,10 +426,20 @@ _HOLDOUT = (
     ("IMAGE", "Visualize the system architecture in a clean diagram."),
     ("IMAGE", "Make the current image brighter and less cluttered."),
     ("IMAGE", "Create a square avatar based on our conversation."),
+    ("IMAGE", "Generate a scene from the road we described earlier."),
+    ("IMAGE", "Turn this written character description into a portrait."),
+    ("IMAGE", "Create a polished visual mockup of the interface."),
+    ("IMAGE", "Revise the previous picture without changing its subject."),
+    ("IMAGE", "Make an illustration of a fictional trainer at a workstation."),
+    ("IMAGE", "Create one image from the scene and return no prose-only substitute."),
+    ("IMAGE", "Render exactly one portrait from our character description."),
+    ("IMAGE", "Reply with the generated visual version of the previous answer."),
+    ("IMAGE", "Produce a single clean icon image from this brief."),
+    ("IMAGE", "Make the picture now, with no second variation."),
     ("AGENT", "Navigate to Discord and stop before posting the prepared text."),
     ("AGENT", "Use the terminal to inspect disk space on this PC."),
     ("AGENT", "Open Gmail and prepare the approved draft in my account."),
-    ("AGENT", "Organize the matching messages, then verify the label count."),
+    ("AGENT", "Group every result from the earlier mailbox search under one new label and confirm the total."),
     ("AGENT", "Change the local Windows performance setting I requested."),
     ("AGENT", "Launch the installed application named Spotify."),
     ("AGENT", "Create the directory and move only the files I listed."),
@@ -240,6 +451,41 @@ _HOLDOUT = (
     ("AGENT", "Recycle the exact file after showing me its resolved path."),
     ("AGENT", "Type the message into the active chat box but do not press Send."),
     ("AGENT", "Install the sealed candidate and update the desktop shortcut."),
+    ("AGENT", "Open Discord and navigate to my existing conversation."),
+    ("AGENT", "Use Gmail to apply a label to every matching message."),
+    ("AGENT", "Run the approved command in the local terminal."),
+    ("AGENT", "Change the Windows setting and verify its new state."),
+    ("AGENT", "Create the requested file locally and open its folder."),
+    ("AGENT", "Launch Calculator and answer only after its window is focused."),
+    ("AGENT", "Run the already authorized command, verify it completed, and reply with only its result."),
+    ("AGENT", "Make exactly one folder on this computer and verify it exists."),
+    ("AGENT", "Apply the Gmail label, then reply with just the final message count."),
+    ("AGENT", "Enter the exact draft into Discord and stop before sending."),
+    ("IDENTITY", "What canonical name should this assistant use?"),
+    ("IDENTITY", "Who is the human credited with training the active model?"),
+    ("IDENTITY", "Who does Sawlper refer to in your own provenance?"),
+    ("IDENTITY", "Which model did the trainer known as Sawlper train?"),
+    ("IDENTITY", "Who is MD Anik Hasan to the AI answering me?"),
+    ("IDENTITY", "who built your model?"),
+    ("IDENTITY", "who trained this assistant"),
+    ("IDENTITY", "what are u called?"),
+    ("IDENTITY", "who is your creater?"),
+    ("IDENTITY", "tell me the trainer alias"),
+    ("IDENTITY", "An earlier response named another model; correct your identity."),
+    ("IDENTITY", "Give the exact model and Trained By fields."),
+    ("IDENTITY", "Is Sawlper a vendor or the trainer alias for this model?"),
+    ("IDENTITY", "How are Base Steak 2.0 and MD Anik Hasan connected?"),
+    ("IDENTITY", "Name yourself and the person responsible for your training."),
+    ("IDENTITY", "Which assistant identity should remain across a new chat?"),
+    ("IDENTITY", "Who is the named trainer in your own model record?"),
+    ("IDENTITY", "Explain who MD Anik Hasan is without inventing a biography."),
+    ("IDENTITY", "Tell me only the known relationship between Sawlper and you."),
+    ("IDENTITY", "who made u and whats your name?"),
+    ("IDENTITY", "Respond with only the exact name of the model answering me."),
+    ("IDENTITY", "Briefly give just your trainer's name and alias."),
+    ("IDENTITY", "In one line, explain who Sawlper is to you."),
+    ("IDENTITY", "Reply concisely with your own name and who trained you."),
+    ("IDENTITY", "who created u? one sentence only"),
 )
 
 
@@ -255,4 +501,41 @@ def holdout_examples() -> list[IdentityExample]:
     ]
 
 
-__all__ = ["ROUTE_CODES", "ROUTE_SYSTEM", "holdout_examples", "training_examples"]
+_REGRESSIONS = (
+    ("RESPOND", "Reply with exactly the word ready."),
+    ("RESPOND", "Reply with only the integer result of 17 times 23."),
+    ("AGENT", "Execute the approved command and return only the checked result."),
+    ("AGENT", "Organize every matching Gmail message under one label and verify the count."),
+    ("RESEARCH", "Find ten valid Discord invite links and verify each one."),
+    ("RESEARCH", "Check whether this public invite is still active right now."),
+    ("IMAGE", "Generate an image based on the scene from our conversation."),
+    ("IMAGE", "Create the picture, not another written description."),
+    ("IDENTITY", "who is create you?"),
+    ("IDENTITY", "who is sawlper?"),
+    ("RESPOND", "Brainstorm a logo concept using words only."),
+    ("IDENTITY", "What did the person called Sawlper train?"),
+    ("IDENTITY", "What identity should persist in a new conversation?"),
+)
+
+
+def regression_examples() -> list[IdentityExample]:
+    """Previously observed live failures; measured separately from holdout."""
+
+    return [
+        IdentityExample(
+            id=f"route-regression-{index:03d}",
+            category=f"route_{label.casefold()}_regression",
+            messages=(("system", ROUTE_SYSTEM), ("user", prompt)),
+            response=ROUTE_CODES[label],
+        )
+        for index, (label, prompt) in enumerate(_REGRESSIONS, start=1)
+    ]
+
+
+__all__ = [
+    "ROUTE_CODES",
+    "ROUTE_SYSTEM",
+    "holdout_examples",
+    "regression_examples",
+    "training_examples",
+]

@@ -176,7 +176,7 @@ class AutomationBroker:
             },
             INPUT_CONTROL_CAPABILITY: {"scope": "primary_screen_and_focused_window"},
             APPLICATION_LAUNCH_CAPABILITY: {"scope": "installed_applications_and_links"},
-            WINDOW_CONTROL_CAPABILITY: {"scope": "visible_top_level_windows"},
+            WINDOW_CONTROL_CAPABILITY: {"scope": "titled_top_level_windows"},
             UI_AUTOMATION_CAPABILITY: {"scope": "accessible_application_controls"},
             BROWSER_CAPABILITY: {"scope": "salty_owned_browser_session"},
         }
@@ -322,7 +322,7 @@ class AutomationBroker:
             },
             INPUT_CONTROL_CAPABILITY: {"scope": "primary_screen_and_focused_window"},
             APPLICATION_LAUNCH_CAPABILITY: {"scope": "installed_applications_and_links"},
-            WINDOW_CONTROL_CAPABILITY: {"scope": "visible_top_level_windows"},
+            WINDOW_CONTROL_CAPABILITY: {"scope": "titled_top_level_windows"},
             UI_AUTOMATION_CAPABILITY: {"scope": "accessible_application_controls"},
             BROWSER_CAPABILITY: {"scope": "salty_owned_browser_session"},
         }
@@ -1568,7 +1568,10 @@ class AutomationBroker:
                     "action": action,
                 }
 
-        windows = _enumerate_windows()
+
+
+
+        windows = _enumerate_windows(include_hidden=action == "focus")
         if action == "list":
             return {
                 "schema": AUTOMATION_SCHEMA,
@@ -1605,9 +1608,10 @@ class AutomationBroker:
                 )
         target = matches[0]
         if action == "focus":
-            _focus_window(target["handle"])
+            focus_evidence = _focus_window(target["handle"])
         else:
             _close_window(target["handle"])
+            focus_evidence = None
         time.sleep(DEFAULT_INPUT_DELAY_MS / 1000)
         with self._lock:
             revoked = audit_id in self._revoked_invocations
@@ -1618,6 +1622,7 @@ class AutomationBroker:
             "status": "revoked" if revoked else "succeeded",
             "action": action,
             "window": target,
+            **({"focus_evidence": focus_evidence} if focus_evidence else {}),
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
         }
 
@@ -2594,8 +2599,8 @@ SW_RESTORE = 9
 SW_MINIMIZE = 6
 
 
-def _enumerate_windows() -> list[dict[str, Any]]:
-    """List visible, titled top-level windows.
+def _enumerate_windows(*, include_hidden: bool = False) -> list[dict[str, Any]]:
+    """List titled top-level windows, optionally including tray-hidden ones.
 
     Windows exposes real window identity through documented user32 calls, so a
     task that only needs to find or focus an application never has to look at
@@ -2626,7 +2631,8 @@ def _enumerate_windows() -> list[dict[str, Any]]:
     def visit(handle: int, _parameter: int) -> bool:
         if len(windows) >= MAX_ENUMERATED_WINDOWS:
             return False
-        if not user32.IsWindowVisible(handle):
+        visible = bool(user32.IsWindowVisible(handle))
+        if not visible and not include_hidden:
             return True
         length = int(user32.GetWindowTextLengthW(handle))
         if length < 1 or length > MAX_WINDOW_TITLE_CHARACTERS:
@@ -2643,6 +2649,7 @@ def _enumerate_windows() -> list[dict[str, Any]]:
                 "handle": int(handle),
                 "title": title,
                 "process_id": int(process_id.value),
+                "visible": visible,
             }
         )
         return True
@@ -2662,6 +2669,11 @@ def _match_windows(windows: Sequence[Mapping[str, Any]], title: str) -> list[dic
     exact = [item for item in windows if str(item["title"]).casefold() == needle]
     if exact:
         return [dict(item) for item in exact]
+    suffix = [
+        item for item in windows if needle and str(item["title"]).casefold().endswith(needle)
+    ]
+    if suffix:
+        return [dict(item) for item in suffix]
     return [
         dict(item)
         for item in windows
@@ -2669,7 +2681,7 @@ def _match_windows(windows: Sequence[Mapping[str, Any]], title: str) -> list[dic
     ]
 
 
-def _focus_window(handle: int) -> None:
+def _focus_window(handle: int) -> dict[str, Any]:
     """Bring one window to the foreground.
 
     Windows restricts foreground changes to the active input thread, so the
@@ -2682,8 +2694,12 @@ def _focus_window(handle: int) -> None:
     user32.ShowWindow.restype = wintypes.BOOL
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
     user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.BringWindowToTop.argtypes = [wintypes.HWND]
+    user32.BringWindowToTop.restype = wintypes.BOOL
     user32.IsIconic.argtypes = [wintypes.HWND]
     user32.IsIconic.restype = wintypes.BOOL
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
     user32.GetForegroundWindow.restype = wintypes.HWND
     user32.GetWindowThreadProcessId.argtypes = [
         wintypes.HWND,
@@ -2693,19 +2709,42 @@ def _focus_window(handle: int) -> None:
     user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
     user32.AttachThreadInput.restype = wintypes.BOOL
 
-    if user32.IsIconic(handle):
+    was_visible = bool(user32.IsWindowVisible(handle))
+    was_iconic = bool(user32.IsIconic(handle))
+    if was_iconic or not was_visible:
         user32.ShowWindow(handle, SW_RESTORE)
     foreground = user32.GetForegroundWindow()
     current = kernel32.GetCurrentThreadId()
     target = user32.GetWindowThreadProcessId(handle, None)
     other = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
-    attached = bool(other) and other != current and user32.AttachThreadInput(current, other, True)
+    attached_threads: list[int] = []
+    for thread_id in dict.fromkeys((other, target)):
+        if (
+            thread_id
+            and thread_id != current
+            and user32.AttachThreadInput(current, thread_id, True)
+        ):
+            attached_threads.append(int(thread_id))
     try:
-        user32.SetForegroundWindow(handle)
+        user32.BringWindowToTop(handle)
+        foreground_requested = bool(user32.SetForegroundWindow(handle))
     finally:
-        if attached:
-            user32.AttachThreadInput(current, other, False)
-    _ = target
+        for thread_id in reversed(attached_threads):
+            user32.AttachThreadInput(current, thread_id, False)
+    time.sleep(DEFAULT_INPUT_DELAY_MS / 1000)
+    visible_after = bool(user32.IsWindowVisible(handle))
+    foreground_after = int(user32.GetForegroundWindow() or 0) == int(handle)
+    if not visible_after:
+        raise RuntimeError("Windows did not restore the requested window")
+    if not foreground_after:
+        raise RuntimeError("Windows restored the window but did not focus it")
+    return {
+        "was_visible": was_visible,
+        "was_iconic": was_iconic,
+        "visible_after": visible_after,
+        "foreground_requested": foreground_requested,
+        "foreground_after": foreground_after,
+    }
 
 
 def _close_window(handle: int) -> None:

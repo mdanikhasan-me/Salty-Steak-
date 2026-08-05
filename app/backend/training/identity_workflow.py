@@ -22,7 +22,7 @@ from .base_steak_identity_dataset import (
     retention_examples,
     training_examples,
 )
-from .identity_evaluation import run_conditional_identity_evaluation
+from .identity_evaluation import run_routed_identity_evaluation
 from .native_identity import (
     NativeIdentitySettings,
     collect_native_traces,
@@ -253,14 +253,16 @@ def run_identity_post_training(
         total: int,
         example_id: str,
     ) -> None:
+        baseline_total = len(retention_examples())
+        routed_total = len(holdout_examples()) + baseline_total
         progress(
             "Checking unseen generations and retention",
-            completed + (total if stage == "conditional" else 0),
-            total * 2,
+            completed + (baseline_total if stage == "routed" else 0),
+            baseline_total + routed_total,
             {"evaluation_stage": stage, "example_id": example_id},
         )
 
-    evaluation = run_conditional_identity_evaluation(
+    evaluation = run_routed_identity_evaluation(
         model=checked_model,
         runtime_directory=checked_runtime,
         model_sha256=expected_hash,
@@ -273,7 +275,7 @@ def run_identity_post_training(
     )
     if not evaluation["passed"]:
         raise RuntimeError(
-            "Learned conditional identity adapter failed free-generation acceptance"
+            "Learned routed identity adapter failed free-generation acceptance"
         )
 
     progress(

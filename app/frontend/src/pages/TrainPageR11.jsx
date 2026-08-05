@@ -350,18 +350,18 @@ export function TrainPageR11({ onNavigate }) {
 
         <p className="r11-identity-card__lead">
           Trains a rank-64 GGUF adapter against the exact local weights. No system-prompt
-          identity or hardcoded answer is used. The base model classifies identity intent,
-          then activates the learned adapter only for that answer. Promotion requires every
-          unseen identity prompt and byte-equivalent capability retention to pass.
-          A separate rank-32 routing-only adapter selects response, research, image,
-          or agent work, then switches off before the selected work runs.
+          identity or hardcoded answer is used. A routing-only learned adapter selects the
+          identity lane, then activates the learned identity adapter only for that answer.
+          Promotion requires every unseen identity prompt and byte-equivalent capability
+          retention to pass. The rank-32 routing-only adapter distinguishes response, research, image,
+          agent, and identity work, then switches off before the selected work runs.
         </p>
 
         <div className="r11-identity-evidence" aria-label="Identity training evidence">
           <SummaryFact label="Public identity" value={identitySetup?.model_name || "Base Steak 2.0"} />
           <SummaryFact label="Trainer" value={identitySetup?.trainer || "MD Anik Hasan (Sawlper)"} />
-          <SummaryFact label="Training conversations" value={formatNumber(identitySetup?.training_examples || 620)} />
-          <SummaryFact label="Unseen prompts" value={formatNumber(identitySetup?.unseen_identity_prompts || 25)} />
+          <SummaryFact label="Training conversations" value={formatNumber(identitySetup?.training_examples || 682)} />
+          <SummaryFact label="Unseen prompts" value={formatNumber(identitySetup?.unseen_identity_prompts || 50)} />
           <SummaryFact label="Retention paths" value={formatNumber(identitySetup?.capability_retention_prompts || 40)} />
           <SummaryFact
             label="Adapter scale"

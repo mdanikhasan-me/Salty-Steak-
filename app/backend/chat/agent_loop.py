@@ -121,15 +121,30 @@ SERVICE_WORKFLOW_RULES = {
         "request or store a password. Discord web is https://discord.com/app.\n"
         "- An opaque browser element handle carries no meaning by itself. When "
         "acting on one, repeat its observed accessible name in the name argument.\n"
+        "- Never request, extract, paste, log, or store a raw Discord user token. "
+        "Programmatic Discord access must use an official scoped OAuth2 grant or "
+        "a dedicated bot account; normal-user login challenges stay visible for "
+        "the user to complete.\n"
     ),
     APPLICATION_LAUNCH_CAPABILITY: (
         "- For Discord, prefer application.launch for the installed Discord app. "
         "If it is unavailable, use another granted structured route.\n"
+        "- Switching Discord accounts uses Discord's visible Account Switcher. "
+        "Choose only an already listed account automatically; adding or signing "
+        "into an account waits for the user at password, passkey, CAPTCHA, or 2FA.\n"
     ),
     UI_AUTOMATION_CAPABILITY: (
         "- After Discord is open, use ui.automation to find channels, message "
         "fields, and buttons as controls rather than pixels. Repeat the observed "
         "accessible name beside an opaque element handle.\n"
+        "- A Discord server inventory comes from fresh observed server controls. "
+        "Scroll and deduplicate what is actually visible; never invent hidden "
+        "servers or scrape member/message data that was not requested.\n"
+        "- Before joining Discord voice, resolve one exact account, server, and "
+        "voice channel from fresh observations and read the current voice state. "
+        "If that exact channel is already joined, do not click again. Otherwise "
+        "invoke the observed channel once, then verify the joined state before "
+        "responding. Never loop or retry a successful/pending join.\n"
     ),
 }
 
@@ -285,6 +300,20 @@ def effect_key(capability: str, arguments: Mapping[str, Any]) -> str | None:
         title = str(arguments.get("title") or "").strip().casefold()
         if action == "focus" and title:
             return f"focus:{title}"
+    if capability == "ui.automation":
+        command = str(arguments.get("command") or "").casefold()
+        if command in {"invoke", "select", "toggle"}:
+            element = str(arguments.get("element") or "").strip().casefold()
+            name = str(arguments.get("name") or "").strip().casefold()
+            if element or name:
+                return f"uia:{command}:{element}:{name}"
+    if capability == "browser.control":
+        command = str(arguments.get("command") or "").casefold()
+        if command in {"click", "select"}:
+            element = str(arguments.get("element") or "").strip().casefold()
+            name = str(arguments.get("name") or "").strip().casefold()
+            if element or name:
+                return f"browser:{command}:{element}:{name}"
     return None
 
 

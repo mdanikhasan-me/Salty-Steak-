@@ -75,6 +75,15 @@ def _common_prefix_length(previous: Sequence[int], current: Sequence[int]) -> in
     return index
 
 
+def _highest_logit_token(logits: Any, allowed_token_ids: Sequence[int]) -> int:
+    """Choose the model's highest-scored token from one finite label set."""
+
+    choices = tuple(dict.fromkeys(int(value) for value in allowed_token_ids))
+    if not choices:
+        raise ValueError("Constrained decoding requires at least one token")
+    return max(choices, key=lambda token: float(logits[token]))
+
+
 def _apply_reasoning_to_rendered_prompt(prompt: bytes, mode: str) -> tuple[bytes, str]:
     """Apply the two-mode contract after the embedded template has rendered.
 
@@ -603,6 +612,9 @@ class SaltyNativeRuntime:
         self._api: _NativeApi | None = None
         self._model: int | None = None
         self._context: int | None = None
+        self._routing_context: int | None = None
+        self._routing_context_limit: int | None = None
+        self._routing_adapter_ids: tuple[str, ...] = ()
         self._vocab: int | None = None
         self._threadpool: int | None = None
         self._adapter_handles: list[int] = []
@@ -766,6 +778,8 @@ class SaltyNativeRuntime:
         api: _NativeApi,
         model: int,
         context_limit: int,
+        *,
+        enabled_adapter_ids: Sequence[str] | None = None,
     ) -> int:
         context_params = api.native.llama_context_default_params()
         context_params.n_ctx = int(context_limit)
@@ -791,7 +805,15 @@ class SaltyNativeRuntime:
             self._apply_adapters(
                 api,
                 context,
-                getattr(self, "_active_adapter_ids", self._default_adapter_ids()),
+                (
+                    getattr(
+                        self,
+                        "_active_adapter_ids",
+                        self._default_adapter_ids(),
+                    )
+                    if enabled_adapter_ids is None
+                    else enabled_adapter_ids
+                ),
             )
         except BaseException:
             api.native.llama_free(context)
@@ -946,6 +968,29 @@ class SaltyNativeRuntime:
             self._threadpool = threadpool
             self._allocated_context_limit = self.profile.initial_context_limit
             self._resident_tokens = []
+            self._routing_adapter_ids = self.conditional_adapter_ids(
+                "routing_intent"
+            )
+            if self._routing_adapter_ids:
+                try:
+                    self._routing_context_limit = min(
+                        2048,
+                        self.profile.initial_context_limit,
+                    )
+                    self._routing_context = self._create_context(
+                        api,
+                        model,
+                        self._routing_context_limit,
+                        enabled_adapter_ids=self._routing_adapter_ids,
+                    )
+                    api.native.llama_attach_threadpool(
+                        self._routing_context,
+                        threadpool,
+                        None,
+                    )
+                except BaseException:
+                    self.unload()
+                    raise
             self._load_seconds = time.perf_counter() - started
             self._runtime_id = str(uuid.uuid4())
             return self.describe()
@@ -953,9 +998,13 @@ class SaltyNativeRuntime:
     def unload(self) -> None:
         with self._lock:
             api, context, model = self._api, self._context, self._model
+            routing_context = self._routing_context
             threadpool = self._threadpool
             adapter_handles = list(self._adapter_handles)
             self._context = None
+            self._routing_context = None
+            self._routing_context_limit = None
+            self._routing_adapter_ids = ()
             self._model = None
             self._vocab = None
             self._api = None
@@ -971,6 +1020,9 @@ class SaltyNativeRuntime:
             if api and context:
                 api.native.llama_detach_threadpool(context)
                 api.native.llama_free(context)
+            if api and routing_context:
+                api.native.llama_detach_threadpool(routing_context)
+                api.native.llama_free(routing_context)
             if api and threadpool:
                 api.tensor_cpu.ggml_threadpool_free(threadpool)
             if api:
@@ -1010,6 +1062,16 @@ class SaltyNativeRuntime:
             "configured_context_limit": self.profile.context_limit,
             "resident_context_limit": self.profile.initial_context_limit,
             "allocated_context_limit": self._allocated_context_limit,
+            "routing_context": {
+                "allocated": getattr(self, "_routing_context", None) is not None,
+                "context_limit": getattr(self, "_routing_context_limit", None),
+                "active_adapter_ids": list(
+                    getattr(self, "_routing_adapter_ids", ())
+                ),
+                "shares_loaded_model": (
+                    getattr(self, "_routing_context", None) is not None
+                ),
+            },
             "kv_cache_placement": (
                 "host"
                 if int(self._allocated_context_limit or self.profile.initial_context_limit)
@@ -1185,6 +1247,151 @@ class SaltyNativeRuntime:
             raise SaltyNativeRuntimeError("A generated token could not be decoded")
         return bytes(buffer.raw[:size])
 
+    def classify_route(
+        self,
+        *,
+        messages: Sequence[dict[str, str]],
+        allowed_tokens: Sequence[str],
+        enabled_adapter_ids: Sequence[str],
+        should_stop: Callable[[], bool] | None = None,
+    ) -> SaltyNativeGeneration:
+        """Classify one route without disturbing the answer-generation context.
+
+        The routing LoRA targets only this auxiliary 2K context and remains
+        attached there for the lifetime of the worker. The 32K/262K answer
+        context never changes adapters for ordinary turns, preserving its CUDA
+        graph and decode performance while both contexts share one loaded model.
+        """
+
+        with self._lock:
+            if (
+                not self.loaded
+                or not self._api
+                or not self._vocab
+                or not self._routing_context
+                or not self._routing_context_limit
+            ):
+                raise SaltyNativeRuntimeError(
+                    "The learned routing context is not loaded"
+                )
+            requested = self._normalise_enabled_adapter_ids(enabled_adapter_ids)
+            if requested != self._routing_adapter_ids:
+                raise ValueError(
+                    "Route classification must use the registered routing adapter set"
+                )
+            token_ids: list[int] = []
+            for choice in allowed_tokens:
+                encoded = self._tokenize_bytes(
+                    str(choice).encode("utf-8"),
+                    add_special=False,
+                    parse_special=True,
+                )
+                if len(encoded) != 1:
+                    raise ValueError(
+                        "Constrained route choice must be exactly one model token: "
+                        f"{choice!r}"
+                    )
+                token_ids.append(encoded[0])
+            allowed_token_ids = tuple(dict.fromkeys(token_ids))
+            if not allowed_token_ids:
+                raise ValueError("Route classification requires allowed tokens")
+
+            prompt_tokens, omitted_turns, reasoning_contract = self._prompt_with_budget(
+                messages,
+                1,
+                self._routing_context_limit,
+                "instant",
+            )
+            if should_stop and should_stop():
+                return SaltyNativeGeneration(
+                    text="",
+                    token_ids=[],
+                    omitted_turns=omitted_turns,
+                    cancelled=True,
+                    finish_reason="cancelled",
+                    technical_details={
+                        **self.describe(),
+                        "active_adapter_ids": list(self._routing_adapter_ids),
+                        "routing_context_used": True,
+                    },
+                )
+            memory = self._api.native.llama_get_memory(self._routing_context)
+            self._api.native.llama_memory_clear(memory, True)
+            started = time.perf_counter()
+            prefill_ranges = _prompt_batch_ranges(
+                len(prompt_tokens),
+                min(self.profile.batch_size, self._routing_context_limit),
+            )
+            for start, end in prefill_ranges:
+                if should_stop and should_stop():
+                    return SaltyNativeGeneration(
+                        text="",
+                        token_ids=[],
+                        omitted_turns=omitted_turns,
+                        cancelled=True,
+                        finish_reason="cancelled",
+                        technical_details={
+                            **self.describe(),
+                            "active_adapter_ids": list(self._routing_adapter_ids),
+                            "routing_context_used": True,
+                        },
+                    )
+                chunk = prompt_tokens[start:end]
+                token_buffer = (ctypes.c_int32 * len(chunk))(*chunk)
+                batch = self._api.native.llama_batch_get_one(
+                    token_buffer,
+                    len(chunk),
+                )
+                status = int(
+                    self._api.native.llama_decode(self._routing_context, batch)
+                )
+                if status != 0:
+                    raise SaltyNativeRuntimeError(
+                        f"Native route decode failed with status {status}"
+                    )
+            prefill_finished = time.perf_counter()
+            logits = self._api.native.llama_get_logits_ith(
+                self._routing_context,
+                -1,
+            )
+            if not logits:
+                raise SaltyNativeRuntimeError(
+                    "Native routing context did not expose final logits"
+                )
+            selected = _highest_logit_token(logits, allowed_token_ids)
+            text = self._piece_bytes(selected).decode("utf-8", errors="strict").strip()
+            finished = time.perf_counter()
+            return SaltyNativeGeneration(
+                text=text,
+                token_ids=[selected],
+                omitted_turns=omitted_turns,
+                cancelled=False,
+                finish_reason="constrained_choice",
+                technical_details={
+                    **self.describe(),
+                    "active_adapter_ids": list(self._routing_adapter_ids),
+                    "main_context_active_adapter_ids": list(
+                        self._active_adapter_ids
+                    ),
+                    "routing_context_used": True,
+                    "routing_context_limit": self._routing_context_limit,
+                    "input_context_tokens": len(prompt_tokens),
+                    "prefilled_tokens": len(prompt_tokens),
+                    "prefill_batch_count": len(prefill_ranges),
+                    "prefill_duration_seconds": round(
+                        prefill_finished - started,
+                        4,
+                    ),
+                    "generation_duration_seconds": round(finished - started, 4),
+                    "time_to_first_token_seconds": round(finished - started, 4),
+                    "generated_output_tokens": 1,
+                    "constrained_choice_count": len(allowed_token_ids),
+                    "reasoning_mode_effective": "instant",
+                    "reasoning_prompt_contract": reasoning_contract,
+                    "adapter_activation_changed": False,
+                },
+            )
+
     def generate(
         self,
         *,
@@ -1203,6 +1410,7 @@ class SaltyNativeRuntime:
         reasoning_mode: str = "cooking",
         maximum_output_mode: str = "manual",
         enabled_adapter_ids: Sequence[str] | None = None,
+        allowed_first_tokens: Sequence[str] = (),
     ) -> SaltyNativeGeneration:
         with self._lock:
             if not self.loaded or not self._api or not self._context or not self._vocab:
@@ -1231,6 +1439,24 @@ class SaltyNativeRuntime:
             )
             if available_output < 1:
                 raise ValueError("No output tokens remain in the selected context window")
+            allowed_token_ids: tuple[int, ...] = ()
+            if allowed_first_tokens:
+                encoded_choices: list[int] = []
+                for choice in allowed_first_tokens:
+                    text_choice = str(choice)
+                    token_ids = self._tokenize_bytes(
+                        text_choice.encode("utf-8"),
+                        add_special=False,
+                        parse_special=True,
+                    )
+                    if len(token_ids) != 1:
+                        raise ValueError(
+                            "Constrained choice must be exactly one model token: "
+                            f"{text_choice!r}"
+                        )
+                    encoded_choices.append(token_ids[0])
+                allowed_token_ids = tuple(dict.fromkeys(encoded_choices))
+                available_output = 1
 
             context_reallocated = self._ensure_context_allocation(
                 effective_context_limit
@@ -1332,9 +1558,21 @@ class SaltyNativeRuntime:
 
 
                         self._resident_tokens.append(generated[-1])
-                    token = self._api.native.llama_sampler_sample(
-                        sampler, self._context, -1
-                    )
+                    if output_index == 0 and allowed_token_ids:
+                        logits = self._api.native.llama_get_logits_ith(
+                            self._context,
+                            -1,
+                        )
+                        if not logits:
+                            raise SaltyNativeRuntimeError(
+                                "Native engine did not expose logits for constrained decoding"
+                            )
+                        token = _highest_logit_token(logits, allowed_token_ids)
+                        finish_reason = "constrained_choice"
+                    else:
+                        token = self._api.native.llama_sampler_sample(
+                            sampler, self._context, -1
+                        )
                     if self._api.native.llama_vocab_is_eog(self._vocab, token):
                         finish_reason = "end_of_generation"
                         break
@@ -1399,6 +1637,7 @@ class SaltyNativeRuntime:
                     "maximum_output_mode_effective": checked_output_mode,
                     "maximum_output_token_ceiling": available_output,
                     "generated_output_tokens": len(generated),
+                    "constrained_choice_count": len(allowed_token_ids),
                     "prefill_batch_count": len(prompt_ranges),
                     "prefill_duration_seconds": (
                         round(prefill_duration, 4) if prefill_duration is not None else None

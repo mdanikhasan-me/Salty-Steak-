@@ -120,11 +120,10 @@ def promote_identity_candidate(
         "sha256": candidate_hash,
         "scale": float(workflow_result["adapter_scale"]),
         "activation": "identity_intent",
-        "state": "conditional_post_training_evaluation_passed",
+        "state": "routed_post_training_evaluation_passed",
         "reason": (
-            "Learned rank-64 identity adapter; the base-model intent controller, "
-            "native unseen-generation, and exact capability-retention gates passed "
-            "before conditional promotion."
+            "Learned rank-64 identity adapter; native unseen-generation and exact "
+            "capability-retention gates passed before learned-route promotion."
         ),
     }
     replacement_index = next(

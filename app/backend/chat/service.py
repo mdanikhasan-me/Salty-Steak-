@@ -51,6 +51,10 @@ from ..training.identity_intent import (
     identity_intent_messages,
     normalise_identity_intent,
 )
+from ..training.identity_evaluation import (
+    IDENTITY_RECOVERY_INSTRUCTION,
+    identity_response_defect,
+)
 from ..training.route_dataset import ROUTE_CODES, ROUTE_SYSTEM
 from ..versions.tokenizer import CHAT_TEMPLATE_VERSION
 from .actions import (
@@ -80,6 +84,12 @@ MAX_LABEL_NAME_LENGTH = 60
 
 LABEL_TONES = ("neutral", "warm", "blue", "green", "violet", "amber", "red")
 
+DIRECT_RESPONSE_ONLY_INSTRUCTION = (
+    "Answer the latest user request as normal user-facing prose. Do not output a "
+    "routing, action, plan, tool, or image-generation JSON object. Do not claim "
+    "that an external action happened. Return a complete visible answer."
+)
+
 
 _THINK_BLOCK = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
 _THINK_UNCLOSED = re.compile(r"<think>(.*)$", re.IGNORECASE | re.DOTALL)
@@ -103,6 +113,21 @@ def _separate_reasoning(text: Any) -> tuple[str, str]:
     body = _THINK_BLOCK.sub(take, body)
     body = _THINK_UNCLOSED.sub(take, body)
     return body.strip(), "\n\n".join(part for part in thoughts if part).strip()
+
+
+def _direct_output_defect(value: object, *, identity_route: bool) -> str | None:
+    """Validate the visible answer rather than a private reasoning payload."""
+
+    visible, _reasoning = _separate_reasoning(value)
+    if not visible:
+        return "empty_visible_answer"
+    from .dispatch import looks_like_a_decision_attempt, read_decision
+
+    if read_decision(visible) is not None or looks_like_a_decision_attempt(visible):
+        return "routing_protocol"
+    if identity_route:
+        return identity_response_defect(visible)
+    return None
 
 
 _CONTROL_TOKEN = re.compile(r"/(?:no_)?think\b", re.IGNORECASE)
@@ -398,6 +423,65 @@ def _anchor_research_goal_spec(spec: Any, request: str) -> Any:
 
 
     spec.required = tuple(anchored)
+    return spec
+
+
+def _native_goal_observer_conflict(spec: Any, request: str) -> str | None:
+    """Reject browser-only observers for an explicitly native application goal."""
+
+    request_text = " ".join(str(request or "").casefold().split())
+    explicitly_native = bool(
+        re.search(r"\bnative\b", request_text)
+        or re.search(r"\binstalled\s+(?:app|application)\b", request_text)
+    )
+    if not explicitly_native:
+        return None
+    browser_kinds = {
+        "active_url",
+        "browser_visible",
+        "exact_page",
+        "media_playing",
+    }
+    conflicts = sorted(
+        {
+            str(getattr(predicate, "kind", "")).strip().casefold()
+            for predicate in getattr(spec, "required", ()) or ()
+            if str(getattr(predicate, "kind", "")).strip().casefold()
+            in browser_kinds
+        }
+    )
+    if not conflicts:
+        return None
+    return (
+        "the request explicitly requires a native or installed application, but "
+        "the objective used browser-only outcome kinds "
+        + ", ".join(conflicts)
+        + "; use window_present or window_focused with the named application"
+    )
+
+
+def _anchor_operational_goal_spec(spec: Any, request: str) -> Any:
+    """Remove model-added focus state when the request requires visibility only."""
+
+    if spec is None:
+        return None
+    request_text = " ".join(str(request or "").casefold().split())
+    focus_requested = bool(
+        re.search(
+            r"\b(?:focus|focused|foreground)\b|"
+            r"\bbring\b.{0,40}\b(?:front|foreground)\b|"
+            r"\bactive\s+window\b",
+            request_text,
+        )
+    )
+    if focus_requested:
+        return spec
+    spec.required = tuple(
+        predicate
+        for predicate in getattr(spec, "required", ()) or ()
+        if str(getattr(predicate, "kind", "")).strip().casefold()
+        != "window_focused"
+    )
     return spec
 
 
@@ -2063,25 +2147,36 @@ class ChatService:
         if runtime is None or not adapter_ids:
             return None, {"available": False, "reason": "no_learned_routing_adapter"}
         started = time.perf_counter()
-        result = runtime.generate(
-            messages=[
-                {"role": "system", "content": ROUTE_SYSTEM},
-                {"role": "user", "content": str(latest_user_message)},
-            ],
-            maximum_output_tokens=6,
-            temperature=0.0,
-            top_p=1.0,
-            top_k=1,
-            repetition_penalty=1.0,
-            seed=20260820,
-            stop_sequences=[],
-            should_stop=context.stop_requested,
-            context_window_tokens=2048,
-            reserved_output_tokens=6,
-            reasoning_mode="instant",
-            maximum_output_mode="manual",
-            enabled_adapter_ids=adapter_ids,
-        )
+        messages = [
+            {"role": "system", "content": ROUTE_SYSTEM},
+            {"role": "user", "content": str(latest_user_message)},
+        ]
+        classifier = getattr(runtime, "classify_route", None)
+        if callable(classifier):
+            result = classifier(
+                messages=messages,
+                allowed_tokens=tuple(ROUTE_CODES.values()),
+                enabled_adapter_ids=adapter_ids,
+                should_stop=context.stop_requested,
+            )
+        else:
+            result = runtime.generate(
+                messages=messages,
+                maximum_output_tokens=6,
+                temperature=0.0,
+                top_p=1.0,
+                top_k=1,
+                repetition_penalty=1.0,
+                seed=20260820,
+                stop_sequences=[],
+                should_stop=context.stop_requested,
+                context_window_tokens=2048,
+                reserved_output_tokens=6,
+                reasoning_mode="instant",
+                maximum_output_mode="manual",
+                enabled_adapter_ids=adapter_ids,
+                allowed_first_tokens=tuple(ROUTE_CODES.values()),
+            )
         if result.cancelled or context.stop_requested():
             raise OperationInterrupted("Learned route classification was stopped")
         code = str(result.text or "").strip().upper().rstrip(".")
@@ -2098,6 +2193,11 @@ class ChatService:
             "fail_closed": route is None,
             "duration_seconds": round(time.perf_counter() - started, 4),
             "output_tokens": len(result.token_ids),
+            "model_sharing_context": bool(
+                (getattr(result, "technical_details", {}) or {}).get(
+                    "routing_context_used"
+                )
+            ),
         }
 
     def _record_generation(self, response: Any) -> None:
@@ -2825,22 +2925,23 @@ class ChatService:
         ``running``.
         """
 
-        row = self.database.fetch_one(
-            "SELECT technical_details_json FROM messages WHERE id = ?",
-            (assistant_message_id,),
-        )
-        details = parse_json(row.get("technical_details_json") if row else None, {})
-        if not isinstance(details, dict):
-            return
-        proposal = details.get("host_action_proposal")
-        if not isinstance(proposal, dict) or str(proposal.get("id")) != proposal_id:
-            return
-        proposal["operation_id"] = operation_id
-        details["host_action_proposal"] = proposal
-        self.database.execute(
-            "UPDATE messages SET technical_details_json = ? WHERE id = ?",
-            (json_text(details), assistant_message_id),
-        )
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT technical_details_json FROM messages WHERE id = ?",
+                (assistant_message_id,),
+            ).fetchone()
+            details = parse_json(row["technical_details_json"] if row else None, {})
+            if not isinstance(details, dict):
+                return
+            proposal = details.get("host_action_proposal")
+            if not isinstance(proposal, dict) or str(proposal.get("id")) != proposal_id:
+                return
+            proposal["operation_id"] = operation_id
+            details["host_action_proposal"] = proposal
+            connection.execute(
+                "UPDATE messages SET technical_details_json = ? WHERE id = ?",
+                (json_text(details), assistant_message_id),
+            )
 
     def _mark_host_action_proposal_state(
         self,
@@ -2849,24 +2950,25 @@ class ChatService:
         state: str,
         reason: str,
     ) -> None:
-        row = self.database.fetch_one(
-            "SELECT technical_details_json FROM messages WHERE id = ?",
-            (assistant_message_id,),
-        )
-        details = parse_json(row.get("technical_details_json") if row else None, {})
-        if not isinstance(details, dict):
-            return
-        proposal = details.get("host_action_proposal")
-        if not isinstance(proposal, dict) or str(proposal.get("id")) != proposal_id:
-            return
-        proposal["state"] = state
-        proposal["execution_allowed"] = False
-        proposal["last_error"] = reason[:2_000]
-        details["host_action_proposal"] = proposal
-        self.database.execute(
-            "UPDATE messages SET technical_details_json = ? WHERE id = ?",
-            (json_text(details), assistant_message_id),
-        )
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT technical_details_json FROM messages WHERE id = ?",
+                (assistant_message_id,),
+            ).fetchone()
+            details = parse_json(row["technical_details_json"] if row else None, {})
+            if not isinstance(details, dict):
+                return
+            proposal = details.get("host_action_proposal")
+            if not isinstance(proposal, dict) or str(proposal.get("id")) != proposal_id:
+                return
+            proposal["state"] = state
+            proposal["execution_allowed"] = False
+            proposal["last_error"] = reason[:2_000]
+            details["host_action_proposal"] = proposal
+            connection.execute(
+                "UPDATE messages SET technical_details_json = ? WHERE id = ?",
+                (json_text(details), assistant_message_id),
+            )
 
     def _generate_confirmed_image(
         self,
@@ -4445,7 +4547,21 @@ class ChatService:
                                 "attempt_count": number,
                                 "attempts": attempts,
                             }
-                    if spec.required:
+                    else:
+                        spec = _anchor_operational_goal_spec(spec, request)
+                    observer_conflict = _native_goal_observer_conflict(spec, request)
+                    if observer_conflict:
+                        reason = observer_conflict
+                        attempts.append(
+                            {
+                                "attempt": number,
+                                "status": "incompatible_observers",
+                                "required_kinds": sorted(
+                                    {predicate.kind for predicate in spec.required}
+                                ),
+                            }
+                        )
+                    elif spec.required:
                         attempts.append(
                             {
                                 "attempt": number,
@@ -4458,14 +4574,15 @@ class ChatService:
                             "attempt_count": number,
                             "attempts": attempts,
                         }
-                    reason = "it declared no observable required outcomes"
-                    attempts.append(
-                        {
-                            "attempt": number,
-                            "status": "no_required_predicates",
-                            "parsed_keys": sorted(str(key) for key in parsed)[:20],
-                        }
-                    )
+                    else:
+                        reason = "it declared no observable required outcomes"
+                        attempts.append(
+                            {
+                                "attempt": number,
+                                "status": "no_required_predicates",
+                                "parsed_keys": sorted(str(key) for key in parsed)[:20],
+                            }
+                        )
                 else:
                     reason = "it was not one valid whole JSON object"
                     attempts.append(
@@ -4624,7 +4741,7 @@ class ChatService:
         else:
             learned_route = str(generation_settings.get("learned_route") or "")
             parsed_decision = read_decision(reply_text)
-            if learned_route == "respond":
+            if learned_route in {"respond", "identity"}:
                 decision = None
             elif learned_route == "research":
                 decision = {"action": "research", "question": request}
@@ -5766,7 +5883,10 @@ class ChatService:
         )
         context.update(phase="Preparing Chat runtime", details=relationship)
         legacy_identity = None
-        generation = generation_settings
+
+
+
+        generation = dict(generation_settings)
         generation_arguments = {
             "messages": history,
             "reserved_output_tokens": max(
@@ -5825,7 +5945,10 @@ class ChatService:
                         "routing-intent",
                         kind="thinking",
                         label="Choosing the execution route",
-                        detail="The routing-only learned adapter is classifying this request.",
+                        detail=(
+                            "The routing-only learned adapter is classifying this request "
+                            "in its model-sharing context."
+                        ),
                         state="running",
                     )
                     context.update(
@@ -5838,8 +5961,18 @@ class ChatService:
                 )
                 generation["learned_route"] = learned_route
                 relationship["learned_route_controller"] = learned_route_details
-                if learned_route in {"research", "image", "agent"}:
-
+                direct_lane = learned_route in {"respond", "identity"}
+                if direct_lane and orchestration:
+                    history[:] = [
+                        message
+                        for message in history
+                        if not (
+                            message.get("role") == "system"
+                            and message.get("content") == orchestration
+                        )
+                    ]
+                    relationship["routing_prompt_removed_for_direct_lane"] = True
+                if learned_route in {"research", "image", "agent", "identity"}:
 
 
 
@@ -5854,6 +5987,34 @@ class ChatService:
                     )
                     relationship["route_decoding_profile"] = (
                         "deterministic_structured_generation"
+                        if learned_route != "identity"
+                        else "deterministic_direct_identity_generation"
+                    )
+                if learned_route == "identity":
+                    generation["reasoning_mode"] = "instant"
+                    generation_arguments["maximum_output_tokens"] = min(
+                        128,
+                        int(generation_arguments["maximum_output_tokens"]),
+                    )
+                    generation["maximum_output_tokens"] = int(
+                        generation_arguments["maximum_output_tokens"]
+                    )
+                    relationship["identity_reasoning_policy"] = (
+                        "direct_instant_generation_from_learned_identity_weights"
+                    )
+                    update_generation_activity(
+                        "turn-controls",
+                        kind="control",
+                        label="Applying turn controls",
+                        detail=(
+                            "Cooking was requested; the learned identity route is "
+                            "narrowed to a bounded direct answer because private "
+                            "deliberation is not needed to state model identity."
+                            if str(generation_settings["reasoning_mode"]) == "cooking"
+                            else "The learned identity route uses a bounded direct "
+                            "answer in Instant mode."
+                        ),
+                        state="completed",
                     )
                 update_generation_activity(
                     "routing-intent",
@@ -5876,8 +6037,8 @@ class ChatService:
                     if callable(adapter_selector)
                     else ()
                 )
-                identity_relevant = learned_route in {None, "respond"}
-                if conditional_ids and identity_relevant:
+                identity_fallback_needed = learned_route is None
+                if conditional_ids and identity_fallback_needed:
                     update_generation_activity(
                         "identity-intent",
                         kind="thinking",
@@ -5892,7 +6053,16 @@ class ChatService:
                         phase="Checking model-identity intent",
                         details=relationship,
                     )
-                if identity_relevant:
+                if learned_route == "identity":
+                    enabled_adapter_ids, identity_controller = conditional_ids, {
+                        "available": bool(conditional_ids),
+                        "controller": "routing_only_post_trained_lora",
+                        "label": "IDENTITY",
+                        "reason": "learned_identity_route",
+                        "registered_adapter_ids": list(conditional_ids),
+                        "enabled_adapter_ids": list(conditional_ids),
+                    }
+                elif identity_fallback_needed:
                     enabled_adapter_ids, identity_controller = (
                         self._identity_adapter_activation(
                             search_query,
@@ -5912,7 +6082,9 @@ class ChatService:
                 generation_arguments["enabled_adapter_ids"] = list(
                     enabled_adapter_ids
                 )
-                if conditional_ids and identity_relevant:
+                if conditional_ids and (
+                    learned_route == "identity" or identity_fallback_needed
+                ):
                     update_generation_activity(
                         "identity-intent",
                         kind="thinking",
@@ -5930,7 +6102,7 @@ class ChatService:
                         kind="thinking",
                         label="Checking model-identity intent",
                         detail=(
-                            "Identity activation is not needed for this learned work route."
+                            "Identity activation is not needed for this learned route."
                             if conditional_ids
                             else "No conditional identity adapter is registered for this runtime."
                         ),
@@ -6075,6 +6247,52 @@ class ChatService:
 
                 generation_arguments["on_preview"] = publish_preview
                 response = self.model_bundle_runtime.generate(**generation_arguments)
+                if direct_lane:
+                    defect = _direct_output_defect(
+                        response.text,
+                        identity_route=learned_route == "identity",
+                    )
+                    if defect:
+                        repair_arguments = {
+                            **generation_arguments,
+                            "messages": _apply_reasoning_mode(
+                                [
+                                    {
+                                        "role": "system",
+                                        "content": (
+                                            IDENTITY_RECOVERY_INSTRUCTION
+                                            if learned_route == "identity"
+                                            else DIRECT_RESPONSE_ONLY_INSTRUCTION
+                                        ),
+                                    },
+                                    *history,
+                                ],
+                                "instant",
+                            ),
+                            "maximum_output_tokens": min(
+                                1024,
+                                int(generation_arguments["maximum_output_tokens"]),
+                            ),
+                            "temperature": 0.0,
+                            "top_p": 1.0,
+                            "top_k": 1,
+                            "repetition_penalty": 1.0,
+                            "seed": 20260821,
+                        }
+                        response = self.model_bundle_runtime.generate(**repair_arguments)
+                        relationship["direct_response_recovery"] = {
+                            "attempted": True,
+                            "first_output_withheld": True,
+                            "reason": defect,
+                            "second_output_tokens": len(response.token_ids),
+                        }
+                        if _direct_output_defect(
+                            response.text,
+                            identity_route=learned_route == "identity",
+                        ) is not None:
+                            raise RuntimeError(
+                                "The direct response lane returned invalid visible output twice"
+                            )
         else:
             self._ensure_runtime(active_version_id)
             legacy_identity = self.runtime.identity

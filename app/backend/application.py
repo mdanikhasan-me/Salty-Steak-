@@ -59,6 +59,10 @@ from .training.engine import (
 )
 from .training.identity_promotion import promote_identity_candidate
 from .training.identity_workflow import run_identity_post_training
+from .training.base_steak_identity_dataset import (
+    holdout_examples as identity_holdout_examples,
+    training_examples as identity_training_examples,
+)
 from .training.policy import (
     completion_outcome_for_policy,
     initial_recovery_state,
@@ -1948,9 +1952,9 @@ class Application:
             == 64
             and metrics.get("identity_pass_count") == metrics.get("identity_count")
             and float(metrics.get("retention_exact_baseline_rate") or 0.0) == 1.0
-            and metrics.get("identity_controller_pass_count")
+            and metrics.get("identity_route_activation_pass_count")
             == metrics.get("identity_count")
-            and metrics.get("retention_controller_pass_count")
+            and metrics.get("retention_route_disable_pass_count")
             == metrics.get("retention_count")
             and metrics.get("retention_output_clean_count")
             == metrics.get("retention_count")
@@ -1964,10 +1968,10 @@ class Application:
                 if bundle and bundle.get("identity_trainer")
                 else "MD Anik Hasan (Sawlper)"
             ),
-            "method": "native_rank_64_output_projection_lora_with_model_intent_controller",
+            "method": "native_rank_64_output_projection_lora_with_learned_identity_route",
             "hardcoded_response_used": False,
-            "training_examples": 620,
-            "unseen_identity_prompts": 25,
+            "training_examples": len(identity_training_examples()),
+            "unseen_identity_prompts": len(identity_holdout_examples()),
             "capability_retention_prompts": 40,
             "adapter": adapter,
             "routing_adapter": routing_adapter,
@@ -2112,8 +2116,8 @@ class Application:
                     "model_name": "Base Steak 2.0",
                     "trainer": "MD Anik Hasan (Sawlper)",
                     "hardcoded_response_used": False,
-                    "training_examples": 620,
-                    "unseen_identity_prompts": 25,
+                    "training_examples": len(identity_training_examples()),
+                    "unseen_identity_prompts": len(identity_holdout_examples()),
                     "capability_retention_prompts": 40,
                 },
                 success_notification=Notification(
