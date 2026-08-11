@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from ..system.files import atomic_write_json
+
 
 BASE_STEAK_PUBLIC_NAME = "Base Steak 2.0"
 BASE_STEAK_TEXT_SHA256 = (
@@ -35,6 +37,7 @@ VISION_RUNTIME_ID = "salty_vision_engine_steak20_b10333"
 VISION_STAGE_SCHEMA = "salty-steak-vision-runtime-v1"
 VISION_VALIDATOR_VERSION = "salty-vision-validator-v2"
 VISION_STAGE_MANIFEST = "vision-runtime.json"
+VISION_INTEGRITY_CACHE_SCHEMA = "salty-steak-vision-integrity-cache-v1"
 VISION_LICENSE_FILE = "THIRD_PARTY_LICENSE.txt"
 VISION_SMOKE_IMAGE_SHA256 = (
     "14a487697c059a674563f01808991bea7652c342936c0bc46967625195deee66"
@@ -254,6 +257,12 @@ class SaltyVisionBroker:
         self._stage_error: str | None = None
         self._verification_in_progress = False
         self._verification_lock = threading.Lock()
+        self._integrity_cache_hit = False
+        self.integrity_cache_path = (
+            self.temporary_root.parent / "salty-vision-integrity-cache-v1.json"
+        )
+        if self.require_staged_manifest:
+            self._restore_integrity_cache()
 
     def _adapter_manifest_records(self) -> list[dict[str, Any]]:
         return [
@@ -373,6 +382,132 @@ class SaltyVisionBroker:
             return None
         return manifest
 
+    @staticmethod
+    def _file_identity(path: Path, checksum: str) -> dict[str, Any]:
+        stat = path.stat()
+        return {
+            "path": str(path.resolve()),
+            "size_bytes": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+            "sha256": str(checksum).casefold(),
+        }
+
+    def _write_integrity_cache(self, manifest: Mapping[str, Any]) -> None:
+        artifacts = self._verified_artifact_paths()
+        expected_artifact_hashes = {
+            "text": self.text_model_sha256,
+            "projector": self.projector_sha256,
+            **{
+                f"adapter:{adapter['id']}": adapter["sha256"]
+                for adapter in self.text_adapters
+            },
+        }
+        atomic_write_json(
+            self.integrity_cache_path,
+            {
+                "schema": VISION_INTEGRITY_CACHE_SCHEMA,
+                "stage_manifest_sha256": _sha256_file(self.stage_manifest_path),
+                "text_model_sha256": self.text_model_sha256,
+                "projector_sha256": self.projector_sha256,
+                "text_adapters": self._adapter_manifest_records(),
+                "runtime_profile": manifest.get("runtime_profile"),
+                "artifacts": {
+                    label: self._file_identity(
+                        path, expected_artifact_hashes[label]
+                    )
+                    for label, path in artifacts.items()
+                },
+                "runtime_files": {
+                    name: self._file_identity(path, self._runtime_hashes[name])
+                    for name, path in self._runtime_file_paths().items()
+                },
+            },
+        )
+
+    @staticmethod
+    def _cached_file_matches(record: object, path: Path, checksum: str) -> bool:
+        if not isinstance(record, Mapping) or not path.is_file():
+            return False
+        stat = path.stat()
+        return bool(
+            str(record.get("path") or "").casefold()
+            == str(path.resolve()).casefold()
+            and int(record.get("size_bytes") or -1) == int(stat.st_size)
+            and int(record.get("mtime_ns") or -1) == int(stat.st_mtime_ns)
+            and str(record.get("sha256") or "").casefold()
+            == str(checksum).casefold()
+        )
+
+    def _restore_integrity_cache(self) -> bool:
+        self._integrity_cache_hit = False
+        if not self.integrity_cache_path.is_file():
+            return False
+        manifest = self._load_staged_manifest()
+        if manifest is None:
+            return False
+        try:
+            cached = json.loads(
+                self.integrity_cache_path.read_text(encoding="utf-8-sig")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(cached, Mapping) or any(
+            (
+                cached.get("schema") != VISION_INTEGRITY_CACHE_SCHEMA,
+                cached.get("stage_manifest_sha256")
+                != _sha256_file(self.stage_manifest_path),
+                cached.get("text_model_sha256") != self.text_model_sha256,
+                cached.get("projector_sha256") != self.projector_sha256,
+                cached.get("text_adapters") != self._adapter_manifest_records(),
+                cached.get("runtime_profile") != manifest.get("runtime_profile"),
+            )
+        ):
+            return False
+        cached_artifacts = cached.get("artifacts")
+        cached_runtime = cached.get("runtime_files")
+        if not isinstance(cached_artifacts, Mapping) or not isinstance(
+            cached_runtime, Mapping
+        ):
+            return False
+        expected_artifact_hashes = {
+            "text": self.text_model_sha256,
+            "projector": self.projector_sha256,
+            **{
+                f"adapter:{adapter['id']}": adapter["sha256"]
+                for adapter in self.text_adapters
+            },
+        }
+        artifacts = self._verified_artifact_paths()
+        if not all(
+            self._cached_file_matches(
+                cached_artifacts.get(label),
+                path,
+                expected_artifact_hashes[label],
+            )
+            for label, path in artifacts.items()
+        ):
+            return False
+        runtime_paths = self._runtime_file_paths()
+        required_runtime_hashes = {
+            name: VISION_RUNTIME_SHA256[name] for name in runtime_paths
+        }
+        if not all(
+            self._cached_file_matches(
+                cached_runtime.get(name), path, required_runtime_hashes[name]
+            )
+            for name, path in runtime_paths.items()
+        ):
+            return False
+        self._verified_model_stats = {
+            label: (path.stat().st_size, path.stat().st_mtime_ns)
+            for label, path in artifacts.items()
+        }
+        self._runtime_hashes = required_runtime_hashes
+        self._last_smoke = dict(manifest["deterministic_smoke"])
+        self._staged_manifest = manifest
+        self._integrity_cache_hit = True
+        return True
+
     def verify_staged_runtime(self) -> dict[str, Any]:
         """Verify the durable release-time gate without re-running the model."""
 
@@ -398,6 +533,8 @@ class SaltyVisionBroker:
                     else:
                         self._last_smoke = dict(manifest["deterministic_smoke"])
                         self._staged_manifest = manifest
+                        self._write_integrity_cache(manifest)
+                        self._integrity_cache_hit = False
             finally:
                 self._verification_in_progress = False
         return self.status()
@@ -433,6 +570,7 @@ class SaltyVisionBroker:
             "staged_manifest_required": self.require_staged_manifest,
             "staged_manifest_verified": staged_gate_passed,
             "verification_in_progress": self._verification_in_progress,
+            "integrity_cache_hit": self._integrity_cache_hit,
             "stage_error": self._stage_error,
             "missing_runtime_files": missing,
             "third_party_license_present": self.license_path.is_file(),

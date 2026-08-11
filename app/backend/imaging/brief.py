@@ -159,6 +159,30 @@ def extract_negatives(text: str) -> list[str]:
     return _unique(found)
 
 
+def _positive_request(text: str) -> str:
+    """Retain requested visual detail without feeding prohibitions positively."""
+
+    kept = [
+        _clean(part)
+        for part in re.split(r"[\n;â€¢]+|(?<=[.!?])\s+", str(text or ""))
+        if _clean(part) and NEGATION_LEAD.search(_clean(part)) is None
+    ]
+    return " ".join(kept)
+
+
+def _goal_from_request(text: str) -> str:
+    positive = _positive_request(text)
+    goal = subject_from_request(positive)
+    if re.fullmatch(
+        r"(?:what\s+(?:you|we)\s+(?:just\s+)?(?:described|said|wrote|imagined)|"
+        r"(?:it|that|this|those)|the\s+(?:above|previous|earlier)\s+.+)",
+        goal,
+        re.IGNORECASE,
+    ):
+        return ""
+    return goal
+
+
 @dataclass
 class RenderBrief:
     """A self-sufficient description of one image to produce.
@@ -370,7 +394,11 @@ def build_brief(
     brief = RenderBrief(
         subject=subject,
         image_type=image_type,
-        goal=_clean(payload.get("goal")),
+
+
+
+
+        goal=_clean(payload.get("goal")) or _goal_from_request(request)[:2_000],
         brand=_clean(payload.get("brand")),
         style=_clean(payload.get("style")),
         composition=_clean(payload.get("composition")),

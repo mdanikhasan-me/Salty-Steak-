@@ -46,12 +46,18 @@ from .filesystem import (
     snapshot_regular_file,
     windows_temp_roots,
 )
+from .discord_inspector import (
+    DISCORD_INVENTORY_CACHE_SCHEMA,
+    DiscordDesktopInspector,
+    DiscordInspectionCancelled,
+)
 from .capability_registry import (
     APPLICATION_LAUNCH_CAPABILITY,
     BROWSER_CAPABILITY,
     CAPABILITIES,
     CAPABILITY_DISPLAY_NAMES,
     CAPABILITY_FIELDS,
+    DISCORD_INSPECT_CAPABILITY,
     FILES_CAPABILITY,
     FILE_OPERATIONS,
     INPUT_CONTROL_CAPABILITY,
@@ -91,6 +97,61 @@ MAX_FILE_READ_CHARACTERS = 40_000
 
 MAX_FILE_MATCHES = 500
 
+
+
+
+MAX_UIA_OBSERVATION_NODES = 200
+MAX_DISCORD_INVENTORY_CACHE_BYTES = 8 * 1024 * 1024
+USER_ACTIVITY_RESUME_IDLE_SECONDS = 12.0
+USER_ACTIVITY_POLL_SECONDS = 0.25
+
+
+class _LastInputInfo(ctypes.Structure):
+    _fields_ = (("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD))
+
+
+def _windows_user_activity_snapshot() -> dict[str, Any] | None:
+    """Return a wrap-safe input sequence and current human-idle duration."""
+
+    if os.name != "nt":
+        return None
+    info = _LastInputInfo(cbSize=ctypes.sizeof(_LastInputInfo), dwTime=0)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.GetLastInputInfo.argtypes = [ctypes.POINTER(_LastInputInfo)]
+    user32.GetLastInputInfo.restype = wintypes.BOOL
+    kernel32.GetTickCount.argtypes = []
+    kernel32.GetTickCount.restype = wintypes.DWORD
+    if not user32.GetLastInputInfo(ctypes.byref(info)):
+        return None
+    current = int(kernel32.GetTickCount())
+    sequence = int(info.dwTime)
+    idle_milliseconds = (current - sequence) & 0xFFFFFFFF
+    return {
+        "sequence": sequence,
+        "idle_seconds": idle_milliseconds / 1000.0,
+    }
+
+
+def _flatten_uia_tree(value: Any) -> list[dict[str, Any]]:
+    flattened: list[dict[str, Any]] = []
+
+    def visit(node: Any, depth: int) -> None:
+        if len(flattened) >= MAX_UIA_OBSERVATION_NODES or not isinstance(node, Mapping):
+            return
+        item = {str(key): child for key, child in node.items() if key != "children"}
+        item["depth"] = depth
+        flattened.append(item)
+        children = node.get("children")
+        if isinstance(children, Sequence) and not isinstance(
+            children, (str, bytes, bytearray)
+        ):
+            for child in children:
+                visit(child, depth + 1)
+
+    visit(value, 0)
+    return flattened
+
 class AutomationBroker:
     """Persist explicit grants and execute only the two local capabilities."""
 
@@ -109,6 +170,9 @@ class AutomationBroker:
         temp_roots_provider: Callable[[], list[dict[str, Any]]] | None = None,
         uia_client: Any | None = None,
         browser_client: Any | None = None,
+        user_activity_probe: Callable[[], Mapping[str, Any] | None] | None = None,
+        user_activity_wait: Callable[[float], None] | None = None,
+        user_activity_resume_idle_seconds: float = USER_ACTIVITY_RESUME_IDLE_SECONDS,
     ) -> None:
         self.database = database
         self.project_root = Path(project_root).resolve(strict=True)
@@ -158,8 +222,28 @@ class AutomationBroker:
                 except BrowserError:
                     self._browser_client = None
         self._lock = threading.RLock()
+        self._invocation_progress = threading.local()
+        self._user_activity_probe = (
+            user_activity_probe or _windows_user_activity_snapshot
+        )
+        self._user_activity_wait = user_activity_wait or time.sleep
+        self._user_activity_resume_idle_seconds = float(
+            user_activity_resume_idle_seconds
+        )
+        if not 0.1 <= self._user_activity_resume_idle_seconds <= 300.0:
+            raise ValueError(
+                "User-activity idle threshold must be between 0.1 and 300 seconds"
+            )
+        self._agent_task_id: str | None = None
+        self._agent_task_input_sequence: int | None = None
+        self._agent_task_should_stop: Callable[[], bool] | None = None
         self._active: dict[str, tuple[str, subprocess.Popen[bytes] | None]] = {}
         self._revoked_invocations: set[str] = set()
+
+
+
+        self._discord_inventory_path = self.artifact_root / "discord-inventory.json"
+        self._discord_inventory_cache = self._load_discord_inventory_cache()
         self._closed = False
         self._ensure_default_grants()
 
@@ -179,6 +263,7 @@ class AutomationBroker:
             WINDOW_CONTROL_CAPABILITY: {"scope": "titled_top_level_windows"},
             UI_AUTOMATION_CAPABILITY: {"scope": "accessible_application_controls"},
             BROWSER_CAPABILITY: {"scope": "salty_owned_browser_session"},
+            DISCORD_INSPECT_CAPABILITY: {"scope": "signed_in_discord_read_navigation"},
         }
         with self.database.transaction() as connection:
             for capability in CAPABILITIES:
@@ -198,6 +283,204 @@ class AutomationBroker:
                     ),
                 )
 
+    def begin_agent_task(
+        self,
+        task_id: str,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> None:
+        """Start one transient service-capability session.
+
+        A complete Discord inventory is reusable across batches in one mission,
+        but not across a later mission where the account or joined-server set
+        may have changed. Element handles are never cached.
+        """
+
+        with self._lock:
+            self._agent_task_id = str(task_id)
+            self._agent_task_should_stop = should_stop
+            snapshot = self._read_user_activity()
+            self._agent_task_input_sequence = (
+                int(snapshot["sequence"]) if snapshot is not None else None
+            )
+            if self._discord_inventory_cache.get("complete"):
+                self._discord_inventory_cache["owner_task_id"] = str(task_id)
+                self._discord_inventory_cache["validated_for_task"] = False
+            else:
+                self._discord_inventory_cache = {
+                    "owner_task_id": str(task_id),
+                    "complete": False,
+                }
+
+    def end_agent_task(self, task_id: str) -> None:
+        """Release transient task ownership without touching durable evidence."""
+
+        with self._lock:
+            if self._agent_task_id != str(task_id):
+                return
+            self._agent_task_id = None
+            self._agent_task_input_sequence = None
+            self._agent_task_should_stop = None
+
+    def _read_user_activity(self) -> dict[str, Any] | None:
+        try:
+            value = self._user_activity_probe()
+        except BaseException:
+            return None
+        if not isinstance(value, Mapping):
+            return None
+        try:
+            sequence = int(value.get("sequence"))
+            idle_seconds = max(0.0, float(value.get("idle_seconds")))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return {"sequence": sequence, "idle_seconds": idle_seconds}
+
+    @staticmethod
+    def _may_take_foreground(
+        capability: str,
+        arguments: Mapping[str, Any],
+    ) -> bool:
+        if capability in {
+            INPUT_CONTROL_CAPABILITY,
+            APPLICATION_LAUNCH_CAPABILITY,
+            DISCORD_INSPECT_CAPABILITY,
+        }:
+            return True
+        if capability == WINDOW_CONTROL_CAPABILITY:
+            return str(arguments.get("action") or "list").casefold() in {
+                "focus",
+                "close",
+            }
+        if capability == UI_AUTOMATION_CAPABILITY:
+            return str(arguments.get("command") or "").casefold() in (
+                UIA_MUTATING_COMMANDS
+            )
+        if capability == BROWSER_CAPABILITY:
+            return str(arguments.get("command") or "").casefold() in (
+                BROWSER_MUTATING_COMMANDS
+            )
+        return False
+
+    def _publish_invocation_progress(self, value: Mapping[str, Any]) -> None:
+        callback = getattr(self._invocation_progress, "callback", None)
+        if callback is None:
+            return
+        try:
+            callback(dict(value))
+        except BaseException:
+            return
+
+    def _await_user_idle(
+        self,
+        audit_id: str,
+        capability: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Pause a foreground-affecting action after fresh human input."""
+
+        if not self._may_take_foreground(capability, arguments):
+            return {"state": "not_required", "waited_seconds": 0.0}
+        with self._lock:
+            task_id = self._agent_task_id
+            baseline = self._agent_task_input_sequence
+            should_stop = self._agent_task_should_stop
+        if task_id is None or baseline is None:
+            return {"state": "not_required", "waited_seconds": 0.0}
+        snapshot = self._read_user_activity()
+        if snapshot is None or int(snapshot["sequence"]) == baseline:
+            return {"state": "clear", "waited_seconds": 0.0}
+
+        started = time.monotonic()
+        self._publish_invocation_progress(
+            {
+                "state": "waiting_for_user_idle",
+                "waiting_for": "user_idle",
+                "summary": "Paused while you use the computer.",
+                "idle_seconds": snapshot["idle_seconds"],
+                "resume_after_idle_seconds": self._user_activity_resume_idle_seconds,
+            }
+        )
+        while snapshot["idle_seconds"] < self._user_activity_resume_idle_seconds:
+            with self._lock:
+                revoked = audit_id in self._revoked_invocations
+            if revoked or (should_stop is not None and should_stop()):
+                return {
+                    "state": "cancelled_while_waiting",
+                    "waited_seconds": round(time.monotonic() - started, 3),
+                }
+            self._user_activity_wait(USER_ACTIVITY_POLL_SECONDS)
+            snapshot = self._read_user_activity()
+            if snapshot is None:
+                return {
+                    "state": "activity_probe_unavailable",
+                    "waited_seconds": round(time.monotonic() - started, 3),
+                }
+
+        with self._lock:
+            self._agent_task_input_sequence = int(snapshot["sequence"])
+        waited = round(time.monotonic() - started, 3)
+        self._publish_invocation_progress(
+            {
+                "state": "resumed_after_user_idle",
+                "summary": "Resuming after you stopped using the computer.",
+                "waited_seconds": waited,
+                "idle_seconds": snapshot["idle_seconds"],
+            }
+        )
+        return {"state": "resumed_after_user_idle", "waited_seconds": waited}
+
+    def _refresh_agent_input_sequence(self) -> None:
+        snapshot = self._read_user_activity()
+        if snapshot is None:
+            return
+        with self._lock:
+            if self._agent_task_id is not None:
+                self._agent_task_input_sequence = int(snapshot["sequence"])
+
+    def set_invocation_progress_callback(
+        self, callback: Callable[[Mapping[str, Any]], None] | None
+    ) -> None:
+        self._invocation_progress.callback = callback
+
+    def _invocation_was_revoked(self, audit_id: str) -> bool:
+        with self._lock:
+            return audit_id in self._revoked_invocations
+
+    def _load_discord_inventory_cache(self) -> dict[str, Any]:
+        path = self._discord_inventory_path
+        try:
+            if not path.is_file() or path.stat().st_size > MAX_DISCORD_INVENTORY_CACHE_BYTES:
+                return {}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return {}
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") != DISCORD_INVENTORY_CACHE_SCHEMA
+            or payload.get("complete") is not True
+            or not isinstance(payload.get("account"), dict)
+            or not isinstance(payload.get("servers"), list)
+            or not isinstance(payload.get("channels"), list)
+            or len(payload["servers"]) > 1_000
+            or len(payload["channels"]) > 5_000
+        ):
+            return {}
+        return payload
+
+    def _persist_discord_inventory_cache(self) -> None:
+        with self._lock:
+            payload = dict(self._discord_inventory_cache)
+        payload.pop("owner_task_id", None)
+        payload.pop("validated_for_task", None)
+        encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
+        if len(encoded) > MAX_DISCORD_INVENTORY_CACHE_BYTES:
+            raise ValueError("Discord inventory cache exceeded its bounded size")
+        self._discord_inventory_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(self._discord_inventory_path, encoded)
+
     def status(self) -> dict[str, Any]:
         rows = {
             str(row["capability"]): self._public_grant(row)
@@ -210,6 +493,7 @@ class AutomationBroker:
                 {"audit_record_id": identifier, "capability": capability}
                 for identifier, (capability, _process) in sorted(self._active.items())
             ]
+            active_task_id = self._agent_task_id
         audit_count = self.database.fetch_one(
             "SELECT COUNT(*) AS count FROM automation_audit_records"
         )
@@ -226,6 +510,8 @@ class AutomationBroker:
 
             helper_missing = (
                 capability == UI_AUTOMATION_CAPABILITY and self._uia_client is None
+            ) or (
+                capability == DISCORD_INSPECT_CAPABILITY and self._uia_client is None
             ) or (capability == BROWSER_CAPABILITY and self._browser_client is None)
             capabilities.append(
                 {
@@ -243,7 +529,10 @@ class AutomationBroker:
                     "constraint_valid": constraint_valid,
                     "constraint_error": constraint_error,
                     "effective_enabled": bool(
-                        supported and grant["granted"] and constraint_valid
+                        supported
+                        and not helper_missing
+                        and grant["granted"]
+                        and constraint_valid
                     ),
                 }
             )
@@ -257,6 +546,14 @@ class AutomationBroker:
             "explicit_persisted_user_grant_required": True,
             "capabilities": capabilities,
             "active_invocations": active,
+            "human_activity_guard": {
+                "enabled": supported,
+                "task_active": active_task_id is not None,
+                "active_task_id": active_task_id,
+                "resume_after_idle_seconds": self._user_activity_resume_idle_seconds,
+                "behavior": "pause_foreground_actions_after_fresh_human_input",
+                "read_only_observations_continue": True,
+            },
             "audit_record_count": int(audit_count["count"] if audit_count else 0),
             "limits": {
                 "max_timeout_seconds": self.max_timeout_seconds,
@@ -325,6 +622,7 @@ class AutomationBroker:
             WINDOW_CONTROL_CAPABILITY: {"scope": "titled_top_level_windows"},
             UI_AUTOMATION_CAPABILITY: {"scope": "accessible_application_controls"},
             BROWSER_CAPABILITY: {"scope": "salty_owned_browser_session"},
+            DISCORD_INSPECT_CAPABILITY: {"scope": "signed_in_discord_read_navigation"},
         }
         now = utc_now()
         request_record = {
@@ -454,6 +752,27 @@ class AutomationBroker:
                     )
                 self._active[audit_id] = (capability, None)
 
+            activity_guard = self._await_user_idle(
+                audit_id,
+                capability,
+                arguments,
+            )
+            if activity_guard["state"] == "cancelled_while_waiting":
+                result = {
+                    "schema": AUTOMATION_SCHEMA,
+                    "audit_record_id": audit_id,
+                    "capability": capability,
+                    "status": "revoked",
+                    "human_activity_guard": activity_guard,
+                }
+                self._finish_audit(audit_id, outcome="revoked", result=result)
+                return result
+            if activity_guard["state"] == "activity_probe_unavailable":
+                raise RuntimeError(
+                    "Foreground automation paused because current user activity "
+                    "could not be measured safely"
+                )
+
             if capability == TERMINAL_CAPABILITY:
                 result = self._invoke_terminal(
                     audit_id, arguments, constraints, authority_mode
@@ -468,12 +787,18 @@ class AutomationBroker:
                 result = self._invoke_ui_automation(audit_id, arguments)
             elif capability == BROWSER_CAPABILITY:
                 result = self._invoke_browser(audit_id, arguments)
+            elif capability == DISCORD_INSPECT_CAPABILITY:
+                result = self._invoke_discord_inspect(audit_id, arguments)
             elif capability == FILES_CAPABILITY:
                 result = self._invoke_files(audit_id, arguments, authority_mode)
             else:
                 result = self._invoke_application_launch(
                     audit_id, arguments, authority_mode
                 )
+            result = {
+                **dict(result),
+                "human_activity_guard": activity_guard,
+            }
             outcome = str(result["status"])
             self._finish_audit(audit_id, outcome=outcome, result=result)
             return result
@@ -492,6 +817,8 @@ class AutomationBroker:
             )
             raise
         finally:
+            if self._may_take_foreground(capability, arguments):
+                self._refresh_agent_input_sequence()
             with self._lock:
                 self._active.pop(audit_id, None)
                 self._revoked_invocations.discard(audit_id)
@@ -1263,6 +1590,7 @@ class AutomationBroker:
         action = str(arguments.get("action") or "").strip().casefold()
         delay_ms = self._input_delay(arguments.get("post_action_delay_ms"))
         started = time.monotonic()
+        foreground_window = _require_expected_foreground(arguments)
         with self._lock:
             if audit_id in self._revoked_invocations:
                 return {
@@ -1398,6 +1726,7 @@ class AutomationBroker:
             "status": "revoked" if revoked else "succeeded",
             "post_action_delay_ms": delay_ms,
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
+            "foreground_window": foreground_window,
             **detail,
         }
 
@@ -1496,8 +1825,16 @@ class AutomationBroker:
         payload = {
             key: value
             for key, value in arguments.items()
-            if key != "command" and value is not None
+            if key not in {"command", "post_action_delay_ms"} and value is not None
         }
+        delay_value = arguments.get("post_action_delay_ms", DEFAULT_INPUT_DELAY_MS)
+        if isinstance(delay_value, bool) or not isinstance(delay_value, int):
+            raise ValueError("UI Automation post_action_delay_ms must be a whole number")
+        if not 0 <= delay_value <= MAX_INPUT_DELAY_MS:
+            raise ValueError(
+                "UI Automation post_action_delay_ms must be between 0 and "
+                f"{MAX_INPUT_DELAY_MS}"
+            )
 
         started = time.monotonic()
         with self._lock:
@@ -1527,6 +1864,15 @@ class AutomationBroker:
                 "duration_ms": round((time.monotonic() - started) * 1000, 3),
             }
 
+        if command == "get_tree" and isinstance(result.get("tree"), Mapping):
+
+
+
+
+            result["nodes"] = _flatten_uia_tree(result["tree"])
+        if command in UIA_MUTATING_COMMANDS and delay_value:
+            time.sleep(delay_value / 1000)
+
         with self._lock:
             revoked = audit_id in self._revoked_invocations
         return {
@@ -1536,6 +1882,9 @@ class AutomationBroker:
             "status": "revoked" if revoked else "succeeded",
             "command": command,
             "mutating": command in UIA_MUTATING_COMMANDS,
+            "post_action_delay_ms": (
+                delay_value if command in UIA_MUTATING_COMMANDS else 0
+            ),
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
             **result,
         }
@@ -1623,6 +1972,59 @@ class AutomationBroker:
             "action": action,
             "window": target,
             **({"focus_evidence": focus_evidence} if focus_evidence else {}),
+            "duration_ms": round((time.monotonic() - started) * 1000, 3),
+        }
+
+    def _invoke_discord_inspect(
+        self,
+        audit_id: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Run one bounded Discord read/navigation macro through this broker."""
+
+        self._only_fields(arguments, CAPABILITY_FIELDS[DISCORD_INSPECT_CAPABILITY])
+        started = time.monotonic()
+        with self._lock:
+            if audit_id in self._revoked_invocations:
+                return {
+                    "schema": AUTOMATION_SCHEMA,
+                    "audit_record_id": audit_id,
+                    "capability": DISCORD_INSPECT_CAPABILITY,
+                    "status": "revoked",
+                }
+        with self._lock:
+            inventory_cache = dict(self._discord_inventory_cache)
+        inspector = DiscordDesktopInspector(
+            launch=lambda value: self._invoke_application_launch(
+                audit_id, value, "ask_every_time"
+            ),
+            window=lambda value: self._invoke_window_control(audit_id, value),
+            input_control=lambda value: self._invoke_input_control(audit_id, value),
+            uia=lambda value: self._invoke_ui_automation(audit_id, value),
+            inventory_cache=inventory_cache,
+            on_progress=getattr(self._invocation_progress, "callback", None),
+            should_stop=lambda: self._invocation_was_revoked(audit_id),
+        )
+        try:
+            result = inspector.run(arguments)
+        except DiscordInspectionCancelled:
+            result = {
+                "status": "revoked",
+                "operation": str(arguments.get("operation") or ""),
+                "coverage": dict(inspector.coverage),
+                "substeps": list(inspector.substeps),
+            }
+        with self._lock:
+            self._discord_inventory_cache = dict(inventory_cache)
+            revoked = audit_id in self._revoked_invocations
+        if inventory_cache.get("complete"):
+            self._persist_discord_inventory_cache()
+        return {
+            "schema": AUTOMATION_SCHEMA,
+            "audit_record_id": audit_id,
+            "capability": DISCORD_INSPECT_CAPABILITY,
+            **dict(result),
+            "status": "revoked" if revoked else str(result.get("status") or "succeeded"),
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
         }
 
@@ -2679,6 +3081,67 @@ def _match_windows(windows: Sequence[Mapping[str, Any]], title: str) -> list[dic
         for item in windows
         if needle and needle in str(item["title"]).casefold()
     ]
+
+
+def _require_expected_foreground(arguments: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Bind raw input to the exact window the agent most recently observed."""
+
+    expected_handle = arguments.get("expected_window_handle")
+    expected_process = arguments.get("expected_process_id")
+    for label, value in (
+        ("expected_window_handle", expected_handle),
+        ("expected_process_id", expected_process),
+    ):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError(f"{label} must be a whole number")
+        if isinstance(value, int) and value <= 0:
+            raise ValueError(f"{label} must be positive")
+    if os.name != "nt":
+        if expected_handle is not None or expected_process is not None:
+            raise RuntimeError("Foreground-window binding is available only on Windows")
+        return None
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    handle = int(user32.GetForegroundWindow() or 0)
+    process_id = wintypes.DWORD(0)
+    if handle:
+        user32.GetWindowThreadProcessId(handle, ctypes.byref(process_id))
+    current_process = int(process_id.value)
+    identity: dict[str, Any] = {
+        "window_handle": handle or None,
+        "process_id": current_process or None,
+        "title": None,
+    }
+    try:
+        match = next(
+            (
+                item
+                for item in _enumerate_windows(include_hidden=True)
+                if int(item.get("handle") or 0) == handle
+            ),
+            None,
+        )
+    except Exception:
+        match = None
+    if match:
+        identity["title"] = str(match.get("title") or "")
+    if expected_handle is not None and handle != int(expected_handle):
+        raise RuntimeError(
+            "Input was refused because focus moved to another window "
+            f"(expected handle {expected_handle}, observed {handle or 'none'})."
+        )
+    if expected_process is not None and current_process != int(expected_process):
+        raise RuntimeError(
+            "Input was refused because focus moved to another process "
+            f"(expected {expected_process}, observed {current_process or 'none'})."
+        )
+    return identity
 
 
 def _focus_window(handle: int) -> dict[str, Any]:

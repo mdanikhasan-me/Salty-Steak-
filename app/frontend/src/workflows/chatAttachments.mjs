@@ -1,22 +1,15 @@
-const MAX_ATTACHMENT_BYTES = 256 * 1024;
-const MAX_MESSAGE_ATTACHMENT_BYTES = 512 * 1024;
-
-const TEXT_EXTENSIONS = new Set([
-  ".csv", ".js", ".json", ".jsonl", ".jsx", ".md", ".py", ".toml",
-  ".ts", ".tsv", ".tsx", ".txt", ".xml", ".yaml", ".yml",
-]);
+export const MAX_ATTACHMENT_BYTES = 512 * 1024 * 1024;
+export const MAX_MESSAGE_ATTACHMENT_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAX_MESSAGE_ATTACHMENTS = 32;
+export const MAX_VISION_ATTACHMENTS = 12;
 
 export function attachmentKind(file) {
   const type = String(file?.type || "").trim().toLowerCase();
-  const name = String(file?.name || "").trim().toLowerCase();
   if (type.startsWith("image/")) return "image";
-  if (type.startsWith("text/")) return "text";
-  const extensionIndex = name.lastIndexOf(".");
-  const extension = extensionIndex >= 0 ? name.slice(extensionIndex) : "";
-  return TEXT_EXTENSIONS.has(extension) ? "text" : "unsupported";
+  return "file";
 }
 
-export function validateAttachment(file, currentTotalBytes = 0) {
+export function validateAttachment(file, currentTotalBytes = 0, currentCount = 0) {
   const name = safeAttachmentName(file?.name);
   const size = Number(file?.size || 0);
   const kind = attachmentKind(file);
@@ -27,25 +20,25 @@ export function validateAttachment(file, currentTotalBytes = 0) {
       message: `${name} needs a vision-capable model. The current text model cannot analyze pictures.`,
     };
   }
-  if (kind !== "text") {
+  if (Number(currentCount) >= MAX_MESSAGE_ATTACHMENTS) {
     return {
       accepted: false,
-      code: "unsupported_type",
-      message: `${name} is not a supported text or code file.`,
+      code: "too_many_files",
+      message: `A message can contain up to ${MAX_MESSAGE_ATTACHMENTS} files.`,
     };
   }
-  if (!Number.isFinite(size) || size < 0 || size > MAX_ATTACHMENT_BYTES) {
+  if (!Number.isFinite(size) || size < 1 || size > MAX_ATTACHMENT_BYTES) {
     return {
       accepted: false,
       code: "file_too_large",
-      message: `${name} is larger than the 256 KB per-file limit.`,
+      message: `${name} must contain 1 byte to 512 MiB.`,
     };
   }
   if (Number(currentTotalBytes) + size > MAX_MESSAGE_ATTACHMENT_BYTES) {
     return {
       accepted: false,
       code: "message_too_large",
-      message: "Attached text is limited to 512 KB per message.",
+      message: "Attached files are limited to 2 GiB per message.",
     };
   }
   return { accepted: true, kind, name, size };
@@ -62,7 +55,7 @@ export function validateVisionAttachment(
   file,
   visionStatus,
   currentImageCount = 0,
-  currentTextCount = 0,
+  _currentFileCount = 0,
 ) {
   const name = safeAttachmentName(file?.name);
   const type = String(file?.type || "").trim().toLowerCase();
@@ -74,18 +67,11 @@ export function validateVisionAttachment(
       message: String(visionStatus?.reason || "Image analysis is unavailable."),
     };
   }
-  if (currentImageCount > 0) {
+  if (currentImageCount >= MAX_VISION_ATTACHMENTS) {
     return {
       accepted: false,
-      code: "one_image_only",
-      message: "Analyze one image at a time.",
-    };
-  }
-  if (currentTextCount > 0) {
-    return {
-      accepted: false,
-      code: "mixed_attachment_types",
-      message: "Image analysis cannot be mixed with text-file attachments in one request.",
+      code: "too_many_images",
+      message: `Analyze up to ${MAX_VISION_ATTACHMENTS} images in one message.`,
     };
   }
   if (!VISION_MEDIA_TYPES.has(type)) {
@@ -106,11 +92,11 @@ export function validateVisionAttachment(
 }
 
 export function attachmentPromptSuffix(attachments) {
-  return (attachments || []).map((file) => {
-    const name = safeAttachmentName(file?.name);
-    const content = String(file?.content || "");
-    return `\n\n--- BEGIN LOCAL FILE: ${name} ---\n${content}\n--- END LOCAL FILE: ${name} ---`;
-  }).join("");
+  return (attachments || [])
+    .map((file) => String(file?.inspection?.prompt_text || file?.prompt_text || ""))
+    .filter(Boolean)
+    .map((content) => `\n\n${content}`)
+    .join("");
 }
 
 export function safeAttachmentName(value) {

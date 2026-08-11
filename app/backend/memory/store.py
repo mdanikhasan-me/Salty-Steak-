@@ -49,10 +49,13 @@ MEMORY_KINDS = (
     "entity",
 
     "outcome",
+
+    "context",
 )
 
 MAX_SUBJECT_CHARACTERS = 200
 MAX_BODY_CHARACTERS = 2_000
+MAX_CONTEXT_BODY_CHARACTERS = 12_000
 
 
 
@@ -246,10 +249,16 @@ class SemanticMemory:
         body = str(body).strip()
         if not subject or not body:
             raise MemoryRefused("A memory needs both a subject and a body.")
-        if len(subject) > MAX_SUBJECT_CHARACTERS or len(body) > MAX_BODY_CHARACTERS:
-            raise MemoryRefused(
-                "A memory must be a short durable fact, not a transcript."
-            )
+        body_limit = (
+            MAX_CONTEXT_BODY_CHARACTERS if kind == "context" else MAX_BODY_CHARACTERS
+        )
+        if len(subject) > MAX_SUBJECT_CHARACTERS or len(body) > body_limit:
+            if kind == "context":
+                raise MemoryRefused(
+                    "The explicitly saved conversation context is larger than the "
+                    "12,000-character memory limit."
+                )
+            raise MemoryRefused("A memory must be a short durable fact, not a transcript.")
         tags = tuple(str(tag).strip().casefold() for tag in tags if str(tag).strip())
         _reject_secrets(subject, body, tags)
 
@@ -341,6 +350,7 @@ class SemanticMemory:
         *,
         limit: int = 5,
         kinds: Iterable[str] | None = None,
+        sources: Iterable[str] | None = None,
         include_superseded: bool = False,
     ) -> list[MemoryRecord]:
         """Find what is worth putting in front of the model for this task."""
@@ -349,6 +359,7 @@ class SemanticMemory:
         if not terms:
             return []
         wanted = tuple(kinds) if kinds else ()
+        wanted_sources = tuple(str(source) for source in sources) if sources else ()
 
         sql = """
             SELECT m.*, bm25(memories_fts) AS relevance
@@ -363,6 +374,9 @@ class SemanticMemory:
         if wanted:
             sql += f" AND m.kind IN ({','.join('?' * len(wanted))})"
             parameters.extend(wanted)
+        if wanted_sources:
+            sql += f" AND m.source IN ({','.join('?' * len(wanted_sources))})"
+            parameters.extend(wanted_sources)
 
 
 
@@ -379,12 +393,22 @@ class SemanticMemory:
         self._note_use(found)
         return found
 
-    def recent(self, *, limit: int = 20, kind: str | None = None) -> list[MemoryRecord]:
+    def recent(
+        self,
+        *,
+        limit: int = 20,
+        kind: str | None = None,
+        sources: Iterable[str] | None = None,
+    ) -> list[MemoryRecord]:
         sql = "SELECT * FROM memories WHERE superseded_by IS NULL"
         parameters: list[Any] = []
         if kind:
             sql += " AND kind = ?"
             parameters.append(kind)
+        wanted_sources = tuple(str(source) for source in sources) if sources else ()
+        if wanted_sources:
+            sql += f" AND source IN ({','.join('?' * len(wanted_sources))})"
+            parameters.extend(wanted_sources)
         sql += " ORDER BY created_at DESC LIMIT ?"
         parameters.append(max(1, int(limit)))
         with self._lock:
@@ -414,14 +438,25 @@ class SemanticMemory:
             f"work:\n{lines}"
         )
 
-    def statistics(self) -> dict[str, Any]:
+    def statistics(self, *, sources: Iterable[str] | None = None) -> dict[str, Any]:
+        wanted_sources = tuple(str(source) for source in sources) if sources else ()
+        active_where = "WHERE superseded_by IS NULL"
+        superseded_where = "WHERE superseded_by IS NOT NULL"
+        parameters: list[Any] = []
+        if wanted_sources:
+            placeholders = ",".join("?" * len(wanted_sources))
+            active_where += f" AND source IN ({placeholders})"
+            superseded_where += f" AND source IN ({placeholders})"
+            parameters.extend(wanted_sources)
         with self._lock:
             rows = self._connection.execute(
-                """SELECT kind, COUNT(*) AS n FROM memories
-                   WHERE superseded_by IS NULL GROUP BY kind"""
+                f"""SELECT kind, COUNT(*) AS n FROM memories
+                   {active_where} GROUP BY kind""",
+                parameters,
             ).fetchall()
             superseded = self._connection.execute(
-                "SELECT COUNT(*) AS n FROM memories WHERE superseded_by IS NOT NULL"
+                f"SELECT COUNT(*) AS n FROM memories {superseded_where}",
+                parameters,
             ).fetchone()["n"]
         return {
             "schema": MEMORY_SCHEMA,

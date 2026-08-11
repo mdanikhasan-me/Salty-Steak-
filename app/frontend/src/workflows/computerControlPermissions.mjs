@@ -9,6 +9,13 @@ export const COMPUTER_CONTROL_CAPABILITIES = Object.freeze([
     invokeLabel: "Run command",
   }),
   Object.freeze({
+    id: "files.manage",
+    uiId: "files",
+    name: "Files and folders",
+    description: "Inspect and manage files under paths you explicitly authorize.",
+    invokeLabel: "Inspect files",
+  }),
+  Object.freeze({
     id: "screen.capture",
     uiId: "screen_capture",
     name: "Screen capture",
@@ -49,6 +56,13 @@ export const COMPUTER_CONTROL_CAPABILITIES = Object.freeze([
     name: "Windows and focus",
     description: "List open windows and bring one to the front or close it by its title.",
     invokeLabel: "List windows",
+  }),
+  Object.freeze({
+    id: "discord.inspect",
+    uiId: "discord_inspect",
+    name: "Discord inspection",
+    description: "Inventory and read the currently signed-in Discord desktop session through bounded native controls.",
+    invokeLabel: "Inspect Discord",
   }),
 ]);
 
@@ -436,7 +450,11 @@ function scopeSummary(capability, constraints) {
   if (capability === "terminal.execute") {
     return `Working-directory root: ${String(constraints?.working_directory_root || "not reported")}. This is not a filesystem or network sandbox.`;
   }
-  return `Primary screen only. Artifacts: ${String(constraints?.output_root || "not reported")}. No visible capture indicator is provided.`;
+  if (capability === "screen.capture") {
+    return `Primary screen only. Artifacts: ${String(constraints?.output_root || "not reported")}. No visible capture indicator is provided.`;
+  }
+  const scope = String(constraints?.scope || "not reported").replaceAll("_", " ");
+  return `Persisted scope: ${scope}.`;
 }
 
 function normaliseLimits(value) {

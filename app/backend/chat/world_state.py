@@ -193,10 +193,23 @@ class WorldState:
 
         elif capability == "ui.automation":
             window = observation.get("window")
+            if not isinstance(window, Mapping) and observation.get("command") == "focus":
+                window = observation.get("element")
+            if not isinstance(window, Mapping):
+                windows = observation.get("windows")
+                if isinstance(windows, list):
+                    window = next(
+                        (
+                            item
+                            for item in windows
+                            if isinstance(item, Mapping) and item.get("focused")
+                        ),
+                        None,
+                    )
             if isinstance(window, Mapping):
                 self.record("active_window", dict(window), source=capability)
                 learned.append("active_window")
-            matches = observation.get("matches")
+            matches = observation.get("matches") or observation.get("nodes")
             if isinstance(matches, list) and matches:
                 self.record(
                     "ui_elements",

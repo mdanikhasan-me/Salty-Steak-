@@ -14,6 +14,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows.Automation;
@@ -24,10 +25,45 @@ internal static class Program
 {
     private const int DefaultTimeoutMilliseconds = 10_000;
     private const int MaxTreeNodes = 400;
-    private const int MaxTreeDepth = 12;
+
+
+
+
+
+    private const int MaxTreeDepth = 20;
     private const int MaxTextLength = 20_000;
+    private const int MaxCollectedItems = 5_000;
+    private const int SwShow = 5;
+    private const int SwRestore = 9;
 
     private static readonly ElementRegistry Registry = new();
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr window, int command);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr processId);
+
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint attach, uint attachTo, bool value);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 
 
 
@@ -163,6 +199,7 @@ internal static class Program
         "get_active_window" => GetActiveWindow(),
         "get_tree" => GetTree(payload),
         "find_control" => FindControl(payload),
+        "collect_list" => CollectList(payload),
         "get_properties" => GetProperties(payload),
         "get_text" => GetText(payload),
         "focus" => Act(payload, "focus"),
@@ -453,8 +490,16 @@ internal static class Program
         }
 
         var matches = new List<AutomationElement>();
+        var nativeCondition = NativeSearchCondition(
+            name,
+            exact,
+            automationId,
+            controlType,
+            className,
+            enabledOnly,
+            visibleOnly);
         foreach (AutomationElement candidate in scope.FindAll(
-            TreeScope.Descendants, Condition.TrueCondition))
+            TreeScope.Descendants, nativeCondition))
         {
             try
             {
@@ -541,6 +586,319 @@ internal static class Program
         };
     }
 
+    private static JsonObject CollectList(JsonObject payload)
+    {
+        var scopeName = payload["scope_name"]?.GetValue<string>()
+            ?? throw new InvalidOperationException("collect_list needs scope_name.");
+        var scopeControlType = payload["scope_control_type"]?.GetValue<string>()
+            ?? "Window";
+        var scopeExact = payload["scope_exact"]?.GetValue<bool>() ?? true;
+        var itemControlType = payload["item_control_type"]?.GetValue<string>()
+            ?? "ListItem";
+        var scrollerName = payload["scroller_name"]?.GetValue<string>() ?? string.Empty;
+        var limit = Clamp(payload["limit"], 500, 1, MaxCollectedItems);
+        var maxScrolls = Clamp(payload["max_scrolls"], 30, 0, 100);
+        var delay = Clamp(payload["post_scroll_delay_ms"], 60, 0, 500);
+        var reverse = payload["reverse"]?.GetValue<bool>() ?? false;
+        var found = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
+        var orderedKeys = new List<string>();
+        var boundaryReached = false;
+        string? boundaryBasis = null;
+        double? lastPercent = null;
+        var pagesRead = 0;
+
+        for (var scrollIndex = 0; scrollIndex <= maxScrolls; scrollIndex++)
+        {
+            pagesRead++;
+            var scope = FindNamedDescendant(
+                ResolveScope(payload), scopeName, scopeControlType, scopeExact);
+            var pageKeys = new List<string>();
+            foreach (AutomationElement item in scope.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem)))
+            {
+                try
+                {
+                    var info = item.Current;
+                    var typeName = info.ControlType.ProgrammaticName
+                        .Replace("ControlType.", string.Empty);
+                    if (!string.Equals(typeName, itemControlType, StringComparison.OrdinalIgnoreCase)
+                        || string.IsNullOrWhiteSpace(info.Name))
+                    {
+                        continue;
+                    }
+
+
+
+                    if (found.TryAdd(info.Name, Describe(item, includeHandle: true)))
+                    {
+                        pageKeys.Add(info.Name);
+                    }
+                    if (found.Count >= limit)
+                    {
+                        break;
+                    }
+                }
+                catch (ElementNotAvailableException)
+                {
+                }
+            }
+
+
+
+
+
+
+
+            if (reverse)
+            {
+                orderedKeys.InsertRange(0, pageKeys);
+            }
+            else
+            {
+                orderedKeys.AddRange(pageKeys);
+            }
+
+            if (found.Count >= limit || scrollIndex >= maxScrolls)
+            {
+                break;
+            }
+
+            var scroller = FindScroller(scope, scrollerName);
+            if (scroller is null
+                || !scroller.TryGetCurrentPattern(ScrollPattern.Pattern, out var rawScroll))
+            {
+                boundaryBasis = "scroll_pattern_unavailable";
+                break;
+            }
+            var scroll = (ScrollPattern)rawScroll;
+            var current = scroll.Current;
+            if (!current.VerticallyScrollable)
+            {
+                boundaryReached = true;
+                boundaryBasis = "scroll_pattern_not_scrollable";
+                break;
+            }
+            lastPercent = current.VerticalScrollPercent;
+            if ((!reverse && lastPercent >= 99.999) || (reverse && lastPercent <= 0.001))
+            {
+                boundaryReached = true;
+                boundaryBasis = reverse ? "vertical_percent_0" : "vertical_percent_100";
+                break;
+            }
+            var increment = Math.Max(5.0, current.VerticalViewSize * 0.9);
+            var nextPercent = reverse
+                ? Math.Max(0.0, lastPercent.Value - increment)
+                : Math.Min(100.0, lastPercent.Value + increment);
+            scroll.SetScrollPercent(ScrollPattern.NoScroll, nextPercent);
+            lastPercent = nextPercent;
+            if (delay > 0)
+            {
+                Thread.Sleep(delay);
+            }
+        }
+
+        var items = new JsonArray();
+        foreach (var key in orderedKeys)
+        {
+            items.Add(found[key]);
+        }
+        return new JsonObject
+        {
+            ["items"] = items,
+            ["count"] = items.Count,
+            ["pages_read"] = pagesRead,
+            ["scroll_boundary_reached"] = boundaryReached,
+            ["boundary_basis"] = boundaryBasis,
+            ["last_vertical_percent"] = lastPercent,
+            ["truncated_by_limit"] = found.Count >= limit,
+        };
+    }
+
+    private static AutomationElement FindNamedDescendant(
+        AutomationElement root,
+        string name,
+        string controlType,
+        bool exact)
+    {
+        var matches = new List<AutomationElement>();
+        var nativeCondition = NativeSearchCondition(
+            name,
+            exact,
+            automationId: null,
+            controlType,
+            className: null,
+            enabledOnly: false,
+            visibleOnly: false);
+        foreach (AutomationElement candidate in root.FindAll(
+            TreeScope.Descendants, nativeCondition))
+        {
+            try
+            {
+                var info = candidate.Current;
+                var typeName = info.ControlType.ProgrammaticName
+                    .Replace("ControlType.", string.Empty);
+                if ((exact
+                        ? string.Equals(info.Name, name, StringComparison.OrdinalIgnoreCase)
+                        : info.Name.Contains(name, StringComparison.OrdinalIgnoreCase))
+                    && string.Equals(typeName, controlType, StringComparison.OrdinalIgnoreCase))
+                {
+                    matches.Add(candidate);
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+        }
+        return matches.Count switch
+        {
+            1 => matches[0],
+            0 => throw new InvalidOperationException(
+                $"No {controlType} is named '{name}'."),
+            _ => throw new AmbiguousMatchException(
+                $"{matches.Count} {controlType} controls are named '{name}'."),
+        };
+    }
+
+
+
+
+
+
+
+
+
+    private static Condition NativeSearchCondition(
+        string? name,
+        bool exact,
+        string? automationId,
+        string? controlType,
+        string? className,
+        bool enabledOnly,
+        bool visibleOnly)
+    {
+        var conditions = new List<Condition>();
+        if (name is not null && exact)
+        {
+            conditions.Add(new PropertyCondition(
+                AutomationElement.NameProperty,
+                name,
+                PropertyConditionFlags.IgnoreCase));
+        }
+        if (automationId is not null)
+        {
+            conditions.Add(new PropertyCondition(
+                AutomationElement.AutomationIdProperty,
+                automationId));
+        }
+        if (className is not null)
+        {
+            conditions.Add(new PropertyCondition(
+                AutomationElement.ClassNameProperty,
+                className,
+                PropertyConditionFlags.IgnoreCase));
+        }
+        var nativeControlType = ResolveControlType(controlType);
+        if (nativeControlType is not null)
+        {
+            conditions.Add(new PropertyCondition(
+                AutomationElement.ControlTypeProperty,
+                nativeControlType));
+        }
+        if (enabledOnly)
+        {
+            conditions.Add(new PropertyCondition(
+                AutomationElement.IsEnabledProperty,
+                true));
+        }
+        if (visibleOnly)
+        {
+            conditions.Add(new PropertyCondition(
+                AutomationElement.IsOffscreenProperty,
+                false));
+        }
+        return conditions.Count switch
+        {
+            0 => Condition.TrueCondition,
+            1 => conditions[0],
+            _ => new AndCondition(conditions.ToArray()),
+        };
+    }
+
+    private static ControlType? ResolveControlType(string? value)
+    {
+        return value?.Trim().ToLowerInvariant() switch
+        {
+            "button" => ControlType.Button,
+            "checkbox" => ControlType.CheckBox,
+            "combobox" => ControlType.ComboBox,
+            "custom" => ControlType.Custom,
+            "dataitem" => ControlType.DataItem,
+            "document" => ControlType.Document,
+            "edit" => ControlType.Edit,
+            "group" => ControlType.Group,
+            "header" => ControlType.Header,
+            "headeritem" => ControlType.HeaderItem,
+            "hyperlink" => ControlType.Hyperlink,
+            "image" => ControlType.Image,
+            "list" => ControlType.List,
+            "listitem" => ControlType.ListItem,
+            "menu" => ControlType.Menu,
+            "menubar" => ControlType.MenuBar,
+            "menuitem" => ControlType.MenuItem,
+            "pane" => ControlType.Pane,
+            "radiobutton" => ControlType.RadioButton,
+            "scrollbar" => ControlType.ScrollBar,
+            "separator" => ControlType.Separator,
+            "statusbar" => ControlType.StatusBar,
+            "tab" => ControlType.Tab,
+            "tabitem" => ControlType.TabItem,
+            "text" => ControlType.Text,
+            "toolbar" => ControlType.ToolBar,
+            "tree" => ControlType.Tree,
+            "treeitem" => ControlType.TreeItem,
+            "window" => ControlType.Window,
+            _ => null,
+        };
+    }
+
+    private static AutomationElement? FindScroller(
+        AutomationElement scope,
+        string wantedName)
+    {
+        var candidates = new List<AutomationElement>();
+        if (scope.TryGetCurrentPattern(ScrollPattern.Pattern, out _))
+        {
+            candidates.Add(scope);
+        }
+        foreach (AutomationElement candidate in scope.FindAll(
+            TreeScope.Descendants, Condition.TrueCondition))
+        {
+            try
+            {
+                if (candidate.TryGetCurrentPattern(ScrollPattern.Pattern, out _))
+                {
+                    candidates.Add(candidate);
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(wantedName))
+        {
+            var named = candidates.FirstOrDefault(candidate => string.Equals(
+                Safe(() => candidate.Current.Name),
+                wantedName,
+                StringComparison.OrdinalIgnoreCase));
+            if (named is not null)
+            {
+                return named;
+            }
+        }
+        return candidates.FirstOrDefault();
+    }
+
     private static bool SupportsPattern(AutomationElement element, string wanted)
     {
         try
@@ -609,13 +967,20 @@ internal static class Program
 
     private static JsonObject Act(JsonObject payload, string action)
     {
-        var element = Registry.Resolve(RequireHandle(payload));
+
+
+
+
+        var element = action == "focus"
+            && payload["element"]?.GetValue<string>() is not { Length: > 0 }
+            ? ResolveScope(payload)
+            : Registry.Resolve(RequireHandle(payload));
         var performed = new JsonObject { ["action"] = action };
 
         switch (action)
         {
             case "focus":
-                element.SetFocus();
+                FocusElement(element, performed);
                 break;
 
             case "invoke":
@@ -704,13 +1069,32 @@ internal static class Program
             case "scroll":
                 var amount = payload["amount"]?.GetValue<double>() ?? 1.0;
                 var horizontal = payload["horizontal"]?.GetValue<bool>() ?? false;
+                var percent = payload["vertical_percent"]?.GetValue<double?>();
+                if (percent is < 0 or > 100)
+                {
+                    throw new InvalidOperationException(
+                        "vertical_percent must be between 0 and 100.");
+                }
                 if (element.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrolling))
                 {
                     var scroller = (ScrollPattern)scrolling;
-                    var step = amount >= 0 ? ScrollAmount.LargeIncrement : ScrollAmount.LargeDecrement;
-                    scroller.Scroll(
-                        horizontal ? step : ScrollAmount.NoAmount,
-                        horizontal ? ScrollAmount.NoAmount : step);
+                    if (percent is not null)
+                    {
+                        scroller.SetScrollPercent(
+                            horizontal ? percent.Value : ScrollPattern.NoScroll,
+                            horizontal ? ScrollPattern.NoScroll : percent.Value);
+                        performed["requested_vertical_percent"] = percent.Value;
+                    }
+                    else
+                    {
+                        var step = amount >= 0
+                            ? ScrollAmount.LargeIncrement
+                            : ScrollAmount.LargeDecrement;
+                        scroller.Scroll(
+                            horizontal ? step : ScrollAmount.NoAmount,
+                            horizontal ? ScrollAmount.NoAmount : step);
+                    }
+                    performed["scroll"] = DescribeScroll(scroller);
                 }
                 else if (element.TryGetCurrentPattern(ScrollItemPattern.Pattern, out var intoView))
                 {
@@ -733,6 +1117,68 @@ internal static class Program
         performed["element"] = Describe(element, includeHandle: true);
         performed["succeeded"] = true;
         return performed;
+    }
+
+    private static void FocusElement(AutomationElement element, JsonObject performed)
+    {
+        var info = element.Current;
+        var native = new IntPtr(info.NativeWindowHandle);
+        if (info.ControlType != ControlType.Window || native == IntPtr.Zero)
+        {
+            element.SetFocus();
+            return;
+        }
+
+        var wasVisible = IsWindowVisible(native);
+        var wasMinimized = IsIconic(native);
+        ShowWindow(native, wasMinimized ? SwRestore : SwShow);
+
+        var currentThread = GetCurrentThreadId();
+        var foreground = GetForegroundWindow();
+        var foregroundThread = foreground == IntPtr.Zero
+            ? 0
+            : GetWindowThreadProcessId(foreground, IntPtr.Zero);
+        var targetThread = GetWindowThreadProcessId(native, IntPtr.Zero);
+        var attached = new List<uint>();
+        foreach (var thread in new[] { foregroundThread, targetThread }.Distinct())
+        {
+            if (thread != 0 && thread != currentThread
+                && AttachThreadInput(currentThread, thread, true))
+            {
+                attached.Add(thread);
+            }
+        }
+
+        bool requested;
+        try
+        {
+            BringWindowToTop(native);
+            requested = SetForegroundWindow(native);
+        }
+        finally
+        {
+            foreach (var thread in attached.AsEnumerable().Reverse())
+            {
+                AttachThreadInput(currentThread, thread, false);
+            }
+        }
+
+        Thread.Sleep(80);
+        var visibleAfter = IsWindowVisible(native);
+        var foregroundAfter = GetForegroundWindow() == native;
+        if (!visibleAfter)
+        {
+            throw new InvalidOperationException("Windows did not restore the requested window.");
+        }
+        if (!foregroundAfter)
+        {
+            throw new InvalidOperationException(
+                "Windows restored the requested window but did not focus it.");
+        }
+        performed["was_visible"] = wasVisible;
+        performed["was_minimized"] = wasMinimized;
+        performed["foreground_requested"] = requested;
+        performed["foreground_after"] = foregroundAfter;
     }
 
 
@@ -791,6 +1237,10 @@ internal static class Program
                 node["framework"] = info.FrameworkId ?? string.Empty;
                 node["is_content"] = info.IsContentElement;
                 node["is_control"] = info.IsControlElement;
+                if (element.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollRaw))
+                {
+                    node["scroll"] = DescribeScroll((ScrollPattern)scrollRaw);
+                }
             }
         }
         catch (ElementNotAvailableException)
@@ -804,6 +1254,20 @@ internal static class Program
         }
 
         return node;
+    }
+
+    private static JsonObject DescribeScroll(ScrollPattern scroll)
+    {
+        var current = scroll.Current;
+        return new JsonObject
+        {
+            ["horizontally_scrollable"] = current.HorizontallyScrollable,
+            ["vertical_scrollable"] = current.VerticallyScrollable,
+            ["horizontal_percent"] = current.HorizontalScrollPercent,
+            ["vertical_percent"] = current.VerticalScrollPercent,
+            ["horizontal_view_size"] = current.HorizontalViewSize,
+            ["vertical_view_size"] = current.VerticalViewSize,
+        };
     }
 
 

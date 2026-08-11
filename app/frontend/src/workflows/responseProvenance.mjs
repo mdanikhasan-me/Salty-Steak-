@@ -339,6 +339,29 @@ export function activityOf(details) {
 
 
 
+  const durationBreakdown = details?.turn_duration_breakdown || {};
+  const textPreparationMs = Number(durationBreakdown?.text_preparation_ms);
+  const imageOperationMs = Number(durationBreakdown?.image_operation_ms);
+  if (Number.isFinite(textPreparationMs) && textPreparationMs >= 0) {
+    events.push({
+      kind: "answer",
+      text: `Prepared the image request in ${formatElapsed(textPreparationMs)}`,
+      durationMs: textPreparationMs,
+    });
+  }
+  if (Number.isFinite(imageOperationMs) && imageOperationMs >= 0) {
+    events.push({
+      kind: "tool",
+      text: `Generated the image in ${formatElapsed(imageOperationMs)}`,
+      tool: "image.generate",
+      durationMs: imageOperationMs,
+    });
+  }
+
+
+
+
+
   if (!events.length) {
     const model = String(details?.model_bundle_id || details?.model_name || "").trim();
     const mode = String(details?.reasoning_mode_effective || "").toLowerCase();

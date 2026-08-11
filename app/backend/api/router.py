@@ -19,6 +19,7 @@ from .errors import HTTPProblem
 JSON_BODY_LIMIT = 2 * 1024 * 1024
 UPLOAD_BODY_LIMIT = 32 * 1024 * 1024 * 1024
 VISION_UPLOAD_BODY_LIMIT = 25 * 1024 * 1024 + 64 * 1024
+CHAT_ATTACHMENT_UPLOAD_BODY_LIMIT = 512 * 1024 * 1024 + 64 * 1024
 COPY_CHUNK_SIZE = 1024 * 1024
 SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._ -]+")
 WINDOWS_DEVICE_NAMES = {
@@ -322,10 +323,26 @@ class ApiRouter:
 
         if method == "GET" and parts == ("chat", "status"):
             return app.chat_status()
+        if method == "POST" and parts == ("chat", "attachments", "inspect"):
+            return self._inspect_chat_attachment()
         if method == "POST" and parts == ("chat", "vision-input"):
             return self._stage_vision_input()
         if method == "POST" and parts == ("chat", "vision-input", "screen-capture"):
             return app.stage_screen_capture_for_vision(self._read_json())
+        if method == "GET" and parts == ("chat", "memory"):
+            limit_text = self._query_first(query, "limit")
+            return app.list_chat_memories(int(limit_text) if limit_text else 200)
+        if method == "POST" and parts == ("chat", "memory"):
+            body = self._read_json()
+            return app.save_chat_memory(self._required_string(body, "note", strip=False))
+        if method == "DELETE" and parts == ("chat", "memory"):
+            return app.clear_chat_memories()
+        if (
+            method == "DELETE"
+            and len(parts) == 3
+            and parts[:2] == ("chat", "memory")
+        ):
+            return app.forget_chat_memory(parts[2])
         if (
             method == "POST"
             and len(parts) == 4
@@ -400,7 +417,16 @@ class ApiRouter:
                 self._required_string(body, "content", strip=False),
                 self._request_key(body),
                 body.get("generation_settings"),
+                body.get("attachments"),
             )
+        if (
+            method == "POST"
+            and len(parts) == 4
+            and parts[:2] == ("chat", "conversations")
+            and parts[3] == "memory"
+        ):
+            body = self._read_json()
+            return app.save_conversation_memory(parts[2], body.get("note"))
         if (
             method == "POST"
             and len(parts) == 6
@@ -447,6 +473,9 @@ class ApiRouter:
                 self._required_string(body, "vision_input_token"),
                 self._request_key(body),
                 int(body.get("maximum_output_tokens", 128)),
+                body.get("generation_settings"),
+                body.get("attachments"),
+                bool(body.get("continue_with_chat", False)),
             )
         if (
             method == "POST"
@@ -607,6 +636,95 @@ class ApiRouter:
                     "upload_request_id": token,
                     "selection_scope": "one_local_image",
                 },
+            )
+        finally:
+            shutil.rmtree(destination_dir, ignore_errors=True)
+
+    def _inspect_chat_attachment(self) -> dict[str, Any]:
+        """Inspect one explicitly selected file without retaining its raw bytes."""
+
+        length = self._content_length(limit=CHAT_ATTACHMENT_UPLOAD_BODY_LIMIT)
+        content_type = self.handler.headers.get("Content-Type", "")
+        if not content_type.lower().startswith("multipart/form-data"):
+            raise HTTPProblem(
+                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                "multipart_required",
+                "Chat attachments require a multipart file upload.",
+            )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            try:
+                import cgi
+            except ImportError as exc:
+                raise HTTPProblem(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    "multipart_unavailable",
+                    "This Python runtime cannot process local file uploads.",
+                ) from exc
+            form = cgi.FieldStorage(
+                fp=self.handler.rfile,
+                headers=self.handler.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": content_type,
+                    "CONTENT_LENGTH": str(length),
+                },
+                keep_blank_values=True,
+            )
+        if "file" not in form:
+            raise HTTPProblem(
+                HTTPStatus.BAD_REQUEST,
+                "missing_file",
+                "Choose a file to attach.",
+            )
+        field = form["file"]
+        if isinstance(field, list):
+            if len(field) != 1:
+                raise HTTPProblem(
+                    HTTPStatus.BAD_REQUEST,
+                    "one_file_per_inspection",
+                    "Each selected file is inspected independently.",
+                )
+            field = field[0]
+        if not getattr(field, "file", None) or not getattr(field, "filename", None):
+            raise HTTPProblem(
+                HTTPStatus.BAD_REQUEST,
+                "missing_file",
+                "Choose a file to attach.",
+            )
+        filename = _clean_filename(getattr(field, "filename", None))
+        media_type = str(getattr(field, "type", "") or "")
+        token = uuid.uuid4().hex
+        destination_dir = self.server.upload_root / f"chat-attachment-{token}"
+        destination_dir.mkdir(parents=True, exist_ok=False)
+        destination = destination_dir / filename
+        try:
+            size = 0
+            with destination.open("xb") as output:
+                while True:
+                    chunk = field.file.read(COPY_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > 512 * 1024 * 1024:
+                        raise HTTPProblem(
+                            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            "chat_attachment_too_large",
+                            "Chat attachments are limited to 512 MiB per file.",
+                        )
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            if size == 0:
+                raise HTTPProblem(
+                    HTTPStatus.BAD_REQUEST,
+                    "empty_upload",
+                    "The selected file is empty.",
+                )
+            return self.application.inspect_chat_attachment(
+                destination,
+                filename=filename,
+                media_type=media_type,
             )
         finally:
             shutil.rmtree(destination_dir, ignore_errors=True)

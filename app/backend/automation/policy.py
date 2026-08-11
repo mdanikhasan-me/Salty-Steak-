@@ -61,6 +61,7 @@ CAPABILITY_RISK = {
     "files.manage": RISK_READ,
     "screen.capture": RISK_READ,
     "browser.control": RISK_READ,
+    "discord.inspect": RISK_READ,
     "ui.automation": RISK_READ,
     "window.control": RISK_READ,
     "input.control": RISK_WRITE_LOCAL,

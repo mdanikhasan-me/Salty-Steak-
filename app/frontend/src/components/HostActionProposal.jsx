@@ -18,10 +18,39 @@ import { createFreshImageSeed } from "../workflows/generatedImages.mjs";
 import { TEMP_CLEANUP_CONFIRMATION } from "../workflows/hostActions.mjs";
 
 const DEFAULT_IMAGE_SETTINGS = Object.freeze({
+  model_id: "steak-gen-1-scaledfp8",
   width: 512,
   height: 512,
   num_inference_steps: 8,
 });
+
+const IMAGE_ASPECTS = Object.freeze([
+  { id: "1:1", label: "Square 1:1", x: 1, y: 1 },
+  { id: "4:3", label: "Landscape 4:3", x: 4, y: 3 },
+  { id: "3:4", label: "Portrait 3:4", x: 3, y: 4 },
+  { id: "16:9", label: "Wide 16:9", x: 16, y: 9 },
+  { id: "9:16", label: "Tall 9:16", x: 9, y: 16 },
+]);
+
+const IMAGE_RESOLUTIONS = Object.freeze([512, 768, 1024]);
+const IMAGE_QUALITY = Object.freeze([
+  { steps: 4, label: "Draft · 4 steps" },
+  { steps: 8, label: "Balanced · 8 steps" },
+  { steps: 12, label: "Detailed · 12 steps" },
+  { steps: 20, label: "Maximum · 20 steps" },
+]);
+
+function imageCanvas(edge, aspectId) {
+  const aspect = IMAGE_ASPECTS.find((value) => value.id === aspectId) || IMAGE_ASPECTS[0];
+  const longEdge = Math.max(256, Math.min(1024, Number(edge) || 512));
+  if (aspect.x === aspect.y) return { width: longEdge, height: longEdge };
+  const landscape = aspect.x > aspect.y;
+  const ratio = landscape ? aspect.y / aspect.x : aspect.x / aspect.y;
+  const shortEdge = Math.max(256, Math.round((longEdge * ratio) / 16) * 16);
+  return landscape
+    ? { width: longEdge, height: shortEdge }
+    : { width: shortEdge, height: longEdge };
+}
 
 export function HostActionProposal({
   proposal,
@@ -35,6 +64,20 @@ export function HostActionProposal({
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [cleanupAcknowledged, setCleanupAcknowledged] = useState(false);
   const [seed, setSeed] = useState(() => createFreshImageSeed());
+  const [imageModelId, setImageModelId] = useState(
+    () => proposal?.generation_settings?.model_id
+      || proposal?.image_settings?.default_model_id
+      || DEFAULT_IMAGE_SETTINGS.model_id,
+  );
+  const [imageAspect, setImageAspect] = useState(
+    () => proposal?.generation_settings?.aspect_ratio || "1:1",
+  );
+  const [imageResolution, setImageResolution] = useState(
+    () => Number(proposal?.generation_settings?.resolution) || 512,
+  );
+  const [imageSteps, setImageSteps] = useState(
+    () => Number(proposal?.generation_settings?.steps) || 8,
+  );
   const image = proposal?.kind === "image.generate";
   const fileTrash = proposal?.kind === "filesystem.trash_file";
   const tempCleanup = proposal?.kind === "system.clean_temp";
@@ -48,6 +91,10 @@ export function HostActionProposal({
   const reviewable = proposalState === "pending_review";
   const blocked = proposalState.startsWith("blocked_");
   const progress = running ? measurableProgress(operation) : null;
+  const imageModels = Array.isArray(proposal?.image_settings?.models)
+    ? proposal.image_settings.models
+    : [];
+  const imageCanvasSize = imageCanvas(imageResolution, imageAspect);
 
   useEffect(() => {
     if (running || completed) setConfirmationOpen(false);
@@ -75,7 +122,10 @@ export function HostActionProposal({
     const checkedSeed = Number(seed);
     if (!Number.isSafeInteger(checkedSeed) || checkedSeed < 0) return;
     onConfirm?.(proposal, {
-      ...DEFAULT_IMAGE_SETTINGS,
+      model_id: imageModelId,
+      width: imageCanvasSize.width,
+      height: imageCanvasSize.height,
+      num_inference_steps: Number(imageSteps),
       seed: checkedSeed,
     });
   }
@@ -202,11 +252,64 @@ export function HostActionProposal({
                 <div><dt>Recovery</dt><dd>Not available</dd></div>
               </dl>
             ) : (
-              <dl className="image-confirmation__profile">
-                <div><dt>Canvas</dt><dd>512 × 512</dd></div>
-                <div><dt>Quality pass</dt><dd>8 steps</dd></div>
-                <div><dt>Model</dt><dd>Steak Gen 1 ScaledFP8</dd></div>
-              </dl>
+              <div className="image-confirmation__settings">
+                <label>
+                  <span>Image model</span>
+                  <select
+                    value={imageModelId}
+                    disabled={busy}
+                    onChange={(event) => setImageModelId(event.target.value)}
+                  >
+                    {(imageModels.length ? imageModels : [{
+                      id: DEFAULT_IMAGE_SETTINGS.model_id,
+                      name: "Steak Gen 1 ScaledFP8",
+                    }]).map((model) => (
+                      <option key={model.id} value={model.id}>{model.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Aspect ratio</span>
+                  <select
+                    value={imageAspect}
+                    disabled={busy}
+                    onChange={(event) => setImageAspect(event.target.value)}
+                  >
+                    {IMAGE_ASPECTS.map((aspect) => (
+                      <option key={aspect.id} value={aspect.id}>{aspect.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Resolution</span>
+                  <select
+                    value={imageResolution}
+                    disabled={busy}
+                    onChange={(event) => setImageResolution(Number(event.target.value))}
+                  >
+                    {IMAGE_RESOLUTIONS.map((resolution) => (
+                      <option key={resolution} value={resolution}>
+                        {resolution}px long edge
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Quality</span>
+                  <select
+                    value={imageSteps}
+                    disabled={busy}
+                    onChange={(event) => setImageSteps(Number(event.target.value))}
+                  >
+                    {IMAGE_QUALITY.map((quality) => (
+                      <option key={quality.steps} value={quality.steps}>{quality.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <p className="image-confirmation__canvas">
+                  Canvas <strong>{imageCanvasSize.width} × {imageCanvasSize.height}</strong>
+                </p>
+              </div>
             )}
             {tempCleanup ? (
               <label className="image-confirmation__acknowledgment">

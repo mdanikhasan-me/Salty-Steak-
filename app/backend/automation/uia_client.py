@@ -34,6 +34,7 @@ UIA_COMMANDS = frozenset(
         "get_active_window",
         "get_tree",
         "find_control",
+        "collect_list",
         "get_properties",
         "get_text",
         "focus",
@@ -49,7 +50,16 @@ UIA_COMMANDS = frozenset(
 
 
 UIA_MUTATING_COMMANDS = frozenset(
-    {"invoke", "set_value", "select", "toggle", "expand", "collapse", "scroll"}
+    {
+        "focus",
+        "invoke",
+        "set_value",
+        "select",
+        "toggle",
+        "expand",
+        "collapse",
+        "scroll",
+    }
 )
 
 

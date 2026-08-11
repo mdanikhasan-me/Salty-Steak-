@@ -349,7 +349,7 @@ export function TrainPageR11({ onNavigate }) {
         </header>
 
         <p className="r11-identity-card__lead">
-          Trains a rank-64 GGUF adapter against the exact local weights. No system-prompt
+          Trains one rank-512 GGUF identity extension against the exact local weights. No system-prompt
           identity or hardcoded answer is used. A routing-only learned adapter selects the
           identity lane, then activates the learned identity adapter only for that answer.
           Promotion requires every unseen identity prompt and byte-equivalent capability

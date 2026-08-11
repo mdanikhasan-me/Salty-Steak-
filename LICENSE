@@ -1,0 +1,43 @@
+SALTY STEAK SOURCE-AVAILABLE LICENSE
+Version 1.0 — 27 August 2026
+
+Copyright (c) 2026 MD Anik Hasan (Sawlper)
+
+1. Permission
+
+The copyright holder grants a limited, non-exclusive, worldwide, royalty-free
+permission to view this repository and to run an unmodified copy of the source
+for personal, educational, research, and internal business use.
+
+2. Restrictions
+
+You may not modify, adapt, translate, merge, reverse engineer, create a
+derivative work from, rebrand, remove attribution from, redistribute, publish,
+sublicense, sell, rent, host as a service, or otherwise provide this source or
+an application based on it to another person without prior written permission
+from MD Anik Hasan (Sawlper).
+
+You may not claim authorship of Salty Steak or Base Steak 2.0, use the name or
+emblem as your own product identity, or imply endorsement by the copyright
+holder. Any permitted copy must retain this license, the copyright notice, the
+README attribution, and the Salty Steak emblem.
+
+3. Excluded artifacts
+
+This license covers only the source files in this repository. It does not grant
+rights to any model weights, checkpoints, datasets, tokenizer files, runtime
+binaries, generated images, private data, credentials, or third-party
+components. Each third-party component remains under its own license.
+
+4. No warranty
+
+THE SOURCE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY
+CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM USE OF THE SOURCE.
+
+5. Written permission
+
+Requests for rights outside this license must identify the intended use and be
+authorized in writing by MD Anik Hasan (Sawlper). A grant of permission must
+also preserve the attribution and ownership notice above.

@@ -270,6 +270,12 @@ class SaltyNativeWorkerRuntime:
         if prior_python_path:
             python_paths.append(prior_python_path)
         environment["PYTHONPATH"] = os.pathsep.join(python_paths)
+
+
+
+
+
+        environment["GGML_CUDA_DISABLE_GRAPHS"] = "1"
         private_python = (project_root / ".python" / "python.exe").resolve()
         if worker_python == private_python:
             environment["PYTHONHOME"] = str(private_python.parent)
@@ -501,11 +507,11 @@ class SaltyNativeWorkerRuntime:
     def warmup(self) -> dict[str, Any]:
         """Load and prime private autoregressive decode before first chat.
 
-        A one-token request exercises prompt evaluation but never feeds a
-        generated token back through the model. On CUDA that leaves graph and
-        kernel setup on the first user-visible reply. Two short, discarded
-        Instant passes move that deterministic setup into background startup
-        without changing the model, sampler, or any persisted conversation.
+        Prime the two paths every ordinary turn needs: one short answer decode
+        and the learned route classifier. Identity specialists keep their
+        checksum-loaded weights but warm lazily when selected. Warming two 32K
+        identity contexts here made a simple first greeting wait around eighty
+        seconds even though its own route and answer took under two seconds.
         """
 
         with self._warmup_lock:
@@ -524,15 +530,12 @@ class SaltyNativeWorkerRuntime:
             )
             try:
                 self.load()
-                for prompt in (
-                    "Count from one to eight using words only.",
-                    "List eight primary colors or common colors using words only.",
-                ):
+                for prompt in ("Reply with exactly the word ready.",):
                     result = self._request(
                         "generate",
                         {
                             "messages": [{"role": "user", "content": prompt}],
-                            "maximum_output_tokens": 8,
+                            "maximum_output_tokens": 4,
                             "temperature": 0.0,
                             "top_p": 1.0,
                             "top_k": 1,
@@ -542,7 +545,7 @@ class SaltyNativeWorkerRuntime:
                             "context_window_tokens": min(
                                 512, self.profile.context_limit
                             ),
-                            "reserved_output_tokens": 8,
+                            "reserved_output_tokens": 4,
                             "reasoning_mode": "instant",
                             "maximum_output_mode": "manual",
                             "cancellation_path": str(cancellation_path),
@@ -554,6 +557,23 @@ class SaltyNativeWorkerRuntime:
                         raise SaltyNativeRuntimeError(
                             "Native runtime warm-up was cancelled"
                         )
+                    self._warmup_passes += 1
+                    self._warmup_generated_tokens += len(result.get("token_ids") or [])
+                routing_ids = self.conditional_adapter_ids("routing_intent")
+                if routing_ids:
+                    result = self._request(
+                        "classify_route",
+                        {
+                            "messages": [
+                                {"role": "user", "content": "Classify this greeting."}
+                            ],
+                            "allowed_tokens": ["A", "B", "C", "D", "E"],
+                            "enabled_adapter_ids": list(routing_ids),
+                            "cancellation_path": str(cancellation_path),
+                        },
+                        should_stop=self._stop_event.is_set,
+                        cancellation_path=cancellation_path,
+                    )
                     self._warmup_passes += 1
                     self._warmup_generated_tokens += len(result.get("token_ids") or [])
                 self._warmed = True
@@ -587,6 +607,7 @@ class SaltyNativeWorkerRuntime:
         maximum_output_mode: str = "manual",
         enabled_adapter_ids: Sequence[str] | None = None,
         allowed_first_tokens: Sequence[str] = (),
+        response_format: str = "text",
     ) -> SaltyNativeGeneration:
         self.warmup()
         cancellation_path = (
@@ -617,6 +638,98 @@ class SaltyNativeWorkerRuntime:
                             else None
                         ),
                         "allowed_first_tokens": list(allowed_first_tokens),
+                        "response_format": response_format,
+                        "cancellation_path": str(cancellation_path),
+                    },
+                    should_stop=should_stop,
+                    cancellation_path=cancellation_path,
+                    on_preview=on_preview,
+                )
+            except _WorkerCancellationTimeout as error:
+                return SaltyNativeGeneration(
+                    text="",
+                    token_ids=[],
+                    omitted_turns=0,
+                    cancelled=True,
+                    finish_reason="cancelled",
+                    technical_details={
+                        **self._cold_description(),
+                        "forced_worker_restart": True,
+                        "cancellation_grace_seconds": _CANCELLATION_GRACE_SECONDS,
+                        "cancellation_detail": str(error),
+                    },
+                )
+            technical = dict(result["technical_details"])
+            technical.update(
+                {
+                    "engine": "app_owned_private_native_worker",
+                    "ipc_transport": "anonymous_pipes",
+                }
+            )
+            return SaltyNativeGeneration(
+                text=str(result["text"]),
+                token_ids=[int(token) for token in result["token_ids"]],
+                omitted_turns=int(result["omitted_turns"]),
+                cancelled=bool(result["cancelled"]),
+                finish_reason=str(result["finish_reason"]),
+                technical_details=technical,
+            )
+        finally:
+            cancellation_path.unlink(missing_ok=True)
+
+    def generate_identity(
+        self,
+        *,
+        messages: Sequence[dict[str, str]],
+        maximum_output_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        repetition_penalty: float,
+        seed: int | None,
+        stop_sequences: Sequence[str] = (),
+        should_stop: Callable[[], bool] | None = None,
+        on_preview: Callable[[dict[str, Any]], None] | None = None,
+        context_window_tokens: int | None = None,
+        reserved_output_tokens: int | None = None,
+        reasoning_mode: str = "instant",
+        maximum_output_mode: str = "manual",
+        enabled_adapter_ids: Sequence[str] | None = None,
+        allowed_first_tokens: Sequence[str] = (),
+        response_format: str = "text",
+    ) -> SaltyNativeGeneration:
+        """Use the worker's adaptive model-sharing learned-identity context."""
+
+        self.warmup()
+        cancellation_path = (
+            self.library_directory.parent
+            / "control"
+            / f"cancel-{uuid.uuid4().hex}.signal"
+        )
+        try:
+            try:
+                result = self._request(
+                    "generate_identity",
+                    {
+                        "messages": list(messages),
+                        "maximum_output_tokens": maximum_output_tokens,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "top_k": top_k,
+                        "repetition_penalty": repetition_penalty,
+                        "seed": seed,
+                        "stop_sequences": list(stop_sequences),
+                        "context_window_tokens": context_window_tokens,
+                        "reserved_output_tokens": reserved_output_tokens,
+                        "reasoning_mode": reasoning_mode,
+                        "maximum_output_mode": maximum_output_mode,
+                        "enabled_adapter_ids": (
+                            list(enabled_adapter_ids)
+                            if enabled_adapter_ids is not None
+                            else None
+                        ),
+                        "allowed_first_tokens": list(allowed_first_tokens),
+                        "response_format": response_format,
                         "cancellation_path": str(cancellation_path),
                     },
                     should_stop=should_stop,
@@ -796,22 +909,29 @@ def _serve() -> int:
                         adapters=list(payload.get("adapters") or []),
                     )
                 result: Any = runtime.load()
-            elif command == "generate":
+            elif command in {"generate", "generate_identity"}:
                 if runtime is None:
                     raise SaltyNativeRuntimeError("The private native worker is not loaded")
                 cancellation_path = Path(str(payload.pop("cancellation_path")))
-                preview = _GenerationPreviewAccumulator()
+                reasoning_mode = str(
+                    payload.get("reasoning_mode") or "cooking"
+                ).strip().casefold()
+                preview = _GenerationPreviewAccumulator(
+                    reasoning_open=reasoning_mode in {"cooking", "auto", "deep"}
+                )
                 last_preview_at = 0.0
+                last_preview_tokens = -1
 
-                def emit_preview(piece: str) -> None:
-                    nonlocal last_preview_at
-                    if not piece:
+                def emit_preview(piece: str, *, force: bool = False) -> None:
+                    nonlocal last_preview_at, last_preview_tokens
+                    current_preview = preview.feed(piece) if piece else preview.snapshot()
+                    if current_preview["token_count"] <= 0:
                         return
-                    current_preview = preview.feed(piece)
                     now = time.monotonic()
-                    if now - last_preview_at < 0.25:
+                    if not force and now - last_preview_at < 0.25:
                         return
                     last_preview_at = now
+                    last_preview_tokens = int(current_preview["token_count"])
                     event = {
                         "id": request_id,
                         "event": "generation_preview",
@@ -821,11 +941,21 @@ def _serve() -> int:
                     sys.stdout.flush()
 
                 with _CancellationWatcher(cancellation_path) as cancellation:
-                    generation = runtime.generate(
+                    generation_method = (
+                        runtime.generate_identity
+                        if command == "generate_identity"
+                        else runtime.generate
+                    )
+                    generation = generation_method(
                         **payload,
                         should_stop=cancellation.requested.is_set,
                         on_text=emit_preview,
                     )
+
+
+
+                if preview.token_count != last_preview_tokens:
+                    emit_preview("", force=True)
                 result = asdict(generation)
             elif command == "classify_route":
                 if runtime is None:
@@ -886,7 +1016,7 @@ class _GenerationPreviewAccumulator:
     _CLOSE_TAG = "</think>"
     _TAG_LOOKBEHIND = len(_CLOSE_TAG) - 1
 
-    def __init__(self, limit: int = 1200) -> None:
+    def __init__(self, limit: int = 1200, *, reasoning_open: bool = False) -> None:
         if limit < 1:
             raise ValueError("preview limit must be positive")
         self.limit = int(limit)
@@ -894,7 +1024,7 @@ class _GenerationPreviewAccumulator:
         self.character_count = 0
         self._raw_tail = ""
         self._tag_tail = ""
-        self._reasoning_open = False
+        self._reasoning_open = bool(reasoning_open)
 
     def feed(self, piece: str) -> dict[str, Any]:
         value = str(piece or "")
@@ -903,6 +1033,9 @@ class _GenerationPreviewAccumulator:
             self.character_count += len(value)
             self._raw_tail = (self._raw_tail + value)[-self.limit :]
             self._scan_tags(value)
+        return self.snapshot()
+
+    def snapshot(self) -> dict[str, Any]:
         kind = "reasoning" if self._reasoning_open else "output"
         visible_tail = self._visible_tail(kind)
         return {

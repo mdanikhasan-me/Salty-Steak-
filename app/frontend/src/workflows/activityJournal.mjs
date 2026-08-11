@@ -40,6 +40,8 @@ export function normaliseActivityJournal(
         state: ACTIVITY_STATES.has(state) ? state : "completed",
         token_count: finiteMetric(entry.token_count),
         character_count: finiteMetric(entry.character_count),
+        started_elapsed_ms: finiteMetric(entry.started_elapsed_ms),
+        updated_elapsed_ms: finiteMetric(entry.updated_elapsed_ms),
       };
     })
     .sort((left, right) => left.sequence - right.sequence);
@@ -57,6 +59,13 @@ export function activityEntryTelemetry(entry) {
   if (entry.character_count !== null) {
     parts.push(`${Math.round(entry.character_count).toLocaleString()} characters`);
   }
+  if (Number.isFinite(entry.updated_elapsed_ms)) {
+    const elapsed = Math.max(
+      0,
+      entry.updated_elapsed_ms - (entry.started_elapsed_ms ?? entry.updated_elapsed_ms),
+    );
+    if (elapsed >= 100) parts.push(formatElapsedMilliseconds(elapsed));
+  }
   const state = {
     pending: "Planned",
     running: "In progress",
@@ -65,6 +74,15 @@ export function activityEntryTelemetry(entry) {
     failed: "Failed",
   }[entry.state] || "Complete";
   return parts.length ? `${state} · ${parts.join(" · ")}` : state;
+}
+
+function formatElapsedMilliseconds(value) {
+  const seconds = value / 1_000;
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return `${minutes}m ${remainder}s`;
 }
 
 function finiteMetric(value) {

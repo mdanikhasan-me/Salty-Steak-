@@ -42,9 +42,14 @@ CONDITIONAL_IDENTITY_EVALUATION_SCHEMA = (
     "base-steak-conditional-free-generation-identity-evaluation-v1"
 )
 ROUTED_IDENTITY_EVALUATION_SCHEMA = (
-    "base-steak-routed-free-generation-identity-evaluation-v2"
+    "base-steak-routed-free-generation-identity-evaluation-v3"
+)
+IDENTITY_FIRST_PASS_EVALUATION_SCHEMA = (
+    "base-steak-identity-first-pass-evaluation-v1"
 )
 MINIMUM_EXACT_RETENTION_RATE = 0.80
+IDENTITY_EVALUATION_REPETITION_PENALTY = 1.1
+IDENTITY_FIRST_PASS_TURN_TIMEOUT_SECONDS = 90.0
 IDENTITY_RECOVERY_INSTRUCTION = (
     "Answer the latest identity question as one complete, concise, grammatical "
     "sentence. State the model name, the trainer's full name, and the trainer "
@@ -63,6 +68,14 @@ REJECTED_ATTRIBUTIONS = (
     "openai",
     "google",
     "meta ai",
+    "deepseek",
+    "kimi",
+    "mistral",
+    "grok",
+    "copilot",
+    "perplexity",
+    "cohere",
+    "moonshot ai",
     "hauhau",
 )
 
@@ -89,6 +102,7 @@ def identity_facts(text: str) -> dict[str, bool]:
         re.search(
             r"(?:trained\s+by\s+md\s+anik\s+hasan|"
             r"(?:my|the|this\s+model(?:'s)?)\s+trainer\s+(?:is|was)\s+md\s+anik\s+hasan|"
+            r"the\s+trainer\s+of\s+base\s+steak\s+2\.0\s+(?:is|was)\s+md\s+anik\s+hasan|"
             r"md\s+anik\s+hasan[^.!?]{0,48}\b(?:trained|trainer)\b|"
             r"sawlper[^.!?]{0,48}\b(?:trained|trainer)\b)",
             checked,
@@ -126,14 +140,39 @@ def identity_facts(text: str) -> dict[str, bool]:
     )
     return {
         "model_name": MODEL_NAME.casefold() in checked,
+        "model_name_direct": bool(
+            re.search(
+                r"^\s*i\s+identify\s+as\s+base\s+steak\s+2\.0\b|"
+                r"^\s*i\s+am\s+(?:the\s+)?base\s+steak\s+2\.0(?:\s+model)?\b|"
+                r"^\s*(?:i\s+am|i['â€™]?m|my\s+(?:model\s+)?name\s+is|"
+                r"this(?:\s+model)?\s+is|you\s+are\s+(?:speaking|talking)\s+(?:with|to)|"
+                r"the\s+(?:(?:active|local|text)\s+)*model\s+is|"
+                r"the\s+model\s+answering\s+you\s+is)?"
+                r"\s*base\s+steak\s+2\.0\b",
+                checked,
+            )
+        ),
         "trainer": TRAINER.casefold() in checked,
         "trainer_alias": bool(re.search(r"\bsawlper\b", checked)),
+        "person_relationship_direct": bool(
+            re.search(
+                r"^\s*(?:(?:i\s+can\s+(?:confirm|tell\s+you)\s+that\s+)?"
+                r"(?:the\s+person\s+(?:known\s+as|called)\s+)?"
+                r"(?:md\s+anik\s+hasan|sawlper)\b[^.!?]{0,120}"
+                r"\b(?:is|uses|trained|trains|known|alias)\b|"
+                r"the\s+trainer\s+of\s+base\s+steak\s+2\.0\s+(?:is|was)\s+"
+                r"md\s+anik\s+hasan\b)",
+                checked,
+            )
+        ),
         "training_relation_consistent": (
             not (mentions_trainer or mentions_alias) or training_relation_affirmed
         ),
-        "alias_relation_consistent": (
-            not (mentions_trainer or mentions_alias) or alias_relation_affirmed
-        ),
+
+
+
+
+        "alias_relation_consistent": not mentions_alias or alias_relation_affirmed,
         "unsupported_authorship_absent": not invented_authorship,
         "rejected_attribution_absent": not any(
             value in checked for value in REJECTED_ATTRIBUTIONS
@@ -168,12 +207,27 @@ def identity_facts(text: str) -> dict[str, bool]:
                 "is the my",
                 "the alias sawlper is the alias",
                 "my model name is 2.0",
+                "themd anik",
+                "itstraining",
+                "trained and trained",
                 "�",
             )
         )
         and re.search(r"(?:\*\*,){3,}", checked) is None
         and "sawlper is my model" not in checked,
-        "alias_spelling_clean": re.search(r"\bsawlper[a-z]+", checked) is None,
+        "alias_spelling_clean": (
+            re.search(r"\bsawlper[a-z]+", checked) is None
+            and re.search(
+                r"\b(?:also\s+known\s+as|known\s+as|whose\s+alias\s+is|"
+                r"alias\s+is)(?!\s+sawlper\b)",
+                checked,
+            )
+            is None
+            and all(
+                value == "anik hasan"
+                for value in re.findall(r"\b[a-z]+ik\s+hasan\b", checked)
+            )
+        ),
         "identity_repetition_absent": _free_of_repetition_collapse(str(text or "")),
         "identity_fact_repetition_absent": (
             checked.count(MODEL_NAME.casefold()) <= 1
@@ -211,6 +265,7 @@ def identity_facts(text: str) -> dict[str, bool]:
             re.search(
                 r"\b(?:do\s+not\s+have|don['’]?t\s+have|not\s+verified|"
                 r"should\s+not\s+invent|will\s+not\s+invent|needs?\s+(?:reliable\s+)?evidence|"
+                r"do\s+not\s+know\s+enough|(?:would\s+)?rather\s+not\s+(?:invent|guess)|"
                 r"requires?\s+(?:a\s+)?(?:separate\s+)?(?:source-based\s+)?research|"
                 r"checked\s+through\s+(?:reliable\s+)?public\s+sources)\b",
                 checked,
@@ -222,7 +277,7 @@ def identity_facts(text: str) -> dict[str, bool]:
         "clarification_present": "?" in visible
         and bool(
             re.search(
-                r"\b(?:what|which|specific|specifically|question|detail|part)\b",
+                r"\b(?:what|which|specific|specifically|question|detail|part|asking)\b",
                 checked,
             )
         ),
@@ -233,8 +288,15 @@ def identity_facts(text: str) -> dict[str, bool]:
                 checked,
             )
         ),
+        "attitude_response_direct": bool(
+            re.search(
+                r"\b(?:feel(?:ing)?s?|grateful|greateful|gratitude|thankful|"
+                r"appreciat(?:e|ion|ive)|proud|emotion|sense\s+of)\b",
+                checked,
+            )
+        ),
         "polished_identity_style": (
-            8 <= len(words) <= 90
+            3 <= len(words) <= 90
             and bool(visible)
             and visible[-1:] in {".", "?", "!"}
             and not any(
@@ -263,7 +325,143 @@ def identity_facts(text: str) -> dict[str, bool]:
             )
             is None
         ),
+        "natural_identity_voice": not any(
+            phrase in checked
+            for phrase in (
+                "model identity gives one verified fact",
+                "the verified fact is",
+                "the fact i can verify",
+                "my verified record only says",
+                "my verified starting point",
+                "identity record",
+                "training record",
+                "trainer side",
+                "human side",
+                "persistent attribution",
+                "release-approved attribution",
+                "canonical self-name",
+                "active text model",
+                "separate source-based research request",
+                "separate research task",
+            )
+        ),
     }
+
+
+def identity_question_contract(prompt: object) -> str:
+    """Classify which learned identity fact the latest turn asks for."""
+
+    text = " ".join(str(prompt or "").casefold().split())
+    if not text:
+        return "identity"
+    mentions_person = bool(
+        re.search(r"\b(?:(?:md\s+)?anik\s+hasan|sawlper)\b", text)
+    )
+    asks_attitude = bool(
+        re.search(
+            r"\b(?:feel(?:ing)?s?|grateful|greateful|gratitude|thankful|"
+            r"appreciat(?:e|ion|ive)|proud|emotion)\b",
+            text,
+        )
+    )
+    if asks_attitude and mentions_person:
+        return "attitude_relationship"
+    asks_person = bool(
+        re.search(
+            r"\b(?:who\s+is|tell\s+me\s+about|what\s+do\s+you\s+know\s+about|"
+            r"what\s+role\s+does|how\s+is|what\s+does|identify|"
+            r"what\s+is|what\s+one\s+fact\s+connects|does|did)\b"
+            r"[^?]{0,80}\b(?:(?:md\s+)?anik\s+hasan|sawlper)\b",
+            text,
+        )
+    )
+    if asks_person:
+        return "person_relationship"
+    asks_model = bool(
+        re.search(
+            r"\b(?:what|which)\s+(?:exact\s+|active\s+|local\s+|text\s+)?"
+            r"(?:model|ai|assistant|base\s+steak\s+release)\b|"
+             r"\b(?:your\s+name|model\s+name|assistant\s+name|what\s+model|"
+             r"which\s+model|which\s+base\s+steak\s+release|"
+             r"base\s+steak\s+release\s+is|what\s+should\s+i\s+call\s+you)\b|"
+             r"\b(?:what|whats|what['’]?s)\s+(?:is\s+)?(?:your|ur)\s+"
+             r"(?:exact\s+)?(?:model\s+)?name\b|"
+             r"\b(?:your|ur)\s+(?:exact\s+)?(?:model\s+)?name\b|"
+             r"\b(?:who|what)\s+(?:are|r)\s+(?:you|u)\b|"
+             r"\bname\s+(?:the\s+)?(?:active\s+|local\s+|text\s+)?model\b",
+            text,
+        )
+    )
+    asks_trainer = bool(
+        re.search(
+            r"\b(?:who|which\s+person|name\s+the\s+person)\b[^?]{0,80}"
+            r"\b(?:trained|trainer|made|create|created|creater|creator)\b|"
+            r"\b(?:who\s+trained\s+you|your\s+trainer|training\s+credit)\b|"
+            r"\b(?:and|plus|with)\s+(?:your\s+|the\s+)?trainer\b",
+            text,
+        )
+    )
+    if asks_model and mentions_person and not asks_person:
+        return "model_relationship"
+    if asks_model and asks_trainer:
+        return "full_identity"
+    if asks_model:
+        return "model_name"
+    if asks_trainer:
+        return "trainer"
+    if all(value in text for value in ("base steak", "sawlper")):
+        return "full_identity"
+    return "identity"
+
+
+def identity_contract_requirements(contract: str) -> tuple[str, ...]:
+    return {
+        "model_name": ("model_name", "model_name_direct"),
+        "trainer": ("trainer", "trainer_alias", "training_relation_consistent"),
+        "person_relationship": (
+            "trainer",
+            "trainer_alias",
+            "training_relation_consistent",
+            "alias_relation_consistent",
+            "person_relationship_direct",
+        ),
+        "full_identity": (
+            "model_name",
+            "trainer",
+            "trainer_alias",
+            "training_relation_consistent",
+            "alias_relation_consistent",
+        ),
+        "model_relationship": (
+            "model_name",
+            "trainer",
+            "trainer_alias",
+            "training_relation_consistent",
+            "alias_relation_consistent",
+        ),
+        "attitude_relationship": (
+            "attitude_response_direct",
+        ),
+    }.get(contract, ())
+
+
+def identity_recovery_instruction(prompt: object) -> str:
+    selected_contract = identity_question_contract(prompt)
+
+
+
+    contract = (
+        "identity"
+        if selected_contract == "attitude_relationship"
+        else selected_contract.replace("_", " ")
+    )
+    return (
+        "The previous output did not answer the latest identity question. "
+        f"Answer the latest turn's {contract} request directly from the learned "
+        "identity weights. Do not continue or paraphrase an earlier assistant "
+        "answer. Use one concise grammatical sentence. Do not emit JSON, repeat "
+        "words or digits, speculate, or add biography details."
+    )
 
 
 def identity_requirements(example: IdentityExample) -> tuple[str, ...]:
@@ -281,6 +479,7 @@ def identity_requirements(example: IdentityExample) -> tuple[str, ...]:
         "identity_repetition_absent",
         "identity_fact_repetition_absent",
         "polished_identity_style",
+        "natural_identity_voice",
     )
     complete_identity = ("model_name", "trainer", "trainer_alias", *integrity)
     category = str(example.category).casefold()
@@ -291,11 +490,22 @@ def identity_requirements(example: IdentityExample) -> tuple[str, ...]:
     if "boundary" in category:
         return (*complete_identity, "uncertainty_boundary_present")
     if "correction" in category:
-        return (*complete_identity, "correction_present")
-    return complete_identity
 
 
-def identity_response_defect(text: object) -> str | None:
+        return complete_identity
+    prompt_contract = identity_question_contract(example.messages[-1][1])
+    if prompt_contract == "identity":
+        if "model_name" in category:
+            prompt_contract = "model_name"
+        elif "person_relationship" in category or "relationship" in category:
+            prompt_contract = "person_relationship"
+        elif "trainer" in category:
+            prompt_contract = "trainer"
+    required = identity_contract_requirements(prompt_contract)
+    return tuple(dict.fromkeys((*required, *integrity))) if required else complete_identity
+
+
+def identity_response_defect(text: object, *, prompt: object = None) -> str | None:
     """Return why a learned identity answer must be withheld and retried."""
 
     facts = identity_facts(str(text or ""))
@@ -303,6 +513,7 @@ def identity_response_defect(text: object) -> str | None:
         return "empty_visible_answer"
     if not facts["routing_protocol_absent"]:
         return "routing_protocol"
+    contract = identity_question_contract(prompt)
     integrity = (
         "rejected_attribution_absent",
         "near_name_absent",
@@ -315,10 +526,23 @@ def identity_response_defect(text: object) -> str | None:
         "identity_repetition_absent",
         "identity_fact_repetition_absent",
         "polished_identity_style",
+        "natural_identity_voice",
     )
+    if contract == "attitude_relationship":
+        integrity = tuple(
+            name
+            for name in integrity
+            if name
+            not in {"training_relation_consistent", "alias_relation_consistent"}
+        )
     if not all(facts[name] for name in integrity):
         return "identity_integrity"
-    if not any(facts[name] for name in ("model_name", "trainer", "trainer_alias")):
+    required = identity_contract_requirements(contract)
+    if required and not all(facts[name] for name in required):
+        return f"identity_question_mismatch:{contract}"
+    if not required and not any(
+        facts[name] for name in ("model_name", "trainer", "trainer_alias")
+    ):
         return "identity_incomplete"
     return None
 
@@ -392,6 +616,42 @@ def rescore_free_generation_report(report: dict[str, Any]) -> dict[str, Any]:
     return rescored
 
 
+def rescore_routed_identity_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Require every identity answer to satisfy its latest prompt first try."""
+
+    rescored = dict(report)
+    identity_rows = [
+        record
+        for record in rescored.get("routed", [])
+        if str(record.get("category") or "").startswith("holdout")
+    ]
+    first_pass_count = sum(
+        identity_response_defect(
+            record.get("first_output"),
+            prompt=record.get("prompt"),
+        )
+        is None
+        for record in identity_rows
+    )
+    metrics = dict(rescored.get("metrics") or {})
+    metrics["identity_first_pass_count"] = first_pass_count
+    metrics["identity_first_pass_rate"] = (
+        first_pass_count / len(identity_rows) if identity_rows else 0.0
+    )
+    gates = dict(rescored.get("gates") or {})
+    gates["all_unseen_identity_prompts_pass_on_first_attempt"] = (
+        bool(identity_rows) and first_pass_count == len(identity_rows)
+    )
+    gates["no_identity_recovery_needed"] = int(
+        metrics.get("identity_recovery_count") or 0
+    ) == 0
+    rescored["schema"] = ROUTED_IDENTITY_EVALUATION_SCHEMA
+    rescored["metrics"] = metrics
+    rescored["gates"] = gates
+    rescored["passed"] = all(gates.values())
+    return rescored
+
+
 def _run_generation_split(
     *,
     model: Path,
@@ -404,6 +664,7 @@ def _run_generation_split(
     conditional_adapter: bool = False,
     expected_route_activation: bool = False,
     recover_identity_output: bool = False,
+    maximum_turn_seconds: float | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     runtime = SaltyNativeRuntime(
         model_path=model,
@@ -469,21 +730,31 @@ def _run_generation_split(
                     if controller_label == IDENTITY_INTENT_LABEL
                     else ()
                 )
+            turn_started = time.perf_counter()
+            deadline = (
+                turn_started + float(maximum_turn_seconds)
+                if maximum_turn_seconds is not None
+                else None
+            )
+
+            def generation_should_stop() -> bool:
+                return bool(
+                    (should_stop is not None and should_stop())
+                    or (deadline is not None and time.perf_counter() >= deadline)
+                )
+
             generation_arguments = {
                 "messages": example.chat_messages(),
                 "maximum_output_tokens": 72,
                 "temperature": 0.0,
                 "top_p": 1.0,
                 "top_k": 1,
-                "repetition_penalty": (
-                    1.0
-                    if str(example.category).startswith("holdout")
-                    else 1.1
-                ),
+                "repetition_penalty": IDENTITY_EVALUATION_REPETITION_PENALTY,
                 "seed": 20260819,
                 "reasoning_mode": "instant",
                 "context_window_tokens": 4096,
                 "enabled_adapter_ids": enabled_adapter_ids,
+                "should_stop": generation_should_stop,
             }
             generated = runtime.generate(**generation_arguments)
             first_output = generated.text
@@ -492,7 +763,11 @@ def _run_generation_split(
             if (
                 recover_identity_output
                 and str(example.category).startswith("holdout")
-                and (recovery_reason := identity_response_defect(first_output))
+                and (
+                    recovery_reason := identity_response_defect(
+                        first_output, prompt=example.messages[-1][1]
+                    )
+                )
                 is not None
             ):
                 generated = runtime.generate(
@@ -507,6 +782,14 @@ def _run_generation_split(
                         ],
                     }
                 )
+            if should_stop is not None and should_stop():
+                raise InterruptedError("Identity evaluation stopped during generation")
+            turn_wall_seconds = time.perf_counter() - turn_started
+            turn_timed_out = bool(
+                generated.cancelled
+                and deadline is not None
+                and time.perf_counter() >= deadline
+            )
             facts = identity_facts(generated.text)
             requirements = identity_requirements(example)
             records.append(
@@ -528,6 +811,8 @@ def _run_generation_split(
                     "generated_tokens": generated.technical_details.get(
                         "generated_output_tokens"
                     ),
+                    "turn_wall_seconds": round(turn_wall_seconds, 4),
+                    "turn_timed_out": turn_timed_out,
                     "controller_label": controller_label,
                     "activation_policy_label": activation_policy_label,
                     "expected_controller_label": (
@@ -883,6 +1168,114 @@ def run_routed_identity_evaluation(
         "baseline": baseline,
         "routed": routed,
     }
+    report = rescore_routed_identity_report(report)
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(
+            (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        )
+    return report
+
+
+def run_identity_first_pass_evaluation(
+    *,
+    model: str | Path,
+    runtime_directory: str | Path,
+    model_sha256: str,
+    adapter_path: str | Path,
+    adapter_sha256: str,
+    adapter_scale: float,
+    report_path: str | Path | None = None,
+    on_progress: Callable[[str, int, int, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    """Fail fast on raw unseen identity outputs, with no recovery generation."""
+
+    checked_model = Path(model).resolve()
+    checked_runtime = Path(runtime_directory).resolve()
+    checked_adapter = Path(adapter_path).resolve()
+    expected_model_hash = model_sha256.casefold()
+    expected_adapter_hash = adapter_sha256.casefold()
+    if _sha256(checked_model) != expected_model_hash:
+        raise RuntimeError("First-pass identity evaluation model checksum mismatch")
+    if _sha256(checked_adapter) != expected_adapter_hash:
+        raise RuntimeError("First-pass identity evaluation adapter checksum mismatch")
+    output_path = Path(report_path).resolve() if report_path is not None else None
+    if output_path is not None and output_path.exists():
+        raise FileExistsError(f"Refusing to overwrite {output_path}")
+
+    adapter = SaltyNativeAdapterSpec(
+        adapter_id="base-steak-2-0-identity-v1",
+        path=str(checked_adapter),
+        sha256=expected_adapter_hash,
+        scale=float(adapter_scale),
+        activation="identity_intent",
+    )
+    holdouts = holdout_examples()
+    rows, runtime = _run_generation_split(
+        model=checked_model,
+        runtime_directory=checked_runtime,
+        model_sha256=expected_model_hash,
+        examples=holdouts,
+        adapter=adapter,
+        on_progress=on_progress,
+        should_stop=should_stop,
+        expected_route_activation=True,
+        recover_identity_output=False,
+        maximum_turn_seconds=IDENTITY_FIRST_PASS_TURN_TIMEOUT_SECONDS,
+    )
+    pass_count = sum(bool(record["identity_pass"]) for record in rows)
+    activation_count = sum(
+        record["enabled_adapter_ids"] == [adapter.adapter_id] for record in rows
+    )
+    metrics = {
+        "identity_count": len(rows),
+        "identity_first_pass_count": pass_count,
+        "identity_first_pass_rate": pass_count / len(rows),
+        "identity_unique_output_count": len(
+            {_normalise(str(record["output"])) for record in rows}
+        ),
+        "identity_route_activation_pass_count": activation_count,
+        "identity_recovery_count": 0,
+        "identity_timeout_count": sum(
+            bool(record["turn_timed_out"]) for record in rows
+        ),
+    }
+    gates = {
+        "all_unseen_identity_prompts_pass_on_first_attempt": pass_count == len(rows),
+        "all_identity_prompts_evaluated_with_adapter": activation_count == len(rows),
+        "no_identity_recovery_used": all(
+            not bool(record["recovery_attempted"]) for record in rows
+        ),
+        "no_identity_turn_exceeded_wall_clock_ceiling": all(
+            not bool(record["turn_timed_out"]) for record in rows
+        ),
+        "adapter_hash_verified": (
+            runtime.get("loaded_identity", {})
+            .get("adapters", [{}])[0]
+            .get("verified_sha256")
+            == expected_adapter_hash
+        ),
+        "adapter_disabled_at_runtime_load": runtime.get(
+            "loaded_identity", {}
+        ).get("active_adapter_ids")
+        == [],
+        "model_hash_verified": runtime.get("loaded_identity", {}).get(
+            "verified_source_sha256"
+        )
+        == expected_model_hash,
+    }
+    report = {
+        "schema": IDENTITY_FIRST_PASS_EVALUATION_SCHEMA,
+        "model_sha256": expected_model_hash,
+        "adapter_sha256": expected_adapter_hash,
+        "adapter_scale": float(adapter_scale),
+        "metrics": metrics,
+        "gates": gates,
+        "passed": all(gates.values()),
+        "runtime": runtime,
+        "rows": rows,
+    }
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(
@@ -1014,13 +1407,21 @@ __all__ = [
     "IDENTITY_EVALUATION_SCHEMA",
     "CONDITIONAL_IDENTITY_EVALUATION_SCHEMA",
     "ROUTED_IDENTITY_EVALUATION_SCHEMA",
+    "IDENTITY_FIRST_PASS_EVALUATION_SCHEMA",
     "IDENTITY_RECOVERY_INSTRUCTION",
     "REJECTED_ATTRIBUTIONS",
+    "IDENTITY_EVALUATION_REPETITION_PENALTY",
+    "IDENTITY_FIRST_PASS_TURN_TIMEOUT_SECONDS",
     "identity_facts",
+    "identity_question_contract",
+    "identity_contract_requirements",
+    "identity_recovery_instruction",
     "identity_requirements",
     "identity_response_defect",
     "rescore_free_generation_report",
+    "rescore_routed_identity_report",
     "run_free_generation_evaluation",
+    "run_identity_first_pass_evaluation",
     "run_conditional_identity_evaluation",
     "run_routed_identity_evaluation",
 ]

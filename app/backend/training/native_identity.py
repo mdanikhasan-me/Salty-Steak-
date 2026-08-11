@@ -18,10 +18,14 @@ import random
 import time
 from typing import Any, Iterable, Sequence
 
-import gguf
-import numpy as np
-import torch
-import torch.nn.functional as functional
+
+
+
+
+torch: Any = None
+functional: Any = None
+np: Any = None
+gguf: Any = None
 
 from ..runtime.salty_native import SaltyNativeRuntime, SaltyNativeRuntimeError
 from .base_steak_identity_dataset import (
@@ -34,6 +38,35 @@ from .base_steak_identity_dataset import (
 IDENTITY_ADAPTER_SCHEMA = "base-steak-native-identity-adapter-v1"
 
 
+def _load_torch_for_optimisation() -> None:
+    global torch, functional
+    if torch is not None and functional is not None:
+        return
+    import torch as torch_module
+    import torch.nn.functional as functional_module
+
+    torch = torch_module
+    functional = functional_module
+
+
+def _load_numpy_for_tracing() -> None:
+    global np
+    if np is not None:
+        return
+    import numpy as numpy_module
+
+    np = numpy_module
+
+
+def _load_gguf_for_adapter_io() -> None:
+    global gguf
+    if gguf is not None:
+        return
+    import gguf as gguf_module
+
+    gguf = gguf_module
+
+
 @dataclass(frozen=True)
 class NativeIdentitySettings:
     rank: int = 16
@@ -43,6 +76,7 @@ class NativeIdentitySettings:
     retention_weight: float = 3.0
     adapter_l2_weight: float = 0.00002
     top_k_negatives: int = 64
+    sample_batch_size: int = 1024
     gradient_clip: float = 1.0
     seed: int = 20260819
     minimum_train_accuracy: float = 0.99
@@ -54,8 +88,8 @@ class NativeIdentitySettings:
     minimum_epochs_before_early_stop: int = 300
 
     def __post_init__(self) -> None:
-        if not 1 <= self.rank <= 128:
-            raise ValueError("Identity adapter rank must be between 1 and 128")
+        if not 1 <= self.rank <= 512:
+            raise ValueError("Identity adapter rank must be between 1 and 512")
         if not 1 <= self.epochs <= 10_000:
             raise ValueError("Identity adapter epochs must be between 1 and 10000")
         if not 1 <= self.minimum_epochs_before_early_stop <= self.epochs:
@@ -66,6 +100,8 @@ class NativeIdentitySettings:
             raise ValueError("Identity adapter learning rate is invalid")
         if not 1 <= self.top_k_negatives <= 512:
             raise ValueError("Identity adapter top-k negatives are invalid")
+        if not 1 <= self.sample_batch_size <= 65_536:
+            raise ValueError("Identity adapter sample batch size is invalid")
         if not 0 < self.maximum_retention_delta <= 0.01:
             raise ValueError("Identity adapter retention delta gate is invalid")
 
@@ -106,15 +142,37 @@ def _token_ids(runtime: SaltyNativeRuntime, text: str) -> list[int]:
 def identity_vocabulary(
     runtime: SaltyNativeRuntime,
     examples: Iterable[IdentityExample],
+    *,
+    hard_negative_texts: Sequence[str] = (),
 ) -> set[int]:
     tokens: set[int] = set()
     for example in examples:
         tokens.update(_token_ids(runtime, example.response))
+    for text in hard_negative_texts:
+        tokens.update(_token_ids(runtime, text))
     end_tokens = _token_ids(runtime, "<|im_end|>")
     if not end_tokens:
         raise SaltyNativeRuntimeError("The native tokenizer did not expose an end token")
     tokens.update(end_tokens)
     return tokens
+
+
+def _trace_label_offsets(label_count: int, *, retain: bool) -> tuple[int, ...]:
+    """Choose supervised positions without letting retention span all capacity.
+
+    Identity examples need every target token. Retention examples are different:
+    their operational guarantee is adapter-off exact generation, while these
+    traces provide a conservative anchor if the conditional route is ever
+    misclassified. Three positions per answer preserve the beginning, middle,
+    and termination state without a large corpus spanning the entire hidden
+    space and mathematically forcing every adapter direction to zero.
+    """
+
+    if label_count < 1:
+        raise ValueError("Identity tracing requires at least one target token")
+    if not retain:
+        return tuple(range(label_count))
+    return tuple(sorted({0, label_count // 2, label_count - 1}))
 
 
 def _trace_example(
@@ -155,7 +213,8 @@ def _trace_example(
     vocabulary_size = int(dll.llama_vocab_n_tokens(runtime._vocab))
     samples: list[NativeTraceSample] = []
     first_position = len(prefix_tokens) - 1
-    for label_offset, target_token in enumerate(labels):
+    for label_offset in _trace_label_offsets(len(labels), retain=retain):
+        target_token = labels[label_offset]
         position = first_position + label_offset
         hidden_pointer = dll.llama_get_embeddings_ith(runtime._context, position)
         logits_pointer = dll.llama_get_logits_ith(runtime._context, position)
@@ -198,10 +257,16 @@ def collect_native_traces(
     holdout: Sequence[IdentityExample],
     retention: Sequence[IdentityExample],
     top_k: int,
+    hard_negative_texts: Sequence[str] = (),
     on_progress: Any = None,
 ) -> tuple[list[NativeTraceSample], list[NativeTraceSample], list[NativeTraceSample]]:
+    _load_numpy_for_tracing()
     all_identity = [*training, *holdout]
-    core_candidates = identity_vocabulary(runtime, all_identity)
+    core_candidates = identity_vocabulary(
+        runtime,
+        all_identity,
+        hard_negative_texts=hard_negative_texts,
+    )
     total = len(training) + len(holdout) + len(retention)
     completed = 0
 
@@ -284,26 +349,54 @@ def _accuracy(
     tensors: dict[str, torch.Tensor],
     lora_a: torch.Tensor,
     lora_b: torch.Tensor,
+    *,
+    batch_size: int,
 ) -> tuple[float, float]:
     with torch.no_grad():
-        delta = _adapter_delta(
-            tensors["hidden"],
-            tensors["candidates"],
-            lora_a,
-            lora_b,
-        )
-        scores = (tensors["base_logits"] + delta).masked_fill(
-            ~tensors["mask"],
-            -torch.inf,
-        )
-        base_scores = tensors["base_logits"].masked_fill(
-            ~tensors["mask"],
-            -torch.inf,
-        )
-        target_positions = tensors["targets"]
-        adapted = (scores.argmax(dim=1) == target_positions).float().mean()
-        baseline = (base_scores.argmax(dim=1) == target_positions).float().mean()
-        return float(baseline.item()), float(adapted.item())
+        adapted_correct = 0
+        baseline_correct = 0
+        total = int(tensors["hidden"].shape[0])
+        for start in range(0, total, batch_size):
+            stop = min(start + batch_size, total)
+            hidden = tensors["hidden"][start:stop]
+            candidates = tensors["candidates"][start:stop]
+            base_logits = tensors["base_logits"][start:stop]
+            mask = tensors["mask"][start:stop]
+            targets = tensors["targets"][start:stop]
+            delta = _adapter_delta(hidden, candidates, lora_a, lora_b)
+            scores = (base_logits + delta).masked_fill(~mask, -torch.inf)
+            base_scores = base_logits.masked_fill(~mask, -torch.inf)
+            adapted_correct += int((scores.argmax(dim=1) == targets).sum().item())
+            baseline_correct += int(
+                (base_scores.argmax(dim=1) == targets).sum().item()
+            )
+        return baseline_correct / total, adapted_correct / total
+
+
+def _retention_statistics(
+    tensors: dict[str, torch.Tensor],
+    lora_a: torch.Tensor,
+    lora_b: torch.Tensor,
+    *,
+    batch_size: int,
+) -> tuple[float, float]:
+    square_sum = 0.0
+    maximum = 0.0
+    value_count = 0
+    with torch.no_grad():
+        total = int(tensors["hidden"].shape[0])
+        for start in range(0, total, batch_size):
+            stop = min(start + batch_size, total)
+            delta = _adapter_delta(
+                tensors["hidden"][start:stop],
+                tensors["candidates"][start:stop],
+                lora_a,
+                lora_b,
+            ).masked_select(tensors["mask"][start:stop])
+            square_sum += float(delta.square().sum().item())
+            maximum = max(maximum, float(delta.abs().max().item()))
+            value_count += int(delta.numel())
+    return math.sqrt(square_sum / value_count), maximum
 
 
 def load_output_adapter_initialization(
@@ -318,6 +411,8 @@ def load_output_adapter_initialization(
     accepted; incompatible or partial adapters fail closed.
     """
 
+    _load_numpy_for_tracing()
+    _load_gguf_for_adapter_io()
     checked = Path(adapter_path).resolve()
     if not checked.is_file():
         raise FileNotFoundError(checked)
@@ -364,6 +459,8 @@ def train_output_adapter(
     initial_lora_a: np.ndarray | None = None,
     initial_lora_b: np.ndarray | None = None,
 ) -> AdapterTrainingResult:
+    _load_numpy_for_tracing()
+    _load_torch_for_optimisation()
     if device_name == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for native identity post-training")
     device = torch.device(device_name)
@@ -437,62 +534,86 @@ def train_output_adapter(
     best_any: tuple[tuple[float, float, float], dict[str, Any], torch.Tensor, torch.Tensor] | None = None
     best_eligible: tuple[tuple[float, float, float], dict[str, Any], torch.Tensor, torch.Tensor] | None = None
     started = time.perf_counter()
+    batch_size = settings.sample_batch_size
+    train_sample_count = int(train["hidden"].shape[0])
+    retention_value_count = int(retention["mask"].sum().item())
+    used_rows = torch.unique(
+        torch.cat(
+            (
+                train["candidates"][train["mask"]],
+                retention["candidates"][retention["mask"]],
+            )
+        )
+    )
 
     for epoch in range(1, settings.epochs + 1):
         optimiser.zero_grad(set_to_none=True)
-        train_delta = _adapter_delta(
-            train["hidden"], train["candidates"], lora_a, lora_b
-        )
-        train_scores = (train["base_logits"] + train_delta).masked_fill(
-            ~train["mask"],
-            -torch.inf,
-        )
-        supervised_loss = functional.cross_entropy(train_scores, train["targets"])
-        retention_delta = _adapter_delta(
-            retention["hidden"],
-            retention["candidates"],
-            lora_a,
-            lora_b,
-        )
-        retention_loss = (
-            retention_delta.masked_select(retention["mask"]).square().mean()
-        )
-        used_rows = torch.unique(
-            torch.cat(
-                (
-                    train["candidates"][train["mask"]],
-                    retention["candidates"][retention["mask"]],
-                )
+        supervised_loss_sum = 0.0
+        for start in range(0, train_sample_count, batch_size):
+            stop = min(start + batch_size, train_sample_count)
+            train_delta = _adapter_delta(
+                train["hidden"][start:stop],
+                train["candidates"][start:stop],
+                lora_a,
+                lora_b,
             )
-        )
+            train_scores = (
+                train["base_logits"][start:stop] + train_delta
+            ).masked_fill(~train["mask"][start:stop], -torch.inf)
+            chunk_loss = functional.cross_entropy(
+                train_scores,
+                train["targets"][start:stop],
+                reduction="sum",
+            )
+            (chunk_loss / train_sample_count).backward()
+            supervised_loss_sum += float(chunk_loss.detach().item())
+
+        retention_loss_sum = 0.0
+        retention_sample_count = int(retention["hidden"].shape[0])
+        for start in range(0, retention_sample_count, batch_size):
+            stop = min(start + batch_size, retention_sample_count)
+            retention_delta = _adapter_delta(
+                retention["hidden"][start:stop],
+                retention["candidates"][start:stop],
+                lora_a,
+                lora_b,
+            ).masked_select(retention["mask"][start:stop])
+            chunk_loss = retention_delta.square().sum()
+            (
+                settings.retention_weight
+                * chunk_loss
+                / retention_value_count
+            ).backward()
+            retention_loss_sum += float(chunk_loss.detach().item())
+
         regularisation = lora_a.square().mean() + lora_b[used_rows].square().mean()
+        (settings.adapter_l2_weight * regularisation).backward()
+        supervised_loss = supervised_loss_sum / train_sample_count
+        retention_loss = retention_loss_sum / retention_value_count
         loss = (
             supervised_loss
             + settings.retention_weight * retention_loss
-            + settings.adapter_l2_weight * regularisation
+            + settings.adapter_l2_weight * float(regularisation.detach().item())
         )
-        loss.backward()
         torch.nn.utils.clip_grad_norm_((lora_a, lora_b), settings.gradient_clip)
         optimiser.step()
         preserve_retention_subspace()
 
         if epoch == 1 or epoch % 5 == 0 or epoch == settings.epochs:
-            baseline_train, adapted_train = _accuracy(train, lora_a, lora_b)
-            baseline_holdout, adapted_holdout = _accuracy(holdout, lora_a, lora_b)
-            with torch.no_grad():
-                retain_delta = _adapter_delta(
-                    retention["hidden"],
-                    retention["candidates"],
-                    lora_a,
-                    lora_b,
-                ).masked_select(retention["mask"])
-                retain_rms = float(retain_delta.square().mean().sqrt().item())
-                retain_max = float(retain_delta.abs().max().item())
+            baseline_train, adapted_train = _accuracy(
+                train, lora_a, lora_b, batch_size=batch_size
+            )
+            baseline_holdout, adapted_holdout = _accuracy(
+                holdout, lora_a, lora_b, batch_size=batch_size
+            )
+            retain_rms, retain_max = _retention_statistics(
+                retention, lora_a, lora_b, batch_size=batch_size
+            )
             row: dict[str, float | int] = {
                 "epoch": epoch,
-                "loss": float(loss.detach().item()),
-                "supervised_loss": float(supervised_loss.detach().item()),
-                "retention_loss": float(retention_loss.detach().item()),
+                "loss": loss,
+                "supervised_loss": supervised_loss,
+                "retention_loss": retention_loss,
                 "baseline_train_accuracy": baseline_train,
                 "adapted_train_accuracy": adapted_train,
                 "baseline_holdout_accuracy": baseline_holdout,
@@ -506,28 +627,32 @@ def train_output_adapter(
                 float(row["adapted_train_accuracy"]),
                 -float(row["retention_delta_rms"]),
             )
-            snapshot = (
-                quality,
-                dict(row),
-                lora_a.detach().clone(),
-                lora_b.detach().clone(),
-            )
             if best_any is None or quality > best_any[0]:
-                best_any = snapshot
+                best_any = (
+                    quality,
+                    dict(row),
+                    lora_a.detach().cpu().clone(),
+                    lora_b.detach().cpu().clone(),
+                )
             if (
                 float(row["adapted_train_accuracy"])
                 >= settings.minimum_train_accuracy
+                and float(row["adapted_holdout_accuracy"])
+                >= settings.minimum_holdout_accuracy
                 and float(row["retention_delta_max"])
                 <= settings.maximum_retention_delta
                 and (best_eligible is None or quality > best_eligible[0])
             ):
-                best_eligible = snapshot
+                best_eligible = (
+                    quality,
+                    dict(row),
+                    lora_a.detach().cpu().clone(),
+                    lora_b.detach().cpu().clone(),
+                )
             if on_epoch is not None:
                 on_epoch(dict(row))
             if (
-                adapted_train >= settings.minimum_train_accuracy
-                and adapted_holdout >= settings.minimum_holdout_accuracy
-                and retain_max <= settings.maximum_retention_delta
+                best_eligible is not None
                 and epoch >= settings.minimum_epochs_before_early_stop
             ):
                 break
@@ -536,14 +661,12 @@ def train_output_adapter(
     if selected is None:
         raise RuntimeError("Identity adapter training did not produce a checkpoint")
     _, final, best_a, best_b = selected
-    with torch.no_grad():
-        lora_a.copy_(best_a)
-        lora_b.copy_(best_b)
     return AdapterTrainingResult(
-        lora_a=lora_a.detach().cpu().numpy().astype(np.float32, copy=False),
-        lora_b=lora_b.detach().cpu().numpy().astype(np.float32, copy=False),
+        lora_a=best_a.numpy().astype(np.float32, copy=False),
+        lora_b=best_b.numpy().astype(np.float32, copy=False),
         metrics={
             "device": str(device),
+            "sample_batch_size": batch_size,
             "epochs_completed": int(final["epoch"]),
             "elapsed_seconds": round(time.perf_counter() - started, 4),
             "train_sample_count": len(train_samples),
@@ -568,6 +691,7 @@ def export_identity_adapter(
     holdout_dataset_sha256: str,
     retention_dataset_sha256: str,
 ) -> dict[str, Any]:
+    _load_gguf_for_adapter_io()
     output_path = output_path.resolve()
     if output_path.exists():
         raise FileExistsError(f"Refusing to overwrite {output_path}")
@@ -625,6 +749,7 @@ def export_output_adapter(
 ) -> dict[str, Any]:
     """Export another app-owned output-projection LoRA with explicit metadata."""
 
+    _load_gguf_for_adapter_io()
     output_path = output_path.resolve()
     if output_path.exists():
         raise FileExistsError(f"Refusing to overwrite {output_path}")

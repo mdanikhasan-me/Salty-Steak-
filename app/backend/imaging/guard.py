@@ -140,7 +140,10 @@ def inspect(brief: RenderBrief, *, request: str | None = None) -> GuardReport:
 
 
     if requested_terms:
-        brief_terms = _terms(f"{brief.subject} {brief.goal} {brief.brand}")
+
+
+
+        brief_terms = _terms(f"{brief.subject} {brief.brand}")
         shared = len(requested_terms & brief_terms)
         if brief_terms and shared < MIN_SHARED_TERMS:
             report.issues.append(

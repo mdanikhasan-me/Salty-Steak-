@@ -1,9 +1,15 @@
 import { ChevronDown, X } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { useModalFocusTrap } from "../hooks/useModalFocusTrap.js";
 import {
   CONTEXT_WINDOW_PRESETS,
   MAXIMUM_OUTPUT_MODES,
   MAXIMUM_OUTPUT_TOKEN_PRESETS,
+  IMAGE_ASPECT_RATIO_PRESETS,
+  IMAGE_RESOLUTION_PRESETS,
+  IMAGE_STEP_PRESETS,
+  contextWindowForMaximumOutput,
+  imageCanvasForSettings,
   normaliseContextWindowTokens,
   normaliseMaximumOutputMode,
   normaliseMaximumOutputTokens,
@@ -13,6 +19,7 @@ import "../styles/response-settings-sheet.css";
 export function ResponseSettingsSheet({
   title = "Response settings",
   models = [],
+  imageModels = [],
   selectedModelId = "",
   modelLabel = "No model selected",
   modelDetail = "Choose a local language model",
@@ -24,13 +31,31 @@ export function ResponseSettingsSheet({
   onOpenModels,
   onReset,
   onClose,
+  initialSection = "response",
 }) {
   const sheetRef = useModalFocusTrap({ onClose });
+  const imageSectionRef = useRef(null);
   const availableModels = normaliseModels(models, selectedModelId, modelLabel);
   const status = modelStatusLabel || (modelReady ? "Ready" : "Needs setup");
   const contextWindow = normaliseContextWindowTokens(settings.context_window_tokens);
   const outputMode = normaliseMaximumOutputMode(settings.maximum_output_mode);
   const manualOutputTokens = normaliseMaximumOutputTokens(settings.maximum_output_tokens);
+  const imageCanvas = imageCanvasForSettings(
+    settings.image_resolution,
+    settings.image_aspect_ratio,
+  );
+  const availableImageModels = imageModels.length
+    ? imageModels
+    : [{ id: "steak-gen-1-scaledfp8", name: "Steak Gen 1 ScaledFP8" }];
+
+  useEffect(() => {
+    if (initialSection !== "image") return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      imageSectionRef.current?.scrollIntoView({ block: "start" });
+      imageSectionRef.current?.querySelector("select")?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialSection]);
 
   function update(patch) {
     onSettingsChange((current) => ({ ...current, ...patch }));
@@ -49,6 +74,17 @@ export function ResponseSettingsSheet({
       ...(maximum_output_mode === "manual"
         ? { maximum_output_tokens: manualOutputTokens }
         : {}),
+    });
+  }
+
+  function selectManualOutput(event) {
+    const maximum_output_tokens = Number(event.currentTarget.value);
+    update({
+      maximum_output_tokens,
+      context_window_tokens: contextWindowForMaximumOutput(
+        maximum_output_tokens,
+        contextWindow,
+      ),
     });
   }
 
@@ -140,7 +176,7 @@ export function ResponseSettingsSheet({
                   <select
                     aria-label="Manual max tokens"
                     value={manualOutputTokens}
-                    onChange={(event) => update({ maximum_output_tokens: Number(event.currentTarget.value) })}
+                    onChange={selectManualOutput}
                   >
                     {MAXIMUM_OUTPUT_TOKEN_PRESETS.map((tokens) => (
                       <option key={tokens} value={tokens}>{tokens.toLocaleString()}</option>
@@ -190,6 +226,69 @@ export function ResponseSettingsSheet({
               </label>
             </div>
           </details>
+        </section>
+
+        <section ref={imageSectionRef} className="response-settings-sheet__response" aria-labelledby="image-generation-title">
+          <div className="response-settings-sheet__section-heading response-settings-sheet__section-heading--compact">
+            <div>
+              <span>Image generation</span>
+              <h3 id="image-generation-title">Model, canvas, and quality</h3>
+              <p>Used whenever this conversation asks Steak Gen to create an image.</p>
+            </div>
+          </div>
+          <div className="response-settings-sheet__quick-grid">
+            <label className="response-settings-sheet__preset">
+              <span>Image model</span>
+              <select
+                aria-label="Image model"
+                value={settings.image_model_id}
+                onChange={(event) => update({ image_model_id: event.currentTarget.value })}
+              >
+                {availableImageModels.map((model) => (
+                  <option key={model.id} value={model.id}>{model.name || model.display_name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="response-settings-sheet__preset">
+              <span>Aspect ratio</span>
+              <select
+                aria-label="Image aspect ratio"
+                value={settings.image_aspect_ratio}
+                onChange={(event) => update({ image_aspect_ratio: event.currentTarget.value })}
+              >
+                {IMAGE_ASPECT_RATIO_PRESETS.map((ratio) => (
+                  <option key={ratio} value={ratio}>{ratio}</option>
+                ))}
+              </select>
+            </label>
+            <label className="response-settings-sheet__preset">
+              <span>Resolution</span>
+              <select
+                aria-label="Image resolution"
+                value={settings.image_resolution}
+                onChange={(event) => update({ image_resolution: Number(event.currentTarget.value) })}
+              >
+                {IMAGE_RESOLUTION_PRESETS.map((resolution) => (
+                  <option key={resolution} value={resolution}>{resolution}px long edge</option>
+                ))}
+              </select>
+            </label>
+            <label className="response-settings-sheet__preset">
+              <span>Quality</span>
+              <select
+                aria-label="Image quality"
+                value={settings.image_steps}
+                onChange={(event) => update({ image_steps: Number(event.currentTarget.value) })}
+              >
+                {IMAGE_STEP_PRESETS.map((steps) => (
+                  <option key={steps} value={steps}>{steps} steps</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="response-settings-sheet__image-canvas">
+            Canvas <strong>{imageCanvas.width} × {imageCanvas.height}</strong>
+          </p>
         </section>
       </div>
     </aside>

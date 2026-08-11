@@ -30,6 +30,9 @@ export function formatDate(value) {
 export function formatDuration(seconds) {
   const total = Number(seconds);
   if (!Number.isFinite(total) || total < 0) return "Not reported";
+  if (total > 0 && total < 10) {
+    return `${total.toFixed(1).replace(/\.0$/, "")} sec`;
+  }
   if (total < 60) return `${Math.round(total)} sec`;
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);

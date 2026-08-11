@@ -551,7 +551,10 @@ def _encode_prompt_serially(
         )
         inputs = tokenizer(
             [rendered],
-            padding="max_length",
+
+
+
+            padding="longest",
             max_length=max_sequence_length,
             truncation=True,
             return_tensors="pt",
@@ -594,13 +597,30 @@ def generate_one_image(
     import torch
     from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler, ZImagePipeline
 
-    emit = on_event or (lambda _event: None)
+    raw_emit = on_event or (lambda _event: None)
+    generation_started = time.perf_counter()
+
+    def emit(event: dict[str, Any]) -> None:
+        raw_emit(
+            {
+                **event,
+                "elapsed_seconds": round(
+                    time.perf_counter() - generation_started,
+                    6,
+                ),
+            }
+        )
     destination = request.validate(paths)
     if destination.exists():
         raise SteakGenError(f"Refusing to overwrite an existing image: {destination}")
     cancellation.raise_if_cancelled()
     emit({"phase": "verifying_bundle"})
-    verification = verify_exact_bundle(paths, verify_hashes=request.verify_hashes)
+    if request.verify_hashes:
+        from .steak_gen import verify_exact_bundle_cached
+
+        verification = verify_exact_bundle_cached(paths)
+    else:
+        verification = verify_exact_bundle(paths, verify_hashes=False)
     emit({"phase": "bundle_verified", **verification})
 
     prompt_embeds: list[Any] = []

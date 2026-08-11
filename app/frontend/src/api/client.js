@@ -250,6 +250,27 @@ export const api = {
     operationRequest(`/operations/${encodeURIComponent(id)}/stop`, {}, requestKey),
 
   getChatStatus: () => request("/chat/status"),
+  inspectChatAttachment: (file) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return request("/chat/attachments/inspect", {
+      method: "POST",
+      body: form,
+      timeout: 120_000,
+    });
+  },
+  listChatMemories: (limit = 200) =>
+    request(withQuery("/chat/memory", { limit })),
+  saveChatMemory: (note) =>
+    request("/chat/memory", { method: "POST", body: { note } }),
+  saveConversationMemory: (conversationId, note = "") =>
+    request(`/chat/conversations/${encodeURIComponent(conversationId)}/memory`, {
+      method: "POST",
+      body: { note },
+    }),
+  forgetChatMemory: (memoryId) =>
+    request(`/chat/memory/${encodeURIComponent(memoryId)}`, { method: "DELETE" }),
+  clearChatMemories: () => request("/chat/memory", { method: "DELETE" }),
   startAgentTask: (conversationId, instruction, requestKey, generationSettings) =>
     operationRequest(
       `/chat/conversations/${encodeURIComponent(conversationId)}/agent-tasks`,
@@ -271,7 +292,9 @@ export const api = {
     prompt,
     visionInputToken,
     requestKey,
-    maximumOutputTokens = 128,
+    maximumOutputTokens = 256,
+    generationSettings = null,
+    attachments = [],
   ) => request(`/chat/conversations/${encodeURIComponent(conversationId)}/vision-analyses`, {
     method: "POST",
     requestKey,
@@ -279,6 +302,9 @@ export const api = {
       prompt,
       vision_input_token: visionInputToken,
       maximum_output_tokens: maximumOutputTokens,
+      generation_settings: generationSettings,
+      attachments,
+      continue_with_chat: true,
       request_key: requestKey,
     },
     timeout: CHAT_TIMEOUT_MS,
@@ -300,7 +326,13 @@ export const api = {
   listConversations: () => request("/chat/conversations"),
   createConversation: () => request("/chat/conversations", { method: "POST", body: {} }),
   getConversation: (id) => request(`/chat/conversations/${encodeURIComponent(id)}`),
-  sendMessage: (conversationId, content, requestKey, generationSettings = null) =>
+  sendMessage: (
+    conversationId,
+    content,
+    requestKey,
+    generationSettings = null,
+    attachments = [],
+  ) =>
     request(`/chat/conversations/${encodeURIComponent(conversationId)}/messages`, {
       method: "POST",
       requestKey,
@@ -308,6 +340,7 @@ export const api = {
         content,
         request_key: requestKey,
         generation_settings: generationSettings,
+        attachments,
       },
       timeout: CHAT_TIMEOUT_MS,
     }),

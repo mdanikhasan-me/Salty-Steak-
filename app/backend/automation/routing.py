@@ -38,6 +38,7 @@ from .broker import (
     WINDOW_CONTROL_CAPABILITY,
     UI_AUTOMATION_CAPABILITY,
     BROWSER_CAPABILITY,
+    DISCORD_INSPECT_CAPABILITY,
 )
 
 
@@ -79,6 +80,11 @@ class CapabilityTier:
 
 
 CAPABILITY_TIERS = (
+    CapabilityTier(
+        DISCORD_INSPECT_CAPABILITY,
+        TIER_NATIVE,
+        "Inspect Discord through its bounded native accessibility adapter.",
+    ),
 
 
 
@@ -378,7 +384,11 @@ def resolve_execution(
 
 
             if resolution == "known_application" and "wait_ms" not in resolved:
-                resolved["wait_ms"] = 600
+
+
+
+
+                resolved["wait_ms"] = 5_000 if exact == "discord" else 600
     elif (
         capability == BROWSER_CAPABILITY
         and not str(resolved.get("command") or "").strip()

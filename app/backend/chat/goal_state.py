@@ -331,6 +331,67 @@ def runtime_observer(
     def observe(predicate: Predicate) -> bool | None:
         if predicate.kind in {"present", "absent"}:
             return filesystem(predicate)
+        if predicate.kind == "discord_report_valid":
+            if (
+                str(orchestration.get("kind") or "") != "action"
+                or str(orchestration.get("capability") or "") != "discord.inspect"
+                or str(orchestration.get("status") or "") != "completed"
+            ):
+                return False
+            steps = [
+                dict(step)
+                for step in orchestration.get("steps") or []
+                if isinstance(step, Mapping)
+            ]
+            if any(
+                str(step.get("action") or "")
+                not in {"discord.inspect", "respond"}
+                for step in steps
+            ):
+                return False
+            inspections = [
+                step
+                for step in steps
+                if str(step.get("action") or "") == "discord.inspect"
+                and str(step.get("status") or "") == "succeeded"
+            ]
+            find = next(
+                (
+                    dict(step.get("observation") or {})
+                    for step in inspections
+                    if str((step.get("observation") or {}).get("operation") or "")
+                    == "find_channels"
+                ),
+                {},
+            )
+            scan = next(
+                (
+                    dict(step.get("observation") or {})
+                    for step in inspections
+                    if str((step.get("observation") or {}).get("operation") or "")
+                    == "scan_batch"
+                ),
+                {},
+            )
+            candidate_count = int(
+                find.get("candidate_index_size") or find.get("channel_count") or 0
+            )
+            attempted = len(scan.get("scans") or []) + len(
+                scan.get("scan_gaps") or []
+            )
+            answer = " ".join(
+                str(orchestration.get("answer") or "").casefold().split()
+            )
+            honest_scope = any(
+                phrase in answer
+                for phrase in (
+                    "not a complete inventory",
+                    "inventory remains incomplete",
+                    "coverage is incomplete",
+                    "coverage is limited",
+                )
+            )
+            return bool(candidate_count > 0 and attempted > 0 and answer and honest_scope)
         if predicate.kind == "artifact_valid":
             subjects = (
                 _artifact_paths(orchestration)

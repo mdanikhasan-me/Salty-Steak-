@@ -4,6 +4,7 @@ import {
   Check,
   ChevronRight,
   Copy,
+  Download,
   FileCode2,
   RotateCcw,
 } from "lucide-react";
@@ -26,6 +27,8 @@ import { AgentTimeline } from "./AgentTimeline.jsx";
 import { executionEvents, timelineFor } from "../workflows/agentTimeline.mjs";
 import { HostActionProposal } from "./HostActionProposal.jsx";
 import { RichText } from "./RichText.jsx";
+import { generationFailureForMessage } from "../workflows/generationFailure.mjs";
+import { codeArtifactsFromText } from "../workflows/codeArtifacts.mjs";
 
 export function ChatMessage({
   message,
@@ -97,6 +100,10 @@ export function ChatMessage({
   const degradedOutput = assistant
     && !actionProposal
     && looksDegradedOutput(visibleContent.answer);
+  const generationFailure = generationFailureForMessage(message);
+  const codeArtifacts = assistant && details?.code_file_artifacts_allowed === true
+    ? codeArtifactsFromText(visibleContent.answer)
+    : [];
 
   useEffect(() => () => window.clearTimeout(hideTimerRef.current), []);
 
@@ -192,9 +199,12 @@ export function ChatMessage({
               />
               <figcaption>
                 <span>{generatedImage.modelName}</span>
-                <a href={generatedImage.url} download={`salty-steak-${generatedImage.id}.png`}>
+                <button
+                  type="button"
+                  onClick={() => saveGeneratedImage(generatedImage)}
+                >
                   Save image
-                </a>
+                </button>
               </figcaption>
             </figure>
           ) : null}
@@ -203,6 +213,25 @@ export function ChatMessage({
           ) : (!actionProposal && !generatedImage ? (
             <p className="message__content">No response text was returned.</p>
           ) : null)}
+          {codeArtifacts.length ? (
+            <div className="message-code-artifacts" aria-label="Generated files">
+              {codeArtifacts.map((artifact) => (
+                <button
+                  type="button"
+                  className="message-code-artifact"
+                  key={artifact.id}
+                  onClick={() => downloadCodeArtifact(artifact)}
+                >
+                  <FileCode2 aria-hidden="true" />
+                  <span>
+                    <strong>{artifact.filename}</strong>
+                    <small>{artifact.language} · {formatNumber(artifact.bytes)} bytes</small>
+                  </span>
+                  <Download aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          ) : null}
           {actionProposal && !actionDismissed && !generatedImage ? (
             <HostActionProposal
               proposal={actionProposal}
@@ -220,6 +249,15 @@ export function ChatMessage({
               <p>
                 <strong>Malformed output.</strong>{" "}
                 Retry this turn or choose a verified version in Versions.
+              </p>
+            </div>
+          ) : null}
+          {generationFailure ? (
+            <div className="message-quality-warning" role="alert">
+              <AlertTriangle aria-hidden="true" />
+              <p>
+                <strong>Response failed.</strong>{" "}
+                {generationFailure.message} Your message was kept and restored for retry.
               </p>
             </div>
           ) : null}
@@ -279,6 +317,47 @@ export function ChatMessage({
       </div>
     </article>
   );
+}
+
+function downloadCodeArtifact(artifact) {
+  if (requestNativeSave({
+    source: "text",
+    suggested_name: artifact.filename,
+    content: artifact.content,
+  })) return;
+  const blob = new Blob([artifact.content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = artifact.filename;
+  link.style.display = "none";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function saveGeneratedImage(image) {
+  const suggested = `salty-steak-${image.id}.png`;
+  if (requestNativeSave({
+    source: "url",
+    suggested_name: suggested,
+    url: image.url,
+  })) return;
+  const link = document.createElement("a");
+  link.href = image.url;
+  link.download = suggested;
+  link.style.display = "none";
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+export function requestNativeSave(payload) {
+  const bridge = window.chrome?.webview;
+  if (!bridge || typeof bridge.postMessage !== "function") return false;
+  bridge.postMessage({ type: "save_file", ...payload });
+  return true;
 }
 
 function messageReasoningMode(details) {

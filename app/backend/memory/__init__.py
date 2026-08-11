@@ -6,5 +6,13 @@ from .store import (
     MemoryRefused,
     SemanticMemory,
 )
+from .mission import AutomationMissionMemory, MISSION_MEMORY_SCHEMA
 
-__all__ = ["MEMORY_KINDS", "MemoryRecord", "MemoryRefused", "SemanticMemory"]
+__all__ = [
+    "AutomationMissionMemory",
+    "MEMORY_KINDS",
+    "MISSION_MEMORY_SCHEMA",
+    "MemoryRecord",
+    "MemoryRefused",
+    "SemanticMemory",
+]

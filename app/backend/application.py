@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping
 from .automation import AutomationBroker
 from .api.responses import BinaryFileResponse
 from .chat import ChatService
+from .chat.attachments import inspect_chat_attachment
 from .chat.vision_inputs import VisionInputStore
 from .database.control import (
     ACTIVE_OPERATION_STATES,
@@ -62,6 +63,9 @@ from .training.identity_workflow import run_identity_post_training
 from .training.identity_dialogue_dataset import (
     holdout_examples as identity_holdout_examples,
     training_examples as identity_training_examples,
+)
+from .training.base_steak_identity_dataset import (
+    retention_examples as identity_retention_examples,
 )
 from .training.policy import (
     completion_outcome_for_policy,
@@ -355,6 +359,7 @@ class Application:
         if (
             self.vision_broker is not None
             and self.vision_broker.stage_manifest_path.is_file()
+            and not self.vision_broker.status().get("application_available")
         ):
             self._vision_verification_thread = threading.Thread(
                 target=self._verify_staged_vision_runtime,
@@ -377,12 +382,33 @@ class Application:
             for companion in bundle.get("companion_artifacts", [])
             if companion.get("role") in {"text_adapter", "routing_adapter"}
         ]
+        identity_adapters = [
+            companion
+            for companion in declared_adapters
+            if companion.get("role") == "text_adapter"
+            and companion.get("activation") == "identity_intent"
+        ]
+        identity_classifier = next(
+            (
+                companion
+                for companion in bundle.get("companion_artifacts", [])
+                if companion.get("role") == "identity_subroute_classifier"
+            ),
+            None,
+        )
+        specialist_layout_ready = (
+            len(identity_adapters) <= 1
+            or bool(
+                identity_classifier
+                and identity_classifier.get("current_size_matches")
+            )
+        )
         adapters_ready = (
             bool(declared_adapters)
             or not bool(bundle.get("identity_adapter_required"))
         ) and all(
             companion.get("current_size_matches") for companion in declared_adapters
-        )
+        ) and specialist_layout_ready
         if not (
             bundle.get("runtime_family") == "salty_native_steak20"
             and bundle.get("current_size_matches")
@@ -448,6 +474,7 @@ class Application:
         if self._vision_verification_thread is not None:
             self._vision_verification_thread.join(timeout=30)
         if self.model_bundle_runtime is not None:
+            self.chat.wait_for_deferred_rewarm(timeout=30)
             runtime_identity = self.model_bundle_runtime.describe()
             self.model_bundle_runtime.unload()
             if self._native_warmup_thread is not None:
@@ -464,6 +491,8 @@ class Application:
                         (utc_now(), str(runtime_id)),
                     )
         self.runtime.unload()
+        self.chat.mission_memory.close()
+        self.chat.memory.close()
 
     def _record_configuration(self) -> None:
         self.database.set_config_reference(
@@ -1958,6 +1987,10 @@ class Application:
             == metrics.get("retention_count")
             and metrics.get("retention_output_clean_count")
             == metrics.get("retention_count")
+            and int(metrics.get("identity_count") or 0)
+            >= len(identity_holdout_examples())
+            and int(metrics.get("retention_count") or 0)
+            >= len(identity_retention_examples())
         )
         return {
             "available": available,
@@ -1968,11 +2001,11 @@ class Application:
                 if bundle and bundle.get("identity_trainer")
                 else "MD Anik Hasan (Sawlper)"
             ),
-            "method": "native_rank_64_output_projection_lora_with_learned_identity_route",
+            "method": "native_rank_64_output_projection_lora_with_hard_negative_mining_and_learned_identity_route",
             "hardcoded_response_used": False,
             "training_examples": len(identity_training_examples()),
             "unseen_identity_prompts": len(identity_holdout_examples()),
-            "capability_retention_prompts": 40,
+            "capability_retention_prompts": len(identity_retention_examples()),
             "adapter": adapter,
             "routing_adapter": routing_adapter,
             "routing": {
@@ -2118,7 +2151,7 @@ class Application:
                     "hardcoded_response_used": False,
                     "training_examples": len(identity_training_examples()),
                     "unseen_identity_prompts": len(identity_holdout_examples()),
-                    "capability_retention_prompts": 40,
+                    "capability_retention_prompts": len(identity_retention_examples()),
                 },
                 success_notification=Notification(
                     "success",
@@ -4883,6 +4916,19 @@ class Application:
             )
         return status
 
+    def inspect_chat_attachment(
+        self,
+        path: str | Path,
+        *,
+        filename: str,
+        media_type: str = "",
+    ) -> dict[str, Any]:
+        return inspect_chat_attachment(
+            path,
+            filename=filename,
+            media_type=media_type,
+        )
+
     def list_conversations(self) -> list[dict[str, Any]]:
         return self.chat.list_conversations()
 
@@ -4891,6 +4937,23 @@ class Application:
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         return self.chat.get_conversation(conversation_id)
+
+    def list_chat_memories(self, limit: int = 200) -> dict[str, Any]:
+        return self.chat.list_memories(limit=limit)
+
+    def save_chat_memory(self, note: str) -> dict[str, Any]:
+        return self.chat.save_memory(note)
+
+    def save_conversation_memory(
+        self, conversation_id: str, note: str | None = None
+    ) -> dict[str, Any]:
+        return self.chat.save_conversation_memory(conversation_id, note)
+
+    def forget_chat_memory(self, memory_id: str) -> dict[str, Any]:
+        return self.chat.forget_memory(memory_id)
+
+    def clear_chat_memories(self) -> dict[str, Any]:
+        return self.chat.clear_memories()
 
     def rename_conversation(
         self, conversation_id: str, title: str
@@ -4946,11 +5009,13 @@ class Application:
         content: str,
         request_key: str | None = None,
         generation_settings: dict[str, Any] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        continue_with_chat: bool = False,
     ) -> dict[str, Any]:
         return self._idempotent_operation(
             request_key,
             lambda: self.chat.start_message(
-                conversation_id, content, generation_settings
+                conversation_id, content, generation_settings, attachments
             ),
         )
 
@@ -5053,6 +5118,9 @@ class Application:
         vision_input_token: str,
         request_key: str | None,
         maximum_output_tokens: int = 128,
+        generation_settings: dict[str, Any] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        continue_with_chat: bool = False,
     ) -> dict[str, Any]:
         if request_key is None:
             raise PermissionError(
@@ -5066,6 +5134,9 @@ class Application:
                 vision_input_token,
                 permission_request_id=request_key,
                 maximum_output_tokens=maximum_output_tokens,
+                generation_settings=generation_settings,
+                attachments=attachments,
+                continue_with_chat=continue_with_chat,
             ),
         )
 

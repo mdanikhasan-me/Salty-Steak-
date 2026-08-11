@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 OPERATION_STATES = frozenset(
     {"queued", "running", "stop_requested", "completed", "interrupted", "failed"}
 )
@@ -654,7 +654,7 @@ CREATE TABLE IF NOT EXISTS automation_grants (
         CHECK(capability IN (
             'terminal.execute','files.manage','screen.capture','input.control',
             'application.launch','window.control','ui.automation',
-            'browser.control'
+            'browser.control','discord.inspect'
         )),
     enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
     constraints_json TEXT NOT NULL DEFAULT '{}',
@@ -673,7 +673,7 @@ CREATE TABLE IF NOT EXISTS automation_audit_records (
         CHECK(capability IN (
             'terminal.execute','files.manage','screen.capture','input.control',
             'application.launch','window.control','ui.automation',
-            'browser.control'
+            'browser.control','discord.inspect'
         )),
     outcome TEXT NOT NULL
         CHECK(outcome IN (
@@ -852,7 +852,7 @@ class Database:
                 raise DatabaseError(
                     "Refusing to reuse a database not created by the clean application"
                 )
-            if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, SCHEMA_VERSION):
+            if version not in range(SCHEMA_VERSION + 1):
                 raise DatabaseError(
                     f"Unsupported database schema {version}; expected {SCHEMA_VERSION}"
                 )
@@ -904,7 +904,7 @@ class Database:
             "SELECT sql FROM sqlite_master "
             "WHERE type = 'table' AND name = 'automation_grants'"
         ).fetchone()
-        return definition is not None and "browser.control" not in str(definition[0])
+        return definition is not None and "discord.inspect" not in str(definition[0])
 
     @staticmethod
     def _rename_legacy_automation_tables(connection: sqlite3.Connection) -> None:

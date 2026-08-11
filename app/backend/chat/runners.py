@@ -973,9 +973,18 @@ def _attach_validated_citations(
     safe = re.sub(r"https?://[^\s<>()\]]+", "", safe, flags=re.IGNORECASE)
     for index, link in enumerate(protected):
         safe = safe.replace(f"@@SALTY_VALIDATED_LINK_{index}@@", link)
-    safe = "\n".join(
+    cleaned_lines = [
         re.sub(r"[ \t]{2,}", " ", line).rstrip()
         for line in safe.splitlines()
+    ]
+
+
+
+
+    safe = "\n".join(
+        line
+        for line in cleaned_lines
+        if not re.fullmatch(r"\s*(?:[-+*]|\d+[.)])\s*", line)
     )
     safe = re.sub(r"\s+([.,;:])", r"\1", safe)
     safe = re.sub(r"\n{3,}", "\n\n", safe).strip()
@@ -1106,6 +1115,14 @@ class LiveRunners:
             [list[dict[str, str]], Callable[[Mapping[str, Any]], None]], str
         ]
         | None = None,
+        generate_structured_with_preview: Callable[
+            [list[dict[str, str]], Callable[[Mapping[str, Any]], None]], str
+        ]
+        | None = None,
+        generate_final_with_preview: Callable[
+            [list[dict[str, str]], Callable[[Mapping[str, Any]], None]], str
+        ]
+        | None = None,
         task: Any = None,
         capabilities: Sequence[str] = (),
         authority_mode: str = "ask_every_time",
@@ -1113,12 +1130,15 @@ class LiveRunners:
         search: Callable[[str], Sequence[Mapping[str, Any]]] | None = None,
         read: Callable[[str], Mapping[str, Any]] | None = None,
         memory: Any = None,
+        mission_memory: Any = None,
         on_step: Callable[[Mapping[str, Any]], None] | None = None,
+        on_agent_progress: Callable[[Mapping[str, Any]], None] | None = None,
         on_research: Callable[[Mapping[str, Any]], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
         describe_screenshot: Callable[[str], str] | None = None,
         continue_until_satisfied: bool = False,
-        follow_through_steps: int = 10,
+        follow_through_steps: int = 8_192,
+        mission_duration_seconds: float = 8 * 60 * 60,
         established: str = "",
         checkpoint_path: str | Path | None = None,
         research_profile: str = "verification",
@@ -1129,6 +1149,12 @@ class LiveRunners:
         self.generate = generate
         self.generate_structured = generate_structured or generate
         self.generate_with_preview = generate_with_preview
+        self.generate_structured_with_preview = (
+            generate_structured_with_preview or generate_with_preview
+        )
+        self.generate_final_with_preview = (
+            generate_final_with_preview or generate_with_preview
+        )
         self.task = task
         self.capabilities = list(capabilities)
         self.authority_mode = authority_mode
@@ -1139,7 +1165,9 @@ class LiveRunners:
 
 
         self.memory = memory
+        self.mission_memory = mission_memory
         self.on_step = on_step
+        self.on_agent_progress = on_agent_progress
 
         self.on_research = on_research
         self.should_stop = should_stop
@@ -1151,6 +1179,7 @@ class LiveRunners:
 
 
         self.follow_through_steps = max(1, int(follow_through_steps))
+        self.mission_duration_seconds = max(0.001, float(mission_duration_seconds))
 
 
 
@@ -1255,22 +1284,38 @@ class LiveRunners:
             return {"answer": "That action is not available.", "status": "declined"}
         outcome = AgentLoop(
             broker=self.broker,
-            generate=self.generate,
+            generate=self.generate_structured or self.generate,
+            generate_with_preview=self.generate_structured_with_preview,
+            generate_final_with_preview=self.generate_final_with_preview,
             capabilities=self.capabilities,
             authority_mode=self.authority_mode,
             approve=self.approve,
             task=self.task,
             memory=self.memory,
+            mission_memory=self.mission_memory,
             on_step=self.on_step,
+            on_progress=self.on_agent_progress,
             should_stop=self.should_stop,
             describe_screenshot=self.describe_screenshot,
-            max_iterations=8,
+            max_iterations=self.follow_through_steps,
+            max_duration_seconds=self.mission_duration_seconds,
+            checkpoint_path=self.checkpoint_path,
             established=self.established,
         ).run(request)
+        agent_task = {
+            **dict(outcome.get("task") or {}),
+            "state": outcome.get("state"),
+            "steps": list(outcome.get("steps") or []),
+            "step_count": outcome.get("step_count"),
+            "steps_truncated": bool(outcome.get("steps_truncated")),
+        }
         return {
             "answer": str(outcome.get("answer") or ""),
             "status": outcome.get("state"),
             "steps": outcome.get("steps", []),
+            "step_count": outcome.get("step_count"),
+            "agent_task": agent_task,
+            "metrics": dict(outcome.get("metrics") or {}),
         }
 
 
@@ -1343,16 +1388,22 @@ class LiveRunners:
 
                 outcome = AgentLoop(
                     broker=self.broker,
-                    generate=self.generate,
+                    generate=self.generate_structured or self.generate,
+                    generate_with_preview=self.generate_structured_with_preview,
+                    generate_final_with_preview=self.generate_final_with_preview,
                     capabilities=self.capabilities,
                     authority_mode=self.authority_mode,
                     approve=self.approve,
                     task=self.task,
                     memory=self.memory,
+                    mission_memory=self.mission_memory,
                     on_step=self.on_step,
+                    on_progress=self.on_agent_progress,
                     should_stop=self.should_stop,
                     describe_screenshot=self.describe_screenshot,
                     max_iterations=self.follow_through_steps,
+                    max_duration_seconds=self.mission_duration_seconds,
+                    checkpoint_path=self.checkpoint_path,
                     established=self.established,
                 ).run(
                     request,
@@ -1366,10 +1417,20 @@ class LiveRunners:
                         }
                     ),
                 )
+                agent_task = {
+                    **dict(outcome.get("task") or {}),
+                    "state": outcome.get("state"),
+                    "steps": list(outcome.get("steps") or []),
+                    "step_count": outcome.get("step_count"),
+                    "steps_truncated": bool(outcome.get("steps_truncated")),
+                }
                 return {
                     "answer": str(outcome.get("answer") or ""),
                     "status": outcome.get("state"),
                     "steps": outcome.get("steps", []),
+                    "step_count": outcome.get("step_count"),
+                    "agent_task": agent_task,
+                    "metrics": dict(outcome.get("metrics") or {}),
                     "invalid_plan_recovered_to_agent": True,
                     "plan_rejected": str(error),
                 }
@@ -1580,19 +1641,32 @@ class LiveRunners:
         }
         outcome = AgentLoop(
             broker=self.broker,
-            generate=self.generate,
+            generate=self.generate_structured or self.generate,
+            generate_with_preview=self.generate_structured_with_preview,
+            generate_final_with_preview=self.generate_final_with_preview,
             capabilities=self.capabilities,
             authority_mode=self.authority_mode,
             approve=self.approve,
             task=self.task,
             memory=self.memory,
+            mission_memory=self.mission_memory,
             on_step=self.on_step,
+            on_progress=self.on_agent_progress,
             should_stop=self.should_stop,
             describe_screenshot=self.describe_screenshot,
             max_iterations=self.follow_through_steps,
+            max_duration_seconds=self.mission_duration_seconds,
+            checkpoint_path=self.checkpoint_path,
             established=self.established,
         ).run(request, opening=json.dumps(opening, default=str))
         steps = list(outcome.get("steps") or [])
+        agent_task = {
+            **dict(outcome.get("task") or {}),
+            "state": outcome.get("state"),
+            "steps": steps,
+            "step_count": outcome.get("step_count"),
+            "steps_truncated": bool(outcome.get("steps_truncated")),
+        }
         return {
             "answer": str(outcome.get("answer") or "")
             or _describe_effect(route, result),
@@ -1601,6 +1675,9 @@ class LiveRunners:
             "status": outcome.get("state") or "succeeded",
             "result": dict(result),
             "steps": steps,
+            "step_count": outcome.get("step_count"),
+            "agent_task": agent_task,
+            "metrics": dict(outcome.get("metrics") or {}),
         }
 
     def _plan_answer(self, result: Any, request: str) -> str:

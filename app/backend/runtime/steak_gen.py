@@ -30,6 +30,7 @@ TRANSFORMER_SIZE_BYTES = 7_245_310_296
 TRANSFORMER_SHA256 = (
     "aff8c784b9e703908b1c2e84f228c6f523504e9f9dd0307d661df8be916d5a09"
 )
+INTEGRITY_CACHE_SCHEMA = "salty-steak-image-bundle-integrity-cache-v1"
 
 
 class SteakGenError(RuntimeError):
@@ -296,6 +297,111 @@ def verify_exact_bundle(
         "hashes_recomputed": bool(verify_hashes),
         "embedded_metadata_visibility": "technical_only",
         "upstream_transformer_included": False,
+    }
+
+
+def _bundle_stat_fingerprint(
+    paths: SteakGenPaths,
+    support_files: Mapping[str, PinnedFile],
+) -> tuple[str, list[dict[str, object]]]:
+    files = [paths.transformer_path] + [
+        paths.support_root / relative for relative in sorted(support_files)
+    ]
+    records: list[dict[str, object]] = []
+    for path in files:
+        stat = path.stat()
+        records.append(
+            {
+                "path": path.relative_to(paths.bundle_root).as_posix(),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    encoded = json.dumps(records, separators=(",", ":"), sort_keys=True).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest(), records
+
+
+def verify_exact_bundle_cached(
+    paths: SteakGenPaths,
+    *,
+    support_files: Mapping[str, PinnedFile] = PINNED_SUPPORT_FILES,
+    transformer_size: int = TRANSFORMER_SIZE_BYTES,
+    transformer_sha256: str = TRANSFORMER_SHA256,
+) -> dict[str, Any]:
+    """Reuse a full local hash audit while every source file is unchanged.
+
+    The image worker used to reread roughly 15 GiB before every picture. The
+    first full audit is still mandatory. Later workers compare the complete
+    allow-list plus size and nanosecond modification identity; any ordinary
+    file replacement or edit invalidates the cache and recomputes every hash.
+    """
+
+    paths.validate_layout()
+    paths.cache_root.mkdir(parents=True, exist_ok=True)
+    cache_path = paths.cache_root / "bundle-integrity-v1.json"
+    fingerprint, records = _bundle_stat_fingerprint(paths, support_files)
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        cached = {}
+    cache_valid = bool(
+        isinstance(cached, dict)
+        and cached.get("schema") == INTEGRITY_CACHE_SCHEMA
+        and cached.get("fingerprint_sha256") == fingerprint
+        and cached.get("transformer_sha256") == transformer_sha256
+        and cached.get("support_revision") == SUPPORT_REVISION
+        and cached.get("support_file_count") == len(support_files)
+        and cached.get("verified") is True
+    )
+    if cache_valid:
+        return {
+            "model_id": PUBLIC_MODEL_ID,
+            "model_name": PUBLIC_MODEL_NAME,
+            "transformer_size": transformer_size,
+            "transformer_sha256": transformer_sha256,
+            "support_revision": SUPPORT_REVISION,
+            "support_file_count": len(support_files),
+            "support_files_verified": len(support_files),
+            "hashes_recomputed": False,
+            "verification_cache_hit": True,
+            "integrity_fingerprint_sha256": fingerprint,
+            "embedded_metadata_visibility": "technical_only",
+            "upstream_transformer_included": False,
+        }
+
+    report = verify_exact_bundle(
+        paths,
+        verify_hashes=True,
+        support_files=support_files,
+        transformer_size=transformer_size,
+        transformer_sha256=transformer_sha256,
+    )
+    payload = {
+        "schema": INTEGRITY_CACHE_SCHEMA,
+        "verified": True,
+        "fingerprint_sha256": fingerprint,
+        "files": records,
+        "transformer_sha256": transformer_sha256,
+        "support_revision": SUPPORT_REVISION,
+        "support_file_count": len(support_files),
+    }
+    temporary = cache_path.with_name(
+        f".{cache_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+    )
+    try:
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, cache_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {
+        **report,
+        "verification_cache_hit": False,
+        "integrity_fingerprint_sha256": fingerprint,
     }
 
 

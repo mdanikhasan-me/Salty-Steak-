@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppWindow,
   Bot,
+  Brain,
   CalendarDays,
   Camera,
   Check,
@@ -42,6 +43,7 @@ import { ResearchProgress } from "../components/ResearchProgress.jsx";
 import { CookingStatus } from "../components/CookingStatus.jsx";
 import { PluginConnectionDialog } from "../components/PluginConnectionDialog.jsx";
 import { PluginsPanel } from "../components/PluginsPanel.jsx";
+import { MemoryPanel } from "../components/MemoryPanel.jsx";
 import { ResponseSettingsSheet } from "../components/ResponseSettingsSheet.jsx";
 import { useModalFocusTrap } from "../hooks/useModalFocusTrap.js";
 import { useShell } from "../components/AppShell.jsx";
@@ -56,7 +58,6 @@ import {
 import { useAppState } from "../state/AppState.jsx";
 import { errorMessage } from "../workflows/formatters.js";
 import {
-  conversationSelectionExists,
   conversationStateAfterDelete,
   groupConversationsByRecency,
   synchronizeConversationSelection,
@@ -75,7 +76,10 @@ import {
   shouldRenderConversationGeneration,
   visibleConversationForSelection,
 } from "../workflows/chatGeneration.mjs";
-import { readComposerCommand } from "../workflows/composerCommands.mjs";
+import {
+  composerCommandSuggestions,
+  readComposerCommand,
+} from "../workflows/composerCommands.mjs";
 import { composerPickerSections } from "../workflows/composerPlugins.mjs";
 import { normaliseToken } from "../workflows/operations.mjs";
 import {
@@ -87,17 +91,18 @@ import {
   COMPUTER_AUTHORITY_MODES,
   computerAuthorityLabel,
   cookingModeLabel,
-  generationSettingsForRequest,
+  generationTurnSettingsForRequest,
+  imageCanvasForSettings,
   nextEnabledMenuIndex,
   normaliseGenerationSettingsSnapshot,
   normaliseCookingMode,
   toggleComposerMenu,
 } from "../workflows/composerControls.mjs";
 import {
-  attachmentPromptSuffix,
   validateAttachment,
   validateVisionAttachment,
 } from "../workflows/chatAttachments.mjs";
+import { buildVisionContactSheet } from "../workflows/visionContactSheet.mjs";
 import {
   createComputerControlAdapter,
   fullAccessCapabilities,
@@ -107,6 +112,7 @@ import {
 
 const SELECTED_CONVERSATION_KEY = "salty-potato:selected-conversation";
 const GENERATION_SETTINGS_KEY = "salty-steak:generation-settings-v2";
+const IMAGE_DEFAULT_REVISION_KEY = "salty-steak:image-default-resolution-v1";
 
 
 
@@ -121,7 +127,7 @@ const AUTOMATION_ADAPTER = createComputerControlAdapter({
 const DEFAULT_GENERATION_SETTINGS = {
   context_window_tokens: 32_768,
   maximum_output_mode: "automatic",
-  maximum_output_tokens: 8_192,
+  maximum_output_tokens: 32_768,
   temperature: 0.8,
   top_p: 0.95,
   top_k: 40,
@@ -133,15 +139,27 @@ const DEFAULT_GENERATION_SETTINGS = {
   web_search_enabled: false,
   system_prompt: "",
   stop_sequences: [],
+  image_model_id: "steak-gen-1-scaledfp8",
+  image_aspect_ratio: "1:1",
+  image_resolution: 768,
+  image_steps: 8,
 };
 
 function initialGenerationSettings() {
   try {
     const stored = window.localStorage.getItem(GENERATION_SETTINGS_KEY);
+    const parsed = JSON.parse(stored || "{}");
+
+
+    parsed.system_prompt = "";
+    if (!window.localStorage.getItem(IMAGE_DEFAULT_REVISION_KEY)) {
+      parsed.image_resolution = 768;
+      window.localStorage.setItem(IMAGE_DEFAULT_REVISION_KEY, "768");
+    }
     return {
       remembered: Boolean(stored),
       settings: normaliseGenerationSettingsSnapshot(
-        JSON.parse(stored || "{}"),
+        parsed,
         DEFAULT_GENERATION_SETTINGS,
       ),
     };
@@ -156,6 +174,7 @@ function initialGenerationSettings() {
 
 
 const PLUGIN_ICONS = {
+  memory: Brain,
   web_search: Globe,
   text_files: FileText,
   images: Image,
@@ -263,9 +282,27 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const generationDefaultsAppliedRef = useRef(
     initialGenerationSettingsRef.current.remembered,
   );
+
+
+
+  const conversationInstructionDraftsRef = useRef(new Map());
   const setGenerationSettings = useCallback((next) => {
     generationDefaultsAppliedRef.current = true;
-    setGenerationSettingsState(next);
+    setGenerationSettingsState((current) => {
+      const resolved = typeof next === "function" ? next(current) : next;
+      const conversationId = selectedIdRef.current;
+      if (
+        conversationId
+        && String(resolved?.system_prompt || "")
+          !== String(current?.system_prompt || "")
+      ) {
+        conversationInstructionDraftsRef.current.set(
+          String(conversationId),
+          String(resolved?.system_prompt || ""),
+        );
+      }
+      return resolved;
+    });
   }, []);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [settingsView, setSettingsView] = useState("response");
@@ -277,13 +314,15 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const [pluginError, setPluginError] = useState("");
   const [modelActivationBusy, setModelActivationBusy] = useState(false);
   const [composerMenu, setComposerMenu] = useState(null);
+  const [slashCommandIndex, setSlashCommandIndex] = useState(0);
+  const [slashCommandsDismissed, setSlashCommandsDismissed] = useState(false);
   const [cookingActivityMessageId, setCookingActivityMessageId] = useState(null);
   const [selectedActionProposal, setSelectedActionProposal] = useState(null);
   const transcriptRef = useRef(null);
   const textareaRef = useRef(null);
   const attachmentInputRef = useRef(null);
-  const imageAttachmentInputRef = useRef(null);
   const selectedIdRef = useRef(selectedId);
+  const locallyCreatedConversationIdsRef = useRef(new Set());
   const generationTaskRef = useRef(0);
   const activeGenerationRef = useRef(null);
   const [agentMode, setAgentMode] = useState(false);
@@ -295,6 +334,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
 
   const [fullAccessRequest, setFullAccessRequest] = useState(null);
   const [grantingFullAccess, setGrantingFullAccess] = useState(false);
+  const fullAccessUpgradeCheckedRef = useRef(false);
 
 
   const agentModeRef = useRef(false);
@@ -318,6 +358,25 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const cookingActivityTriggerRef = useRef(null);
   const readinessRefreshStartedRef = useRef(false);
   const { sidebarOpen, closeSidebar } = useShell();
+  const slashCommands = useMemo(
+    () => (slashCommandsDismissed ? [] : composerCommandSuggestions(draft)),
+    [draft, slashCommandsDismissed],
+  );
+  const boundedSlashCommandIndex = Math.min(
+    slashCommandIndex,
+    Math.max(0, slashCommands.length - 1),
+  );
+
+  useEffect(() => {
+    setSlashCommandIndex(0);
+  }, [draft]);
+
+  const chooseSlashCommand = useCallback((command) => {
+    if (!command?.command) return;
+    setDraft(`${command.command} `);
+    setSlashCommandsDismissed(true);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
 
   const selectConversation = useCallback((conversationId) => (
     synchronizeConversationSelection(
@@ -327,8 +386,49 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     )
   ), []);
 
+  const openConversation = useCallback(async (conversationId) => {
+    const wanted = String(conversationId || "");
+    if (!wanted) return;
+    selectConversation(wanted);
+
+    setConversation(null);
+    setLoadingConversation(true);
+    try {
+      const payload = await api.getConversation(wanted);
+      if (String(selectedIdRef.current) !== wanted) return;
+      const fetched = payload?.conversation || payload;
+      const localDraft = conversationInstructionDraftsRef.current.get(wanted);
+      setGenerationSettingsState((current) => ({
+        ...current,
+        system_prompt: localDraft === undefined
+          ? String(fetched?.system_prompt || "")
+          : localDraft,
+      }));
+      setConversation(fetched);
+    } catch (error) {
+      if (String(selectedIdRef.current) !== wanted) return;
+      if (Number(error?.status || 0) === 404) {
+        locallyCreatedConversationIdsRef.current.delete(wanted);
+        const fallback = conversations.find(
+          (item) => String(item.id) !== wanted,
+        );
+        selectConversation(fallback?.id || null);
+        return;
+      }
+      notify({ message: errorMessage(error), kind: "error" });
+      reportError(error, `conversation:${wanted}`);
+    } finally {
+      if (String(selectedIdRef.current) === wanted) {
+        setLoadingConversation(false);
+      }
+    }
+  }, [conversations, notify, reportError, selectConversation]);
+
   function closeCompactSidebar() {
-    if (window.matchMedia("(max-width: 960px)").matches) closeSidebar();
+    const compactWindow = window.matchMedia("(max-width: 1000px)").matches;
+    const sharedMediumWorkspace = activityWorkspaceOpen
+      && window.matchMedia("(max-width: 1440px)").matches;
+    if (compactWindow || sharedMediumWorkspace) closeSidebar();
   }
 
   const readiness = getReadiness(chatStatus);
@@ -486,14 +586,28 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   useEffect(() => {
     if (!generationDefaultsAppliedRef.current) return;
     try {
+      const persistentSettings = { ...generationSettings };
+      delete persistentSettings.system_prompt;
       window.localStorage.setItem(
         GENERATION_SETTINGS_KEY,
-        JSON.stringify(generationSettings),
+        JSON.stringify(persistentSettings),
       );
     } catch {
 
     }
   }, [generationSettings]);
+
+  useEffect(() => {
+
+
+    const localDraft = selectedId
+      ? conversationInstructionDraftsRef.current.get(String(selectedId))
+      : undefined;
+    setGenerationSettingsState((current) => ({
+      ...current,
+      system_prompt: localDraft === undefined ? "" : localDraft,
+    }));
+  }, [selectedId]);
 
   const refreshPlugins = useCallback(async () => {
     setPluginLoadError("");
@@ -510,12 +624,15 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   }, [refreshPlugins]);
 
   useEffect(() => {
-    if (!conversations.length) {
-      if (selectedId) selectConversation(null);
+    if (!selectedId && conversations.length) {
+      selectConversation(conversations[0].id);
       return;
     }
-    if (!conversations.some((item) => String(item.id) === String(selectedId))) {
-      selectConversation(conversations[0].id);
+    if (
+      selectedId
+      && conversations.some((item) => String(item.id) === String(selectedId))
+    ) {
+      locallyCreatedConversationIdsRef.current.delete(String(selectedId));
     }
   }, [conversations, selectConversation, selectedId]);
 
@@ -537,17 +654,21 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       setConversation(null);
       return undefined;
     }
-    if (!conversationSelectionExists(conversations, selectedId)) {
-      setConversation(null);
-      setLoadingConversation(false);
-      return undefined;
-    }
     setLoadingConversation(true);
     api
       .getConversation(selectedId)
       .then((payload) => {
         if (!cancelled) {
           const fetched = payload?.conversation || payload;
+          const localDraft = conversationInstructionDraftsRef.current.get(
+            String(selectedId),
+          );
+          setGenerationSettingsState((current) => ({
+            ...current,
+            system_prompt: localDraft === undefined
+              ? String(fetched?.system_prompt || "")
+              : localDraft,
+          }));
           setConversation((current) =>
             mergeFetchedConversationWithPending(fetched, current),
           );
@@ -555,6 +676,15 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       })
       .catch((error) => {
         if (!cancelled) {
+          if (Number(error?.status || 0) === 404) {
+            locallyCreatedConversationIdsRef.current.delete(String(selectedId));
+            const fallback = conversations.find(
+              (item) => String(item.id) !== String(selectedId),
+            );
+            selectConversation(fallback?.id || null);
+            setConversation(null);
+            return;
+          }
           if (error) notify({ message: errorMessage(error), kind: "error" });
           reportError(error, `conversation:${selectedId}`);
         }
@@ -565,7 +695,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     return () => {
       cancelled = true;
     };
-  }, [conversations, reportError, selectedId]);
+  }, [conversations, notify, reportError, selectConversation, selectedId]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -705,12 +835,75 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     }
   }, [fullAccessRequest, notify, setGenerationSettings]);
 
+
+
+
+
+  useEffect(() => {
+    if (
+      generationSettings.computer_authority_mode !== "full_access"
+      || fullAccessUpgradeCheckedRef.current
+    ) {
+      return undefined;
+    }
+    fullAccessUpgradeCheckedRef.current = true;
+    let cancelled = false;
+    void AUTOMATION_ADAPTER.getStatus()
+      .then(normaliseAutomationStatus)
+      .then((status) => {
+        if (cancelled) return;
+        const capabilities = fullAccessCapabilities(status);
+        const missing = capabilities.filter((item) => !item.alreadyGranted);
+        if (missing.length) {
+          setFullAccessRequest({ capabilities, missing, status });
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          notify({ message: errorMessage(error), kind: "error" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [generationSettings.computer_authority_mode, notify]);
+
   const sendExactMessage = useCallback(
-    async (typed, requestedConversationId = selectedIdRef.current) => {
+    async (
+      typed,
+      requestedConversationId = selectedIdRef.current,
+      turnAttachments = [],
+    ) => {
       if (!typed || !typed.trim()) return;
 
 
-      const { content, modes: commandModes } = readComposerCommand(typed);
+      const { content, modes: commandModes, action } = readComposerCommand(typed);
+      if (action?.type === "save_memory") {
+        setSending(true);
+        try {
+          if (content) {
+            await api.saveChatMemory(content);
+          } else {
+            const conversationId = requestedConversationId || selectedIdRef.current;
+            if (!conversationId) {
+              throw new Error("Start a conversation before saving its context.");
+            }
+            await api.saveConversationMemory(conversationId);
+          }
+          notify({
+            message: content
+              ? "Saved to global memory."
+              : "Saved this conversation context to global memory.",
+            kind: "success",
+          });
+        } catch (error) {
+          setDraft(typed);
+          notify({ message: errorMessage(error), kind: "error" });
+        } finally {
+          setSending(false);
+        }
+        return;
+      }
       const taskId = generationTaskRef.current + 1;
       generationTaskRef.current = taskId;
       setSending(true);
@@ -722,6 +915,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
             const createdPayload = await api.createConversation();
             const created = createdPayload?.conversation || createdPayload;
             conversationId = created.id;
+            locallyCreatedConversationIdsRef.current.add(String(created.id));
             selectConversation(created.id);
             setConversation({ ...created, messages: created.messages || [] });
             setResources((previous) => ({
@@ -750,33 +944,24 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           }
 
 
-          const requestSettings = {
-            ...generationSettingsForRequest(
-              generationSettings,
-              DEFAULT_GENERATION_SETTINGS,
-            ),
-            agent_mode: Boolean(agentModeRef.current),
-
-
-
-
-
-            research_available:
-              Boolean(researchModeRef.current) ||
-              Boolean(commandModes.research_mode),
-            research_command: Boolean(commandModes.research_mode) || undefined,
-            image_mode: Boolean(commandModes.image_mode) || undefined,
-
-            web_search_enabled:
-              Boolean(researchModeRef.current) ||
-              Boolean(commandModes.research_mode) ||
-              undefined,
-          };
+          const requestSettings = generationTurnSettingsForRequest(
+            generationSettings,
+            DEFAULT_GENERATION_SETTINGS,
+            {
+              agentMode: agentModeRef.current,
+              researchMode: researchModeRef.current,
+              researchCommand: commandModes.research_mode,
+              imageCommand: commandModes.image_mode,
+            },
+          );
           const submitted = await api.sendMessage(
             conversationId,
             content,
             api.makeRequestKey(),
             requestSettings,
+            turnAttachments
+              .map((item) => item.inspection)
+              .filter(Boolean),
           );
           activeGenerationRef.current = submitted;
           return submitted;
@@ -798,6 +983,11 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           setConversation(refreshed?.conversation || refreshed);
         }
         if (operation.state === "failed") {
+
+
+
+          setDraft(content);
+          if (turnAttachments.length) setAttachments(turnAttachments);
           notify({
             message: operation.error?.message || "Salty Steak could not complete this response.",
             kind: "error",
@@ -814,6 +1004,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           messages: (previous?.messages || []).filter((message) => !message.pending),
         }));
         setDraft(content);
+        if (turnAttachments.length) setAttachments(turnAttachments);
         if (error) notify({ message: errorMessage(error), kind: "error" });
       } finally {
         if (ownsGenerationTask(generationTaskRef.current, taskId)) {
@@ -831,9 +1022,16 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     ],
   );
 
-  const analyzeSelectedImage = useCallback(
-    async (content, imageAttachment, requestedConversationId = selectedIdRef.current) => {
-      if (!content?.trim() || !imageAttachment?.file) return;
+  const analyzeSelectedImages = useCallback(
+    async (
+      typed,
+      imageAttachments,
+      fileAttachments = [],
+      requestedConversationId = selectedIdRef.current,
+    ) => {
+      if (!typed?.trim() || !imageAttachments?.length) return;
+      const { content, modes: commandModes } = readComposerCommand(typed);
+      const originalAttachments = [...imageAttachments, ...fileAttachments];
       const taskId = generationTaskRef.current + 1;
       generationTaskRef.current = taskId;
       setSending(true);
@@ -845,6 +1043,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
             const createdPayload = await api.createConversation();
             const created = createdPayload?.conversation || createdPayload;
             conversationId = created.id;
+            locallyCreatedConversationIdsRef.current.add(String(created.id));
             selectConversation(created.id);
             setConversation({ ...created, messages: created.messages || [] });
             setResources((previous) => ({
@@ -852,13 +1051,26 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               conversations: [created, ...previous.conversations.filter((item) => item.id !== created.id)],
             }));
           }
-          const staged = await api.stageVisionInput(imageAttachment.file);
+          const contactSheet = await buildVisionContactSheet(imageAttachments);
+          const staged = await api.stageVisionInput(contactSheet);
+          const requestSettings = generationTurnSettingsForRequest(
+            generationSettings,
+            DEFAULT_GENERATION_SETTINGS,
+            {
+              agentMode: agentModeRef.current,
+              researchMode: researchModeRef.current,
+              researchCommand: commandModes.research_mode,
+              imageCommand: commandModes.image_mode,
+            },
+          );
           const submitted = await api.analyzeVisionInput(
             conversationId,
             content,
             staged.vision_input_token,
             api.makeRequestKey(),
-            128,
+            256,
+            requestSettings,
+            fileAttachments.map((item) => item.inspection).filter(Boolean),
           );
           activeGenerationRef.current = submitted;
           return submitted;
@@ -879,7 +1091,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
         }
         if (operation.state === "failed") {
           setDraft(content);
-          setAttachments([imageAttachment]);
+          setAttachments(originalAttachments);
           notify({
             message: operation.error?.message || "Salty Steak could not analyze this image.",
             kind: "error",
@@ -892,7 +1104,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       } catch (error) {
         if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
         setDraft(content);
-        setAttachments([imageAttachment]);
+        setAttachments(originalAttachments);
         if (error) notify({ message: errorMessage(error), kind: "error" });
       } finally {
         if (ownsGenerationTask(generationTaskRef.current, taskId)) {
@@ -911,6 +1123,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     try {
       const payload = await api.createConversation();
       const created = payload?.conversation || payload;
+      locallyCreatedConversationIdsRef.current.add(String(created.id));
       setResources((previous) => ({
         ...previous,
         conversations: [created, ...previous.conversations.filter((item) => item.id !== created.id)],
@@ -932,24 +1145,26 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       content: draft,
     })) return;
     const imageAttachments = attachments.filter((attachment) => attachment.kind === "image");
-    if (imageAttachments.length) {
-      const selectedImage = imageAttachments[0];
+    const fileAttachments = attachments.filter((attachment) => attachment.kind !== "image");
+    const composerCommand = readComposerCommand(draft);
+    if (composerCommand.action?.type === "save_memory") {
       setDraft("");
-      setAttachments([]);
-      void analyzeSelectedImage(draft, selectedImage);
+      void sendExactMessage(draft);
       return;
     }
-    const attachmentText = attachmentPromptSuffix(
-      attachments.filter((attachment) => attachment.kind !== "image"),
-    );
-    const exact = `${draft}${attachmentText}`;
+    if (imageAttachments.length) {
+      setDraft("");
+      setAttachments([]);
+      void analyzeSelectedImages(draft, imageAttachments, fileAttachments);
+      return;
+    }
     if (!["ready", "preparing"].includes(readiness.key)) {
       if (readiness.blockedMessage) notify({ message: readiness.blockedMessage, kind: "error" });
       return;
     }
     setDraft("");
     setAttachments([]);
-    void sendExactMessage(exact);
+    void sendExactMessage(draft, selectedIdRef.current, fileAttachments);
   }
 
   async function attachFiles(event) {
@@ -978,30 +1193,30 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           type: visionValidation.type,
           file,
         });
+        totalBytes += visionValidation.size;
         continue;
       }
-      const validation = validateAttachment(file, totalBytes);
-      if (
-        attachments.some((item) => item.kind === "image")
-        || accepted.some((item) => item.kind === "image")
-      ) {
-        rejected.push("Text-file attachments cannot be mixed with image analysis in one request.");
-        continue;
-      }
+      const validation = validateAttachment(
+        file,
+        totalBytes,
+        attachments.length + accepted.length,
+      );
       if (!validation.accepted) {
         rejected.push(validation.message);
         continue;
       }
       try {
-        const content = await file.text();
-        if (content.includes("\u0000")) {
-          rejected.push(`${validation.name} does not appear to be a text file.`);
-          continue;
-        }
-        accepted.push({ kind: "text", name: validation.name, size: validation.size, content });
+        const inspection = await api.inspectChatAttachment(file);
+        accepted.push({
+          kind: "file",
+          name: validation.name,
+          size: validation.size,
+          type: String(file.type || inspection.media_type || ""),
+          inspection,
+        });
         totalBytes += validation.size;
-      } catch {
-        rejected.push(`Salty Steak could not read ${validation.name} as text.`);
+      } catch (error) {
+        rejected.push(`${validation.name}: ${errorMessage(error)}`);
       }
     }
     if (accepted.length) {
@@ -1448,6 +1663,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       await serialGenerationTransitionRef.current(() =>
         api.deleteConversation(deletedId),
       );
+      locallyCreatedConversationIdsRef.current.delete(String(deletedId));
       if (String(activeGenerationRef.current?.target_id) === String(deletedId)) {
         generationTaskRef.current += 1;
         activeGenerationRef.current = null;
@@ -1534,6 +1750,10 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       .includes("bounded recovery");
   const conversationTitle = visibleConversation?.title || "New chat";
   const cookingMode = normaliseCookingMode(generationSettings.reasoning_mode);
+  const selectedImageCanvas = imageCanvasForSettings(
+    generationSettings.image_resolution,
+    generationSettings.image_aspect_ratio,
+  );
   const activeModelLabel =
     chatStatus?.active_version_label || chatStatus?.selected_model_label || "No model";
   const modelOptions = useMemo(() => {
@@ -1625,6 +1845,13 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const agentActivity = dismissedAgentTask === agentActivityKey
     ? null
     : liveAgentTask || finishedAgentTask || null;
+  const showAgentActivity = Boolean(agentActivity) && (agentRunning || !cookingActivityOpen);
+  const showCookingActivity = cookingActivityOpen && !agentRunning;
+  const activityWorkspaceOpen = showAgentActivity || showCookingActivity;
+
+  useEffect(() => {
+    if (agentRunning) setResponseDetails(null);
+  }, [agentRunning]);
 
   const openComposerMenu = (menuId) => {
     setComposerMenu((current) => toggleComposerMenu(current, menuId));
@@ -1726,6 +1953,15 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     cookingActivityTriggerRef.current = event?.currentTarget || null;
     setInspectorOpen(false);
     setComposerMenu(null);
+
+
+
+    setResponseDetails(null);
+    if (agentRunning) {
+      setDismissedAgentTask(null);
+      setCookingActivityMessageId(null);
+      return;
+    }
     setCookingActivityMessageId((current) => (
       String(current) === String(messageId) ? null : messageId
     ));
@@ -1748,7 +1984,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
 
   return (
     <div className={`chat-page ${sidebarOpen ? "chat-page--sidebar-open" : ""} ${
-      cookingActivityOpen ? "chat-page--activity-open" : ""
+      activityWorkspaceOpen ? "chat-page--activity-open" : ""
     } ${responseDetailsFor ? "chat-page--details-open" : ""}`}>
       {sidebarOpen ? (
         <button
@@ -1765,7 +2001,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
         selectedId={selectedId}
         creating={creating}
         onNewChat={newChat}
-        onSelect={selectConversation}
+        onSelect={(conversationId) => void openConversation(conversationId)}
         onAfterSelect={closeCompactSidebar}
         onRename={(item, title) => renameConversationTo(item, title)}
         onDelete={(item) => {
@@ -1832,7 +2068,11 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                   onConfirmAction={(proposal, settings) =>
                     confirmHostActionProposal(message, proposal, settings)}
                   onStopAction={stopGeneration}
-                  onOpenDetails={(details) => setResponseDetails(details)}
+                  onOpenDetails={(details) => {
+                    setCookingActivityMessageId(null);
+                    if (agentActivity) setDismissedAgentTask(agentActivityKey);
+                    setResponseDetails(details);
+                  }}
                 />
               ))}
               {selectedConversationGenerating ? (
@@ -1906,10 +2146,40 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               rows="1"
               value={draft}
               placeholder="Message Salty Steak"
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setSlashCommandsDismissed(false);
+              }}
               onCut={() => window.requestAnimationFrame(resizeComposer)}
               onPaste={() => window.requestAnimationFrame(resizeComposer)}
               onKeyDown={(event) => {
+                if (slashCommands.length && event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setSlashCommandIndex((current) => (current + 1) % slashCommands.length);
+                  return;
+                }
+                if (slashCommands.length && event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setSlashCommandIndex((current) =>
+                    (current - 1 + slashCommands.length) % slashCommands.length);
+                  return;
+                }
+                if (slashCommands.length && event.key === "Escape") {
+                  event.preventDefault();
+                  setSlashCommandsDismissed(true);
+                  return;
+                }
+                if (
+                  slashCommands.length
+                  && event.key === "Enter"
+                  && !event.shiftKey
+                  && draft.trim().toLocaleLowerCase()
+                    !== slashCommands[boundedSlashCommandIndex]?.command.toLocaleLowerCase()
+                ) {
+                  event.preventDefault();
+                  chooseSlashCommand(slashCommands[boundedSlashCommandIndex]);
+                  return;
+                }
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();
@@ -1917,6 +2187,29 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               }}
             />
             </label>
+            {slashCommands.length ? (
+              <div
+                className="slash-command-menu"
+                role="listbox"
+                aria-label="Slash commands"
+              >
+                <span className="slash-command-menu__label">Commands</span>
+                {slashCommands.map((command, index) => (
+                  <button
+                    key={command.command}
+                    type="button"
+                    role="option"
+                    aria-selected={index === boundedSlashCommandIndex}
+                    className={index === boundedSlashCommandIndex ? "is-selected" : ""}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => chooseSlashCommand(command)}
+                  >
+                    <code>{command.command}</code>
+                    <span>{command.description}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             {attachments.length ? (
               <div className="composer-attachments" aria-label="Attached files">
                 {attachments.map((file, index) => (
@@ -1941,365 +2234,376 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                   className="sr-only"
                   type="file"
                   multiple
-                  accept="text
+                  onChange={attachFiles}
+                />
+                <div className="composer-control composer-control--add">
+                  <button
+                    ref={(element) => composerMenuTriggerRefs.current.set("attachments", element)}
+                    type="button"
+                    className="composer-tool composer-tool--icon"
+                    aria-label="Add to message"
+                    aria-haspopup="menu"
+                    aria-expanded={composerMenu === "attachments"}
+                    aria-controls="composer-attachments-menu"
+                    title="Add to message"
+                    onClick={() => openComposerMenu("attachments")}
+                  >
+                    <Plus aria-hidden="true" />
+                  </button>
+                  {composerMenu === "attachments" ? (
+                    <ComposerPopover id="composer-attachments-menu" label="Add to message" onClose={closeComposerMenu}>
+                      <ComposerMenuItem
+                        icon={Paperclip}
+                        label="Add files"
+                        description="Choose images, documents, code, archives, or other local files"
+                        onSelect={() => {
+                          closeComposerMenu();
+                          attachmentInputRef.current?.click();
+                        }}
+                      />
+                    </ComposerPopover>
+                  ) : null}
+                </div>
+                <div className="composer-control composer-control--agent">
+                  <button
+                    type="button"
+                    className={`composer-tool composer-tool--agent ${
+                      agentMode ? "composer-tool--agent-on" : ""
+                    }`}
+                    aria-pressed={agentMode}
+                    aria-label="Computer-use agent mode"
+                    title={
+                      agentMode
+                        ? "Agent mode is on: Salty Steak will use the computer to complete your request"
+                        : "Agent mode is off: Salty Steak will answer without using the computer"
+                    }
+                    onClick={() => setAgentMode((current) => !current)}
+                  >
+                    <MousePointerClick aria-hidden="true" />
+                    <span>Agent</span>
+                  </button>
+                </div>
+                <div className="composer-control composer-control--research">
+                  <button
+                    type="button"
+                    className={`composer-tool composer-tool--research ${
+                      researchMode ? "composer-tool--research-on" : ""
+                    }`}
+                    aria-pressed={researchMode}
+                    aria-label="Web research mode"
+                    title={
+                      researchMode
+                        ? cookingMode === "cooking"
+                          ? "Cooking Research: iterative validation in the background, with a hard four-hour ceiling"
+                          : "Instant Research: focused multi-source research for up to five minutes"
+                        : "Research depth is off; Salty Steak may still run a bounded verification when a current claim needs it"
+                    }
+                    onClick={() => setResearchMode((current) => !current)}
+                  >
+                    <Globe aria-hidden="true" />
+                    <span>Research</span>
+                  </button>
+                </div>
+                <div className="composer-control composer-control--authority">
+                  <button
+                    ref={(element) => composerMenuTriggerRefs.current.set("authority", element)}
+                    type="button"
+                    className={`composer-tool composer-tool--authority ${
+                      generationSettings.computer_authority_mode === "full_access"
+                        ? "composer-tool--authority-full"
+                        : ""
+                    }`}
+                    aria-label={`Computer authority: ${computerAuthorityLabel(
+                      generationSettings.computer_authority_mode,
+                    )}`}
+                    aria-haspopup="menu"
+                    aria-expanded={composerMenu === "authority"}
+                    aria-controls="composer-authority-menu"
+                    onClick={() => openComposerMenu("authority")}
+                  >
+                    {generationSettings.computer_authority_mode === "full_access"
+                      ? <ShieldCheck aria-hidden="true" />
+                      : <ShieldQuestion aria-hidden="true" />}
+                    <span>{computerAuthorityLabel(generationSettings.computer_authority_mode)}</span>
+                    <ChevronDown aria-hidden="true" />
+                  </button>
+                  {composerMenu === "authority" ? (
+                    <ComposerPopover
+                      id="composer-authority-menu"
+                      label="Computer authority"
+                      onClose={closeComposerMenu}
+                    >
+                      {COMPUTER_AUTHORITY_MODES.map((mode) => (
+                        <ComposerMenuItem
+                          key={mode.id}
+                          icon={mode.id === generationSettings.computer_authority_mode
+                            ? Check
+                            : mode.id === "full_access" ? ShieldCheck : ShieldQuestion}
+                          label={mode.label}
+                          description={mode.description}
+                          selected={mode.id === generationSettings.computer_authority_mode}
+                          radio
+                          onSelect={() => {
+                            closeComposerMenu();
+                            void chooseAuthorityMode(mode.id);
+                          }}
+                        />
+                      ))}
+                    </ComposerPopover>
+                  ) : null}
+                </div>
+                <div className="composer-control">
+                  <button
+                    ref={(element) => composerMenuTriggerRefs.current.set("plugins", element)}
+                    type="button"
+                    className="composer-tool"
+                    aria-label="Tools and connected apps"
+                    aria-haspopup="menu"
+                    aria-expanded={composerMenu === "plugins"}
+                    aria-controls="composer-plugins-menu"
+                    onClick={() => openComposerMenu("plugins")}
+                  >
+                    <Plug aria-hidden="true" />
+                    <span>Tools</span>
+                  </button>
+                  {composerMenu === "plugins" ? (
+                    <ComposerPopover
+                      id="composer-plugins-menu"
+                      label="Tools and connected apps"
+                      onClose={closeComposerMenu}
+                    >
+                      <div className="plugin-picker">
+                        {pickerSections.map((section) => (
+                          <div className="plugin-picker__section" key={section.id}>
+                            <p className="plugin-picker__section-title">
+                              {section.title}
+                              <span>{section.description}</span>
+                            </p>
+                            {section.rows.map((row) => {
+                              const RowIcon =
+                                row.kind === "connected_app"
+                                  ? connectedAppIcon(row)
+                                  : pluginIcon(row);
+                              return (
+                                <button
+                                  key={`${section.id}:${row.id}`}
+                                  type="button"
+                                  role="menuitem"
+                                  className="plugin-picker__row"
+                                  disabled={Boolean(row.disabled)}
+                                  title={row.detail}
+                                  onClick={() => {
+                                    closeComposerMenu();
+                                    if (row.kind === "connected_app") {
+                                      setPluginSetup({
+                                        connectorId: row.id,
+                                        mode: row.action,
+                                      });
+                                      return;
+                                    }
+                                    if (row.kind === "memory") {
+                                      openSettings("memory");
+                                      return;
+                                    }
+                                    openSettings("plugins");
+                                  }}
+                                >
+                                  <span className="plugin-picker__icon" aria-hidden="true">
+                                    <RowIcon />
+                                  </span>
+                                  <span className="plugin-picker__text">
+                                    <span className="plugin-picker__name">{row.name}</span>
+                                    <span className="plugin-picker__description">
+                                      {row.detail}
+                                    </span>
+                                  </span>
+                                  <span
+                                    className={`plugin-picker__state${
+                                      row.attention ? " plugin-picker__state--attention" : ""
+                                    }${
+                                      row.state === "Connected"
+                                        ? " plugin-picker__state--connected"
+                                        : ""
+                                    }`}
+                                  >
+                                    {row.state}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ))}
+                        {!pickerSections.length ? (
+                          <p className="plugin-picker__empty">
+                            No tools or connected apps are registered in this build.
+                          </p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="plugin-picker__manage"
+                        onClick={() => {
+                          closeComposerMenu();
+                          openSettings("plugins");
+                        }}
+                      >
+                        Manage connected apps
+                      </button>
+                    </ComposerPopover>
+                  ) : null}
+                </div>
+                <div className="composer-control composer-control--model">
+                  <button
+                    ref={(element) => composerMenuTriggerRefs.current.set("model", element)}
+                    type="button"
+                    className="composer-selector"
+                    aria-haspopup="dialog"
+                    aria-expanded={inspectorOpen && settingsView === "response"}
+                    aria-label={`Model: ${activeModelLabel}`}
+                    onClick={() => openSettings("response")}
+                  >
+                    <Bot aria-hidden="true" />
+                    <span>{activeModelLabel}</span>
+                    <ChevronDown aria-hidden="true" />
+                  </button>
+                </div>
+                {chatStatus?.image_generation?.available ? (
+                  <div className="composer-control composer-control--image">
+                    <button
+                      type="button"
+                      className="composer-selector composer-selector--image"
+                      aria-haspopup="dialog"
+                      aria-expanded={inspectorOpen && settingsView === "image"}
+                      aria-label={`Image settings: ${selectedImageCanvas.width} by ${selectedImageCanvas.height}, ${generationSettings.image_steps} steps`}
+                      title="Image model, aspect ratio, resolution, and quality"
+                      onClick={() => openSettings("image")}
+                    >
+                      <Image aria-hidden="true" />
+                      <span>{selectedImageCanvas.width}×{selectedImageCanvas.height}</span>
+                      <ChevronDown aria-hidden="true" />
+                    </button>
+                  </div>
+                ) : null}
+                <div className="composer-control composer-control--cooking">
+                  <button
+                    ref={(element) => composerMenuTriggerRefs.current.set("cooking", element)}
+                    type="button"
+                    className="composer-selector composer-selector--cooking"
+                    aria-haspopup="menu"
+                    aria-expanded={composerMenu === "cooking"}
+                    aria-controls="composer-cooking-menu"
+                    aria-label={`Cooking mode: ${cookingModeLabel(cookingMode)}`}
+                    title={chatStatus?.runtime_controls?.reasoning_control?.reason}
+                    onClick={() => openComposerMenu("cooking")}
+                  >
+                    <ChefHat aria-hidden="true" />
+                    <span>{cookingModeLabel(cookingMode)}</span>
+                    <ChevronDown aria-hidden="true" />
+                  </button>
+                  {composerMenu === "cooking" ? (
+                    <ComposerPopover id="composer-cooking-menu" label="Cooking" onClose={closeComposerMenu} align="right">
+                      {COOKING_MODES.map((mode) => (
+                        <ComposerMenuItem
+                          key={mode.id}
+                          icon={mode.id === cookingMode ? Check : ChefHat}
+                          label={mode.label}
+                          description={mode.description}
+                          selected={mode.id === cookingMode}
+                          radio
+                          onSelect={() => {
+                            setGenerationSettings((current) => ({ ...current, reasoning_mode: mode.id }));
+                            closeComposerMenu();
+                          }}
+                        />
+                      ))}
+                    </ComposerPopover>
+                  ) : null}
+                </div>
+              </div>
+              <div className="composer__actions">
+            {selectedConversationBusy ? (
+              <button
+                ref={composerActionRef}
+                type="button"
+                className="composer-action composer-action--stop"
+                disabled={generationActionBusy}
+                aria-label={selectedImageGenerating ? "Stop image generation" : "Stop response"}
+                title={selectedImageGenerating ? "Stop image generation" : "Stop response"}
+                onClick={stopGeneration}
+              >
+                <Square aria-hidden="true" />
+              </button>
+            ) : (
+              <button
+                ref={composerActionRef}
+                type="submit"
+                className="send-button"
+                disabled={
+                  !draft.trim() || !["ready", "preparing"].includes(readiness.key)
+                  || sending || Boolean(globalActiveGeneration)
+                }
+                aria-label="Send message"
+              >
+                <Send aria-hidden="true" />
+              </button>
+            )}
+              </div>
+            </div>
+          </div>
+          {readiness.key !== "no_version" ? (
+            <p className="composer__hint">
+              {selectedConversationBusy
+                ? activeGeneration?.phase ||
+                  (selectedImageGenerating ? "Generating image" : "Generating response")
+                : readiness.key === "preparing"
+                ? "Your message will wait until the local model is ready."
+                : readiness.key === "unavailable"
+                ? `${chatStatus?.selected_model_label || "The selected model"} is registered, but native activation has not passed.`
+                : "Enter to send · Shift+Enter for a new line"}
+            </p>
+          ) : (
+            <p className="composer__hint">Drafting is available. Select a saved version in Training to send.</p>
+          )}
+        </form>
+      </section>
+      )}
+
+      {activityWorkspaceOpen && !showAbout ? (
+        <>
+          <button
+            type="button"
+            className="cooking-activity-backdrop"
+            aria-label="Close activity"
+            onClick={showAgentActivity
+              ? () => setDismissedAgentTask(agentActivityKey)
+              : closeCookingActivity}
+          />
+          {showAgentActivity ? (
+            <AgentActivityPanel
+              task={agentActivity}
+              running={agentRunning}
+              onStop={stopGeneration}
+              onClose={() => setDismissedAgentTask(agentActivityKey)}
+            />
+          ) : (
+            <CookingActivityPanel
+              message={cookingActivityMessage}
+              active={cookingActivityMessageId === "active"}
+              mode={cookingActivityMessage
+                ? messageReasoningMode(cookingActivityMessage)
+                : activeReasoningMode}
+              operation={activeGeneration}
+              onClose={closeCookingActivity}
+            />
+          )}
+        </>
+      ) : null}
+
+      {responseDetailsFor && !showAbout ? (
+        <>
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                                                                           }
           <button
             type="button"
             className="response-details-scrim"
@@ -2312,15 +2616,6 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
             onOpenExternal={openExternalLink}
           />
         </>
-      ) : null}
-
-      {agentActivity && !showAbout ? (
-        <AgentActivityPanel
-          task={agentActivity}
-          running={agentRunning}
-          onStop={stopGeneration}
-          onClose={() => setDismissedAgentTask(agentActivityKey)}
-        />
       ) : null}
 
       {inspectorOpen && !showAbout ? (
@@ -2363,7 +2658,18 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                       const createdPayload = await api.createConversation();
                       const created = createdPayload?.conversation || createdPayload;
                       conversationId = created.id;
+                      locallyCreatedConversationIdsRef.current.add(String(created.id));
                       selectConversation(created.id);
+                      setConversation({ ...created, messages: created.messages || [] });
+                      setResources((previous) => ({
+                        ...previous,
+                        conversations: [
+                          created,
+                          ...previous.conversations.filter(
+                            (item) => String(item.id) !== String(created.id),
+                          ),
+                        ],
+                      }));
                     }
                     let operation = await api.analyzeVisionInput(
                       conversationId,
@@ -2423,10 +2729,26 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                 }}
               />
             </PluginsSettingsSheet>
+          ) : settingsView === "memory" ? (
+            <PluginsSettingsSheet
+              title="Memory"
+              subtitle="Only context you explicitly saved"
+              closeLabel="Close memory"
+              onClose={() => setInspectorOpen(false)}
+            >
+              <MemoryPanel />
+            </PluginsSettingsSheet>
           ) : (
             <ResponseSettingsSheet
-              title={modelActivationBusy ? "Loading model..." : "Model & response"}
+              title={
+                settingsView === "image"
+                  ? "Image generation"
+                  : modelActivationBusy
+                    ? "Loading model..."
+                    : "Model & response"
+              }
               models={modelOptions}
+              imageModels={chatStatus?.image_generation?.models || []}
               selectedModelId={activeVersionId ? String(activeVersionId) : ""}
               modelLabel={activeModelLabel}
               modelDetail={readiness.key === "ready" ? "Loaded for this conversation" : readiness.label}
@@ -2444,6 +2766,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                 web_search_enabled: generationSettings.web_search_enabled,
               }, DEFAULT_GENERATION_SETTINGS))}
               onClose={() => setInspectorOpen(false)}
+              initialSection={settingsView}
             />
           )}
         </div>
@@ -2654,16 +2977,23 @@ function ReadinessState({ readiness, chatStatus }) {
   );
 }
 
-function PluginsSettingsSheet({ children, onClose, active = true }) {
+function PluginsSettingsSheet({
+  children,
+  onClose,
+  active = true,
+  title = "Plugins",
+  subtitle = "Connections and permissions",
+  closeLabel = "Close plugins",
+}) {
   const sheetRef = useModalFocusTrap({ active, onClose });
   return (
     <aside ref={sheetRef} className="plugins-settings-sheet" role="dialog" aria-modal="true" aria-labelledby="plugins-settings-title" tabIndex="-1">
       <header className="plugins-settings-sheet__chrome">
         <div>
-          <strong id="plugins-settings-title">Plugins</strong>
-          <span>Connections and permissions</span>
+          <strong id="plugins-settings-title">{title}</strong>
+          <span>{subtitle}</span>
         </div>
-        <button type="button" aria-label="Close plugins" onClick={onClose}>
+        <button type="button" aria-label={closeLabel} onClick={onClose}>
           <X aria-hidden="true" />
         </button>
       </header>

@@ -16,7 +16,9 @@ export function CookingActivityPanel({
   operation = null,
   onClose,
 }) {
-  const preview = active ? (operation?.result?.generation_preview || null) : null;
+  const preview = active
+    ? (operation?.result?.generation_preview || operation?.progress?.generation_preview || null)
+    : null;
   const activeContent = active
     ? (preview?.tail_text || "")
     : (message?.content || "");
@@ -56,9 +58,12 @@ export function CookingActivityPanel({
       : mode === "cooking"
         ? (cookingIncomplete ? "Cooking paused" : "Cooked")
         : "Response activity");
+  const panelLabel = title.toLowerCase().endsWith("activity")
+    ? title
+    : `${title} activity`;
 
   return (
-    <aside id="cooking-activity-panel" className="cooking-activity" aria-label={`${title} activity`}>
+    <aside id="cooking-activity-panel" className="cooking-activity" aria-label={panelLabel}>
       <header className="cooking-activity__header">
         <div>
           <strong>{title}</strong>
@@ -127,6 +132,9 @@ function ActivityJournal({ entries, active = false }) {
   const current = currentActivityEntry(entries);
   const currentRef = useRef(null);
   const finished = entries.filter((entry) => ["completed", "skipped", "failed"].includes(entry.state)).length;
+  const history = active && current
+    ? entries.filter((entry) => entry.id !== current.id)
+    : entries;
 
   useEffect(() => {
     if (!active || !current?.id || !currentRef.current) return;
@@ -142,19 +150,33 @@ function ActivityJournal({ entries, active = false }) {
     <section className="cooking-activity__journal" aria-label="Activity journal">
       <div className="cooking-activity__section-title">
         <CookingGlyph />
-        <span>Activity</span>
+        <span>{active ? "Live activity" : "Activity"}</span>
         <span className="cooking-activity__step-count">
-          {active ? `${finished}/${entries.length}` : `${entries.length} steps`}
+          {active
+            ? `${finished} finished / ${current ? "1 live" : "waiting"}`
+            : `${entries.length} event${entries.length === 1 ? "" : "s"}`}
         </span>
       </div>
-      <ol>
-        {entries.map((entry) => (
+      {active && current ? (
+        <div
+          className="cooking-activity__current"
+          ref={currentRef}
+          data-kind={current.kind}
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span>Now</span>
+          <strong>{current.label}</strong>
+          {current.detail ? <p>{current.detail}</p> : null}
+          <small>{activityEntryTelemetry(current)}</small>
+        </div>
+      ) : null}
+      {history.length ? <ol>
+        {history.map((entry) => (
           <li
             key={entry.id || `${entry.label}-${entry.sequence}`}
-            ref={entry.id === current?.id ? currentRef : null}
             data-state={entry.state}
             data-kind={entry.kind}
-            aria-current={entry.id === current?.id ? "step" : undefined}
           >
             <span className="cooking-activity__journal-marker" aria-hidden="true" />
             <div>
@@ -164,10 +186,7 @@ function ActivityJournal({ entries, active = false }) {
             </div>
           </li>
         ))}
-      </ol>
-      <span className="sr-only" aria-live="polite" aria-atomic="true">
-        {current ? `${current.label}. ${current.detail}` : ""}
-      </span>
+      </ol> : null}
     </section>
   );
 }
@@ -222,7 +241,7 @@ function cookingStage(phase, mode) {
 function ActivityMetrics({ items }) {
   if (!items.length) return null;
   return (
-    <dl className="cooking-activity__metrics">
+    <dl className="cooking-activity__metrics" aria-label="Response telemetry">
       {items.map((item) => (
         <div key={item.label}>
           <dt>{item.label}</dt>
@@ -237,22 +256,30 @@ function activityTelemetry(operation, details) {
   const sources = [operation, operation?.progress, operation?.result, details].filter(Boolean);
   const inputTokens = firstFinite(sources, ["input_context_tokens", "prompt_tokens"]);
   const previewTokens = firstFinite(
-    [operation?.result?.generation_preview].filter(Boolean),
+    [
+      operation?.result?.generation_preview,
+      operation?.progress?.generation_preview,
+    ].filter(Boolean),
     ["token_count"],
   );
   const outputTokens = previewTokens ?? firstFinite(
     sources,
-    ["generated_output_tokens", "output_tokens"],
+    [
+      "total_streamed_output_tokens",
+      "visible_output_tokens",
+      "generated_output_tokens",
+      "output_tokens",
+    ],
   );
   const outputLimit = firstFinite(sources, ["maximum_output_tokens", "max_output_tokens"]);
   const elapsedSeconds = firstFinite(sources, ["elapsed_seconds", "generation_duration_seconds"])
     ?? millisecondsToSeconds(firstFinite(sources, ["generation_duration_ms"]));
   return [
-    inputTokens === null ? null : { label: "Input", value: `${formatCount(inputTokens)} tokens` },
-    outputTokens === null ? null : { label: "Output", value: `${formatCount(outputTokens)} tokens` },
+    inputTokens === null ? null : { label: "Input", value: formatTokenCount(inputTokens) },
+    outputTokens === null ? null : { label: "Output", value: formatTokenCount(outputTokens) },
     outputTokens !== null || outputLimit === null
       ? null
-      : { label: "Output limit", value: `${formatCount(outputLimit)} tokens` },
+      : { label: "Output limit", value: formatTokenCount(outputLimit) },
     elapsedSeconds === null ? null : { label: "Elapsed", value: formatDuration(elapsedSeconds) },
   ].filter(Boolean);
 }
@@ -275,4 +302,9 @@ function millisecondsToSeconds(value) {
 
 function formatCount(value) {
   return Math.round(value).toLocaleString();
+}
+
+function formatTokenCount(value) {
+  const count = Math.round(value);
+  return `${formatCount(count)} token${count === 1 ? "" : "s"}`;
 }

@@ -595,11 +595,23 @@ internal sealed record PythonEnvironment(
             .Select(line => line.Split('=', 2, StringSplitOptions.TrimEntries))
             .Where(parts => parts.Length == 2)
             .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.OrdinalIgnoreCase);
-        if (!values.TryGetValue("home", out var pythonHome)
+        if (!values.TryGetValue("home", out var configuredPythonHome)
             || !values.TryGetValue("version", out var version))
         {
             throw new InvalidDataException("The private application runtime is incomplete.");
         }
+
+
+
+
+
+
+        var packagedPythonHome = Path.GetFullPath(Path.Combine(projectRoot, ".python"));
+        var pythonHome = Directory.Exists(packagedPythonHome)
+            ? packagedPythonHome
+            : Path.IsPathRooted(configuredPythonHome)
+                ? Path.GetFullPath(configuredPythonHome)
+                : Path.GetFullPath(Path.Combine(projectRoot, configuredPythonHome));
 
         var match = Regex.Match(version, @"^(?<major>\d+)\.(?<minor>\d+)");
         if (!match.Success)
@@ -631,6 +643,7 @@ internal sealed class MainWindow : Form
     private bool browserReady;
     private CoreWebView2Environment? webViewEnvironment;
     private readonly Action interfaceReady;
+    private bool saveInProgress;
 
     public MainWindow(string projectRoot, string applicationUrl, Action interfaceReady)
     {
@@ -804,28 +817,47 @@ internal sealed class MainWindow : Form
         {
             eventArgs.Handled = true;
         };
-        core.DownloadStarting += (_, eventArgs) =>
-        {
-            eventArgs.Cancel = true;
-        };
+
+
+
+        core.DownloadStarting += (_, eventArgs) => eventArgs.Cancel = true;
         core.WebMessageReceived += (_, eventArgs) =>
         {
             try
             {
                 using var message = JsonDocument.Parse(eventArgs.WebMessageAsJson);
                 var root = message.RootElement;
+                var messageType = root.TryGetProperty("type", out var type)
+                    ? type.GetString()
+                    : null;
                 if (
-                    root.TryGetProperty("type", out var type)
-                    && type.GetString() == "open_browser"
+                    messageType == "open_browser"
                     && root.TryGetProperty("url", out var url)
                     && TryCreateWebAddress(url.GetString(), out var target)
                     && webViewEnvironment is not null
                 )
                 {
                     BeginInvoke(() => new BrowserWindow(projectRoot, webViewEnvironment, target).Show(this));
+                    return;
+                }
+                if (messageType == "save_file")
+                {
+                    var source = root.TryGetProperty("source", out var sourceValue)
+                        ? sourceValue.GetString()
+                        : null;
+                    var suggestedName = root.TryGetProperty("suggested_name", out var nameValue)
+                        ? nameValue.GetString()
+                        : null;
+                    var urlValue = root.TryGetProperty("url", out var artifactUrl)
+                        ? artifactUrl.GetString()
+                        : null;
+                    var content = root.TryGetProperty("content", out var contentValue)
+                        ? contentValue.GetString()
+                        : null;
+                    _ = SaveFileFromChatAsync(source, suggestedName, urlValue, content);
                 }
             }
-            catch (JsonException error)
+            catch (Exception error) when (error is JsonException or InvalidOperationException)
             {
                 DesktopDiagnostics.Write(projectRoot, "invalid_native_web_message", error);
             }
@@ -855,12 +887,222 @@ internal sealed class MainWindow : Form
             && target.Port == applicationUri.Port;
     }
 
+    private async Task SaveFileFromChatAsync(
+        string? source,
+        string? suggestedName,
+        string? sourceUrl,
+        string? content
+    )
+    {
+        if (saveInProgress)
+        {
+            MessageBox.Show(
+                this,
+                "Finish the current save before starting another one.",
+                "Save in progress",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
+            return;
+        }
+        var safeName = SafeSuggestedFileName(suggestedName);
+        var downloads = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Downloads"
+        );
+        Directory.CreateDirectory(downloads);
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Save from Salty Steak",
+            InitialDirectory = downloads,
+            FileName = safeName,
+            AddExtension = true,
+            OverwritePrompt = true,
+            CheckPathExists = true,
+            RestoreDirectory = true,
+            Filter = SaveFilterFor(safeName),
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        saveInProgress = true;
+        using var progress = new SaveProgressWindow(dialog.FileName);
+        progress.Show(this);
+        progress.Refresh();
+        try
+        {
+            if (string.Equals(source, "text", StringComparison.Ordinal))
+            {
+                var exact = content ?? "";
+                if (Encoding.UTF8.GetByteCount(exact) > 8 * 1024 * 1024)
+                {
+                    throw new InvalidDataException("The generated file exceeds the 8 MiB save limit.");
+                }
+                await File.WriteAllTextAsync(
+                    dialog.FileName,
+                    exact,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
+                );
+            }
+            else if (string.Equals(source, "url", StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(sourceUrl))
+                {
+                    throw new InvalidDataException("The image artifact URL is missing.");
+                }
+                var artifactUri = new Uri(applicationUri, sourceUrl);
+                if (!IsApplicationAddress(artifactUri.AbsoluteUri))
+                {
+                    throw new InvalidDataException("Only local Salty Steak artifacts can be saved.");
+                }
+                using var client = new HttpClient();
+                using var response = await client.GetAsync(
+                    artifactUri,
+                    HttpCompletionOption.ResponseHeadersRead
+                );
+                response.EnsureSuccessStatusCode();
+                var total = response.Content.Headers.ContentLength;
+                await using var input = await response.Content.ReadAsStreamAsync();
+                await using var output = new FileStream(
+                    dialog.FileName,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    128 * 1024,
+                    useAsync: true
+                );
+                var buffer = new byte[128 * 1024];
+                long copied = 0;
+                while (true)
+                {
+                    var read = await input.ReadAsync(buffer);
+                    if (read == 0) break;
+                    await output.WriteAsync(buffer.AsMemory(0, read));
+                    copied += read;
+                    progress.Report(copied, total);
+                }
+                await output.FlushAsync();
+            }
+            else
+            {
+                throw new InvalidDataException("The requested save source is unsupported.");
+            }
+            browser.CoreWebView2?.PostWebMessageAsJson(
+                JsonSerializer.Serialize(new
+                {
+                    type = "save_completed",
+                    filename = Path.GetFileName(dialog.FileName),
+                    directory = Path.GetDirectoryName(dialog.FileName),
+                })
+            );
+        }
+        catch (Exception error)
+        {
+            DesktopDiagnostics.Write(projectRoot, "chat_artifact_save_failed", error);
+            try { File.Delete(dialog.FileName); } catch (IOException) { }
+            MessageBox.Show(
+                this,
+                $"The file could not be saved.\n\n{error.Message}",
+                "Save failed",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error
+            );
+        }
+        finally
+        {
+            progress.Close();
+            saveInProgress = false;
+        }
+    }
+
+    private static string SafeSuggestedFileName(string? value)
+    {
+        var leaf = Path.GetFileName(string.IsNullOrWhiteSpace(value) ? "salty-steak-file.txt" : value);
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+        {
+            leaf = leaf.Replace(invalid, '-');
+        }
+        leaf = leaf.Trim().TrimStart('.');
+        return string.IsNullOrWhiteSpace(leaf) ? "salty-steak-file.txt" : leaf[..Math.Min(leaf.Length, 120)];
+    }
+
+    private static string SaveFilterFor(string fileName)
+    {
+        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        return extension switch
+        {
+            ".png" => "PNG image (*.png)|*.png|All files (*.*)|*.*",
+            ".py" => "Python file (*.py)|*.py|All files (*.*)|*.*",
+            ".ps1" => "PowerShell script (*.ps1)|*.ps1|All files (*.*)|*.*",
+            ".json" => "JSON file (*.json)|*.json|All files (*.*)|*.*",
+            ".js" => "JavaScript file (*.js)|*.js|All files (*.*)|*.*",
+            ".ts" => "TypeScript file (*.ts)|*.ts|All files (*.*)|*.*",
+            _ => "All files (*.*)|*.*",
+        };
+    }
+
     private static bool TryCreateWebAddress(string? address, out Uri target)
     {
         target = null!;
         return Uri.TryCreate(address, UriKind.Absolute, out var parsed)
             && (parsed.Scheme == Uri.UriSchemeHttps || parsed.Scheme == Uri.UriSchemeHttp)
             && (target = parsed) is not null;
+    }
+}
+
+internal sealed class SaveProgressWindow : Form
+{
+    private readonly ProgressBar bar;
+    private readonly Label status;
+
+    public SaveProgressWindow(string destination)
+    {
+        Text = "Saving from Salty Steak";
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        ControlBox = false;
+        ShowInTaskbar = false;
+        ClientSize = new Size(520, 126);
+        BackColor = Color.FromArgb(29, 29, 28);
+        ForeColor = Color.Gainsboro;
+        var title = new Label
+        {
+            AutoSize = false,
+            Text = "Saving file",
+            Font = new Font(SystemFonts.MessageBoxFont!, FontStyle.Bold),
+            Location = new Point(20, 16),
+            Size = new Size(480, 24),
+        };
+        status = new Label
+        {
+            AutoEllipsis = true,
+            Text = destination,
+            Location = new Point(20, 44),
+            Size = new Size(480, 24),
+        };
+        bar = new ProgressBar
+        {
+            Location = new Point(20, 82),
+            Size = new Size(480, 16),
+            Style = ProgressBarStyle.Marquee,
+            MarqueeAnimationSpeed = 28,
+        };
+        Controls.Add(title);
+        Controls.Add(status);
+        Controls.Add(bar);
+    }
+
+    public void Report(long copied, long? total)
+    {
+        if (total is not > 0) return;
+        bar.Style = ProgressBarStyle.Continuous;
+        bar.MarqueeAnimationSpeed = 0;
+        bar.Maximum = 1000;
+        bar.Value = Math.Clamp((int)(copied * 1000L / total.Value), 0, 1000);
+        status.Text = $"{copied:N0} of {total.Value:N0} bytes";
+        Refresh();
     }
 }
 

@@ -41,9 +41,6 @@ export function connectionAction(app) {
 
 
 export function composerPickerSections(pluginState) {
-  const tools = (pluginState?.tools || pluginState?.plugins || []).filter(
-    (tool) => tool && tool.id,
-  );
   const apps = (pluginState?.connected_apps || []).filter(
     (app) => app && app.id && app.name,
   );
@@ -68,28 +65,23 @@ export function composerPickerSections(pluginState) {
       })),
     });
   }
-  if (tools.length) {
-    sections.push({
-      id: "tools",
-      title: "Tools",
-      description: "Built into this build of Salty Steak",
-      rows: tools.map((tool) => {
-        const ready = tool.availability === "available";
-        return {
-          id: String(tool.id),
-          kind: "tool",
-          name: String(tool.name || tool.id),
-          detail: String(
-            (ready ? tool.description : tool.unavailable_reason || tool.description) || "",
-          ),
-          state: ready ? "Available" : "Unavailable",
-          action: "manage",
-          disabled: !ready,
-          category: String(tool.category || ""),
-        };
-      }),
-    });
-  }
+  sections.push({
+    id: "workspace",
+    title: "Workspace",
+    description: "Controls for your local assistant",
+    rows: [
+      {
+        id: "memory",
+        kind: "memory",
+        name: "Memory",
+        detail: "Review or delete the context you explicitly saved",
+        state: "Manage",
+        action: "manage",
+        disabled: false,
+        category: "built_in_control",
+      },
+    ],
+  });
   return sections;
 }
 

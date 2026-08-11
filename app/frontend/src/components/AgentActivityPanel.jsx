@@ -13,6 +13,7 @@ import {
   ShieldAlert,
   Square,
   Terminal,
+  X,
 } from "lucide-react";
 
 const ACTION_ICONS = {
@@ -22,6 +23,7 @@ const ACTION_ICONS = {
   "terminal.execute": Terminal,
   "browser.control": Globe,
   "ui.automation": MousePointerClick,
+  "discord.inspect": Search,
   "window.control": AppWindow,
   "image.generate": ImageIcon,
   research: Search,
@@ -29,22 +31,35 @@ const ACTION_ICONS = {
   respond: Check,
 };
 
-
 const ACTION_LABELS = {
-  "screen.capture": "Looked at the screen",
-  "input.control": "Used mouse or keyboard",
+  "screen.capture": "Checked the screen",
+  "input.control": "Worked in the application",
   "application.launch": "Opened an application",
-  "terminal.execute": "Ran a command",
-  "browser.control": "Read a web page",
-  "ui.automation": "Used a window control",
-  "window.control": "Switched window",
+  "terminal.execute": "Ran a local command",
+  "browser.control": "Reviewed web content",
+  "ui.automation": "Worked in the application",
+  "discord.inspect": "Reviewed Discord",
+  "window.control": "Worked in the application",
   "image.generate": "Created an image",
-  respond: "Finished",
+  research: "Reviewed sources",
+  connector: "Used a connected service",
+  respond: "Prepared the answer",
+};
+
+const PHASE_LABELS = {
+  discord: "Worked in Discord",
+  computer: "Worked in the application",
+  screen: "Checked the screen",
+  terminal: "Ran local commands",
+  research: "Reviewed sources",
+  image: "Created an image",
+  connector: "Used a connected service",
+  finish: "Prepared the answer",
 };
 
 const STATE_COPY = {
   queued: "Getting ready",
-  planning: "Working out how",
+  planning: "Planning the next step",
   executing: "Working on your request",
   observing: "Checking the result",
   verifying: "Confirming it worked",
@@ -55,10 +70,9 @@ const STATE_COPY = {
   completed: "Done",
   cancelled: "Stopped",
   failed: "Could not finish",
-  exhausted: "Reached the step limit",
+  exhausted: "Reached the decision guard",
   needs_review: "Waiting for your review",
 };
-
 
 const WAITING_COPY = {
   user_sign_in: "Sign in to continue",
@@ -73,18 +87,72 @@ function elapsedLabel(seconds) {
   if (!Number.isFinite(value) || value <= 0) return "";
   if (value < 60) return `${value.toFixed(1)}s`;
   const minutes = Math.floor(value / 60);
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
+  }
   return `${minutes}m ${Math.round(value % 60)}s`;
 }
 
 function stepSummary(task, visibleCount, running) {
-
-
   const planned = Number(task?.planned_step_count);
   if (Number.isFinite(planned) && planned > 0) {
     return `Step ${Math.min(visibleCount, planned)} of ${planned}`;
   }
-  if (!visibleCount) return running ? "Starting" : "";
-  return `Step ${visibleCount}`;
+  const measured = Number(task?.step_count);
+  const completed = Number.isFinite(measured) ? Math.max(measured, visibleCount) : visibleCount;
+  if (!completed) return running ? "Starting" : "";
+  return `Step ${completed}`;
+}
+
+function stepTone(step) {
+  if (step.status === "failed") return "failed";
+  if (step.status === "blocked") return "blocked";
+  if (step.status === "running") return "active";
+  return "done";
+}
+
+function stepPhase(step) {
+  const action = String(step.action || "");
+  const reason = String(step.reason || "").toLowerCase();
+  if (
+    action === "discord.inspect"
+    || /discord|giveaway|server list|channel|quick switcher/.test(reason)
+  ) return "discord";
+  if (action === "screen.capture") return "screen";
+  if (action === "terminal.execute") return "terminal";
+  if (action === "browser.control" || action === "research") return "research";
+  if (action === "image.generate") return "image";
+  if (action === "connector") return "connector";
+  if (action === "respond") return "finish";
+  if (["input.control", "application.launch", "ui.automation", "window.control"].includes(action)) {
+    return "computer";
+  }
+  return action || "computer";
+}
+
+function readableReason(value) {
+  return String(value || "")
+    .replaceAll("UIA", "window")
+    .replaceAll("UI tree", "visible controls")
+    .replaceAll("control tree", "visible controls")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+}
+
+function groupActivitySteps(steps) {
+  return steps.reduce((groups, step) => {
+    const phase = stepPhase(step);
+    const tone = stepTone(step);
+    const previous = groups.at(-1);
+    if (previous && previous.phase === phase && previous.tone === tone) {
+      previous.steps.push(step);
+      return groups;
+    }
+    groups.push({ phase, tone, steps: [step] });
+    return groups;
+  }, []);
 }
 
 export function AgentActivityPanel({
@@ -110,119 +178,188 @@ export function AgentActivityPanel({
         status: "running",
       }
       : null;
-  const visible = current ? [...steps, current] : steps;
+  const groups = groupActivitySteps(steps);
   const elapsed = elapsedLabel(task.elapsed_seconds);
-  const summary = stepSummary(task, visible.length, running);
+  const summary = stepSummary(task, steps.length + (current ? 1 : 0), running);
   const waiting = task.waiting_for ? WAITING_COPY[task.waiting_for] : null;
   const approval = task.approval || null;
   const metrics = task.metrics || {};
+  const preview = task.generation_preview || {};
+  const budget = task.mission_budget || {};
+  const remaining = elapsedLabel(budget.remaining_seconds);
+  const liveSummary = String(
+    current?.reason || preview.summary || STATE_COPY[state] || "Working on your request",
+  );
+  const totalOutputTokens = Number(metrics.planning_output_tokens);
+  const liveCounts = [
+    Number.isFinite(totalOutputTokens)
+      ? { label: "Total output tokens", value: totalOutputTokens.toLocaleString() }
+      : null,
+    remaining ? { label: "Time remaining", value: remaining } : null,
+  ].filter(Boolean);
 
   return (
     <aside className="agent-activity" aria-label="Activity">
       <header className="agent-activity__header">
         <div className="agent-activity__heading">
+          <span className="agent-activity__eyebrow">Activity</span>
           <strong>{task.state_label || STATE_COPY[state] || "Working"}</strong>
           <span className="agent-activity__meta">
-            {[summary, elapsed].filter(Boolean).join(" · ")}
+            {[summary, elapsed].filter(Boolean).join(" / ")}
           </span>
         </div>
-        {running || stopping ? (
-          <button
-            type="button"
-            className="agent-activity__stop"
-            onClick={onStop}
-
-
-            disabled={stopping}
-            aria-live="polite"
-          >
-            <Square aria-hidden="true" />
-            {stopping ? "Stopping…" : "Stop"}
-          </button>
-        ) : onClose ? (
-          <button type="button" className="agent-activity__stop" onClick={onClose}>
-            Close
-          </button>
-        ) : null}
+        <div className="agent-activity__header-actions">
+          {running || stopping ? (
+            <button
+              type="button"
+              className="agent-activity__stop"
+              onClick={onStop}
+              disabled={stopping}
+              aria-live="polite"
+            >
+              <Square aria-hidden="true" />
+              {stopping ? "Stopping..." : "Stop"}
+            </button>
+          ) : null}
+          {onClose ? (
+            <button
+              type="button"
+              className="agent-activity__close"
+              onClick={onClose}
+              aria-label="Close activity"
+            >
+              <X aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
       </header>
 
-      {waiting ? (
-        <div className="agent-activity__waiting" role="status">
-          <ShieldAlert aria-hidden="true" />
-          <div>
-            <strong>{waiting}</strong>
-            {task.waiting_detail?.url ? <p>{task.waiting_detail.url}</p> : null}
+      <div className="agent-activity__body">
+        {waiting ? (
+          <div className="agent-activity__waiting" role="status">
+            <ShieldAlert aria-hidden="true" />
+            <div>
+              <strong>{waiting}</strong>
+              {task.waiting_detail?.url ? <p>{task.waiting_detail.url}</p> : null}
+            </div>
           </div>
-        </div>
-      ) : null}
-
-      {approval ? (
-        <ApprovalCard approval={approval} onApprove={onApprove} onReject={onReject} />
-      ) : null}
-
-      <ol className="agent-activity__steps">
-        {visible.map((step, index) => {
-          const Icon = ACTION_ICONS[step.action] || CircleAlert;
-          const failed = step.status === "failed";
-          const blocked = step.status === "blocked";
-          const active = step.status === "running";
-          const tone = failed
-            ? "failed"
-            : blocked
-              ? "blocked"
-              : active
-                ? "active"
-                : "done";
-          return (
-            <li
-              key={`${step.step}-${step.action}-${index}`}
-              className={`agent-step agent-step--${tone}`}
-              style={{ "--agent-step-index": Math.min(index, 6) }}
-            >
-              <span className="agent-step__marker" aria-hidden="true">
-                {blocked ? <ShieldAlert /> : <Icon />}
-              </span>
-              <div className="agent-step__body">
-                <div className="agent-step__title">
-                  <strong>{ACTION_LABELS[step.action] || step.action}</strong>
-                  {step.verified === true ? (
-                    <small className="agent-step__verified">Confirmed</small>
-                  ) : null}
-                </div>
-                {step.reason ? <p>{step.reason}</p> : null}
-                <StepDetail step={step} />
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-
-      <div className="agent-activity__disclosure">
-        <button
-          type="button"
-          className="agent-activity__toggle"
-          onClick={() => setShowDetail((value) => !value)}
-          aria-expanded={showDetail}
-        >
-          <ChevronRight aria-hidden="true" data-open={showDetail || undefined} />
-          Technical details
-        </button>
-        {showDetail ? (
-          <dl className="agent-activity__facts">
-            <TechnicalFact label="Task" value={task.task_id} mono />
-            <TechnicalFact label="State" value={state} />
-            <TechnicalFact label="Model calls" value={metrics.model_calls} />
-            <TechnicalFact label="Planning calls" value={metrics.planning_model_calls} />
-            <TechnicalFact label="Image calls" value={metrics.image_model_calls} />
-            <TechnicalFact label="Tool calls" value={metrics.tool_calls} />
-            <TechnicalFact label="Retries" value={metrics.retries} />
-            <TechnicalFact label="Replans" value={metrics.replans} />
-            <TechnicalFact label="Screenshots" value={metrics.screenshots} />
-            {task.failure ? <TechnicalFact label="Failure" value={task.failure} /> : null}
-          </dl>
         ) : null}
+
+        {running && !waiting ? (
+          <section className="agent-activity__live" role="status" aria-live="polite">
+            <span className="agent-activity__section-label">Now</span>
+            <strong>{readableReason(liveSummary)}</strong>
+            {liveCounts.length ? (
+              <dl className="agent-activity__live-metrics" aria-label="Live task telemetry">
+                {liveCounts.map((item) => (
+                  <div key={item.label}>
+                    <dt>{item.label}</dt>
+                    <dd>{item.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+          </section>
+        ) : null}
+
+        {approval ? (
+          <ApprovalCard approval={approval} onApprove={onApprove} onReject={onReject} />
+        ) : null}
+
+        {groups.length ? (
+          <section className="agent-activity__timeline" aria-label="Progress summary">
+            <header>
+              <strong>{running ? "Progress" : "What happened"}</strong>
+              <span>{`${steps.length} action${steps.length === 1 ? "" : "s"}`}</span>
+            </header>
+            <ol className="agent-activity__groups">
+              {groups.map((group, index) => (
+                <ActivityGroup
+                  key={`${group.phase}-${group.steps[0]?.step}-${index}`}
+                  group={group}
+                />
+              ))}
+            </ol>
+          </section>
+        ) : null}
+
+        <div className="agent-activity__disclosure">
+          <button
+            type="button"
+            className="agent-activity__toggle"
+            onClick={() => setShowDetail((value) => !value)}
+            aria-expanded={showDetail}
+          >
+            <ChevronRight aria-hidden="true" data-open={showDetail || undefined} />
+            Technical details
+          </button>
+          {showDetail ? (
+            <dl className="agent-activity__facts">
+              <TechnicalFact label="Task" value={task.task_id} mono />
+              <TechnicalFact label="State" value={state} />
+              <TechnicalFact label="Model calls" value={metrics.model_calls} />
+              <TechnicalFact label="Total output tokens" value={metrics.planning_output_tokens} />
+              <TechnicalFact label="Current decision tokens" value={preview.token_count} />
+              <TechnicalFact label="Output characters" value={metrics.planning_output_characters} />
+              <TechnicalFact label="Planning calls" value={metrics.planning_model_calls} />
+              <TechnicalFact label="Image calls" value={metrics.image_model_calls} />
+              <TechnicalFact label="Tool calls" value={metrics.tool_calls} />
+              <TechnicalFact label="Retries" value={metrics.retries} />
+              <TechnicalFact label="Replans" value={metrics.replans} />
+              <TechnicalFact label="Screenshots" value={metrics.screenshots} />
+              <TechnicalFact label="Context rollovers" value={metrics.context_compactions} />
+              <TechnicalFact
+                label="Mission time limit"
+                value={elapsedLabel(budget.duration_limit_seconds)}
+              />
+              <TechnicalFact label="Decision guard" value={budget.step_limit} />
+              {task.failure ? <TechnicalFact label="Failure" value={task.failure} /> : null}
+            </dl>
+          ) : null}
+        </div>
       </div>
     </aside>
+  );
+}
+
+function ActivityGroup({ group }) {
+  const latest = group.steps.at(-1) || {};
+  const Icon = ACTION_ICONS[latest.action] || CircleAlert;
+  const reasons = [...new Set(group.steps.map((step) => readableReason(step.reason)).filter(Boolean))];
+  const latestReason = reasons.at(-1) || "Completed this part of the task.";
+  const count = group.steps.length;
+  const hasDetails = count > 1 || latest.status === "failed" || latest.action === "terminal.execute";
+  return (
+    <li className={`agent-activity__group agent-activity__group--${group.tone}`}>
+      <span className="agent-activity__group-marker" aria-hidden="true">
+        {group.tone === "blocked" ? <ShieldAlert /> : <Icon />}
+      </span>
+      <div className="agent-activity__group-body">
+        <div className="agent-activity__group-title">
+          <strong>{PHASE_LABELS[group.phase] || ACTION_LABELS[latest.action] || "Worked on the task"}</strong>
+          <small>
+            {group.tone === "failed"
+              ? "Failed"
+              : group.tone === "blocked"
+                ? "Blocked"
+                : `${count} action${count === 1 ? "" : "s"}`}
+          </small>
+        </div>
+        <p>{latestReason}</p>
+        {hasDetails ? (
+          <details className="agent-activity__group-details">
+            <summary>{count > 1 ? `Show ${count} steps` : "Show details"}</summary>
+            {reasons.length ? (
+              <ol>
+                {reasons.map((reason) => <li key={reason}>{reason}</li>)}
+              </ol>
+            ) : null}
+            <StepDetail step={latest} />
+          </details>
+        ) : null}
+        {latest.verified === true ? <small className="agent-step__verified">Confirmed</small> : null}
+      </div>
+    </li>
   );
 }
 
@@ -237,8 +374,6 @@ function TechnicalFact({ label, value, mono = false }) {
 }
 
 function ApprovalCard({ approval, onApprove, onReject }) {
-
-
   const count = Number(approval.item_count);
   return (
     <div className="agent-approval" role="group" aria-label="Approval required">
@@ -251,18 +386,10 @@ function ApprovalCard({ approval, onApprove, onReject }) {
         {approval.reason ? <p className="agent-approval__why">{approval.reason}</p> : null}
       </div>
       <div className="agent-approval__actions">
-        <button
-          type="button"
-          className="agent-approval__reject"
-          onClick={() => onReject?.(approval)}
-        >
+        <button type="button" className="agent-approval__reject" onClick={() => onReject?.(approval)}>
           Reject
         </button>
-        <button
-          type="button"
-          className="agent-approval__approve"
-          onClick={() => onApprove?.(approval)}
-        >
+        <button type="button" className="agent-approval__approve" onClick={() => onApprove?.(approval)}>
           Approve
         </button>
       </div>
@@ -278,9 +405,9 @@ function StepDetail({ step }) {
   if (step.action === "screen.capture" && observation.screenshot_path) {
     return (
       <p className="agent-step__detail">
-        {`Captured ${observation.image_width || "?"}×${observation.image_height || "?"}`}
+        {`Captured ${observation.image_width || "?"}x${observation.image_height || "?"}`}
         {Number(observation.scale_divisor) > 1
-          ? ` from a ${observation.screen_width}×${observation.screen_height} screen`
+          ? ` from a ${observation.screen_width}x${observation.screen_height} screen`
           : ""}
       </p>
     );
@@ -288,11 +415,7 @@ function StepDetail({ step }) {
   if (step.action === "terminal.execute") {
     const output = String(observation.stdout || observation.stderr || "").trim();
     if (!output) return null;
-    return (
-      <pre className="agent-step__output">
-        {output.length > 600 ? `${output.slice(0, 600)}…` : output}
-      </pre>
-    );
+    return <pre className="agent-step__output">{output.length > 600 ? `${output.slice(0, 600)}...` : output}</pre>;
   }
   if (step.action === "application.launch" && observation.target) {
     return <p className="agent-step__detail">{observation.target}</p>;

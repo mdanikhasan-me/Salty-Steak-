@@ -122,8 +122,9 @@ def promote_identity_candidate(
         "activation": "identity_intent",
         "state": "routed_post_training_evaluation_passed",
         "reason": (
-            "Learned rank-64 identity adapter; native unseen-generation and exact "
-            "capability-retention gates passed before learned-route promotion."
+            "One learned rank-512 identity adapter with hard-negative mining; native "
+            "first-pass unseen-generation and exact capability-retention gates "
+            "passed before learned-route promotion."
         ),
     }
     replacement_index = next(

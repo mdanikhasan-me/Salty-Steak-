@@ -15,7 +15,7 @@ import os
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -23,6 +23,15 @@ from typing import Any, Callable, Mapping, Sequence
 SALTY_TENSOR_TYPE_Q8_0 = 8
 SALTY_FLASH_ATTN_ENABLED = 1
 SALTY_DEFAULT_SEED = 0xFFFFFFFF
+SALTY_JSON_GBNF = r'''
+root   ::= object
+value  ::= object | array | string | number | ("true" | "false" | "null") ws
+object ::= "{" ws (string ":" ws value ("," ws string ":" ws value)*)? "}" ws
+array  ::= "[" ws (value ("," ws value)*)? "]" ws
+string ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F]{4}))* "\"" ws
+number ::= ("-"? ([0-9] | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?) ws
+ws     ::= ([ \t\n] ws)?
+'''.strip()
 NATIVE_REASONING_ALIASES = {
     "instant": "instant",
     "off": "instant",
@@ -82,6 +91,34 @@ def _highest_logit_token(logits: Any, allowed_token_ids: Sequence[int]) -> int:
     if not choices:
         raise ValueError("Constrained decoding requires at least one token")
     return max(choices, key=lambda token: float(logits[token]))
+
+
+def _adaptive_identity_context_limit(
+    *,
+    selected_ceiling: int,
+    resident_limit: int,
+    prompt_tokens: int,
+    reserved_output_tokens: int,
+) -> int:
+    """Allocate only the identity context required by the prepared prompt.
+
+    The selected context remains a hard ceiling. Short identity turns stay on
+    the resident context; a genuinely long conversation expands in 4K steps up
+    to the selected ceiling instead of paying the largest KV cost merely
+    because the UI exposes it.
+    """
+
+    selected = max(256, int(selected_ceiling))
+    resident = min(selected, max(256, int(resident_limit)))
+    required = max(
+        1,
+        int(prompt_tokens) + max(1, int(reserved_output_tokens)),
+    )
+    if required <= resident:
+        return resident
+    quantum = 4_096
+    rounded = ((required + quantum - 1) // quantum) * quantum
+    return min(selected, max(resident, rounded))
 
 
 def _apply_reasoning_to_rendered_prompt(prompt: bytes, mode: str) -> tuple[bytes, str]:
@@ -171,6 +208,62 @@ class _StopSequenceMatcher:
             else ""
         )
         return None
+
+
+class _JsonCompletionDetector:
+    """Detect the closing delimiter of one streamed root JSON object.
+
+    The native JSON grammar intentionally permits insignificant whitespace.
+    Without an application-level completion boundary, a model can therefore
+    keep sampling whitespace after a valid object until the output ceiling is
+    exhausted.  Track strings, escapes, objects, and arrays so generation can
+    stop as soon as the root object is complete, including when delimiters are
+    split across token pieces.
+    """
+
+    def __init__(self) -> None:
+        self._started = False
+        self._depth = 0
+        self._in_string = False
+        self._escaped = False
+        self._complete = False
+
+    def feed(self, piece: str) -> bool:
+        if self._complete:
+            return True
+
+        for character in piece:
+            if not self._started:
+                if character.isspace():
+                    continue
+                if character != "{":
+
+
+                    return False
+                self._started = True
+                self._depth = 1
+                continue
+
+            if self._in_string:
+                if self._escaped:
+                    self._escaped = False
+                elif character == "\\":
+                    self._escaped = True
+                elif character == '"':
+                    self._in_string = False
+                continue
+
+            if character == '"':
+                self._in_string = True
+            elif character in "[{":
+                self._depth += 1
+            elif character in "]}":
+                self._depth -= 1
+                if self._depth == 0:
+                    self._complete = True
+                    return True
+
+        return False
 
 
 class _ModelTensorBufferOverride(ctypes.Structure):
@@ -582,6 +675,12 @@ class _NativeApi:
             ctypes.c_float,
         ]
         dll.llama_sampler_init_penalties.restype = ctypes.c_void_p
+        dll.llama_sampler_init_grammar.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+        dll.llama_sampler_init_grammar.restype = ctypes.c_void_p
         dll.llama_sampler_sample.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int32]
         dll.llama_sampler_sample.restype = ctypes.c_int32
         dll.llama_sampler_free.argtypes = [ctypes.c_void_p]
@@ -615,6 +714,14 @@ class SaltyNativeRuntime:
         self._routing_context: int | None = None
         self._routing_context_limit: int | None = None
         self._routing_adapter_ids: tuple[str, ...] = ()
+        self._routing_prompt_token_buffer: Any = None
+        self._identity_context: int | None = None
+        self._identity_context_limit: int | None = None
+        self._identity_active_adapter_ids: tuple[str, ...] = ()
+        self._identity_resident_tokens: list[int] = []
+        self._identity_decode_token_buffer: Any = None
+        self._identity_decode_token_batch: _Batch | None = None
+        self._identity_prompt_token_buffer: Any = None
         self._vocab: int | None = None
         self._threadpool: int | None = None
         self._adapter_handles: list[int] = []
@@ -627,6 +734,7 @@ class SaltyNativeRuntime:
         self._lock = threading.RLock()
         self._decode_token_buffer: Any = None
         self._decode_token_batch: _Batch | None = None
+        self._prompt_token_buffer: Any = None
 
 
 
@@ -791,7 +899,7 @@ class SaltyNativeRuntime:
         context_params.n_threads_batch = self.profile.threads
         context_params.flash_attn_type = SALTY_FLASH_ATTN_ENABLED
         context_params.offload_kqv = bool(
-            int(context_limit) <= self.profile.host_kv_threshold
+            int(context_limit) < self.profile.host_kv_threshold
         )
         if self.profile.kv_precision == "q8_0":
             context_params.type_k = SALTY_TENSOR_TYPE_Q8_0
@@ -991,6 +1099,31 @@ class SaltyNativeRuntime:
                 except BaseException:
                     self.unload()
                     raise
+            identity_adapter_ids = self.conditional_adapter_ids("identity_intent")
+            if identity_adapter_ids:
+                try:
+
+
+
+
+
+                    self._identity_context_limit = self.profile.initial_context_limit
+                    self._identity_context = self._create_context(
+                        api,
+                        model,
+                        self._identity_context_limit,
+                        enabled_adapter_ids=(),
+                    )
+                    api.native.llama_attach_threadpool(
+                        self._identity_context,
+                        threadpool,
+                        None,
+                    )
+                    self._identity_active_adapter_ids = ()
+                    self._identity_resident_tokens = []
+                except BaseException:
+                    self.unload()
+                    raise
             self._load_seconds = time.perf_counter() - started
             self._runtime_id = str(uuid.uuid4())
             return self.describe()
@@ -999,12 +1132,21 @@ class SaltyNativeRuntime:
         with self._lock:
             api, context, model = self._api, self._context, self._model
             routing_context = self._routing_context
+            identity_context = self._identity_context
             threadpool = self._threadpool
             adapter_handles = list(self._adapter_handles)
             self._context = None
             self._routing_context = None
             self._routing_context_limit = None
             self._routing_adapter_ids = ()
+            self._routing_prompt_token_buffer = None
+            self._identity_context = None
+            self._identity_context_limit = None
+            self._identity_active_adapter_ids = ()
+            self._identity_resident_tokens = []
+            self._identity_decode_token_buffer = None
+            self._identity_decode_token_batch = None
+            self._identity_prompt_token_buffer = None
             self._model = None
             self._vocab = None
             self._api = None
@@ -1016,6 +1158,7 @@ class SaltyNativeRuntime:
             self._allocated_context_limit = None
             self._decode_token_buffer = None
             self._decode_token_batch = None
+            self._prompt_token_buffer = None
             self._resident_tokens = []
             if api and context:
                 api.native.llama_detach_threadpool(context)
@@ -1023,6 +1166,9 @@ class SaltyNativeRuntime:
             if api and routing_context:
                 api.native.llama_detach_threadpool(routing_context)
                 api.native.llama_free(routing_context)
+            if api and identity_context:
+                api.native.llama_detach_threadpool(identity_context)
+                api.native.llama_free(identity_context)
             if api and threadpool:
                 api.tensor_cpu.ggml_threadpool_free(threadpool)
             if api:
@@ -1072,6 +1218,16 @@ class SaltyNativeRuntime:
                     getattr(self, "_routing_context", None) is not None
                 ),
             },
+            "identity_context": {
+                "allocated": getattr(self, "_identity_context", None) is not None,
+                "context_limit": getattr(self, "_identity_context_limit", None),
+                "active_adapter_ids": list(
+                    getattr(self, "_identity_active_adapter_ids", ())
+                ),
+                "shares_loaded_model": (
+                    getattr(self, "_identity_context", None) is not None
+                ),
+            },
             "kv_cache_placement": (
                 "host"
                 if int(self._allocated_context_limit or self.profile.initial_context_limit)
@@ -1081,6 +1237,8 @@ class SaltyNativeRuntime:
             "load_seconds": self._load_seconds,
             "external_service_required": False,
             "network_listener_created": False,
+            "cuda_graphs_enabled": False,
+            "cuda_execution_policy": "stable_eager_for_variable_hybrid_prompts",
         }
 
     def _format_chat(
@@ -1195,6 +1353,7 @@ class SaltyNativeRuntime:
         top_k: int,
         repetition_penalty: float,
         seed: int | None,
+        response_format: str,
     ) -> int:
         assert self._api and self._vocab
         dll = self._api.native
@@ -1212,6 +1371,16 @@ class SaltyNativeRuntime:
                     0.0,
                 ),
             )
+        if response_format == "json":
+            grammar = dll.llama_sampler_init_grammar(
+                self._vocab,
+                SALTY_JSON_GBNF.encode("utf-8"),
+                b"root",
+            )
+            if not grammar:
+                dll.llama_sampler_free(sampler)
+                raise SaltyNativeRuntimeError("Native JSON grammar allocation failed")
+            dll.llama_sampler_chain_add(sampler, grammar)
         if temperature <= 0:
             dll.llama_sampler_chain_add(sampler, dll.llama_sampler_init_greedy())
         else:
@@ -1322,6 +1491,23 @@ class SaltyNativeRuntime:
                 len(prompt_tokens),
                 min(self.profile.batch_size, self._routing_context_limit),
             )
+            routing_batch_capacity = min(
+                self.profile.batch_size,
+                self._routing_context_limit,
+            )
+            routing_prompt_buffer = getattr(
+                self,
+                "_routing_prompt_token_buffer",
+                None,
+            )
+            if (
+                routing_prompt_buffer is None
+                or len(routing_prompt_buffer) < routing_batch_capacity
+            ):
+                routing_prompt_buffer = (
+                    ctypes.c_int32 * routing_batch_capacity
+                )()
+                self._routing_prompt_token_buffer = routing_prompt_buffer
             for start, end in prefill_ranges:
                 if should_stop and should_stop():
                     return SaltyNativeGeneration(
@@ -1337,9 +1523,10 @@ class SaltyNativeRuntime:
                         },
                     )
                 chunk = prompt_tokens[start:end]
-                token_buffer = (ctypes.c_int32 * len(chunk))(*chunk)
+                for index, token in enumerate(chunk):
+                    routing_prompt_buffer[index] = token
                 batch = self._api.native.llama_batch_get_one(
-                    token_buffer,
+                    routing_prompt_buffer,
                     len(chunk),
                 )
                 status = int(
@@ -1378,6 +1565,8 @@ class SaltyNativeRuntime:
                     "input_context_tokens": len(prompt_tokens),
                     "prefilled_tokens": len(prompt_tokens),
                     "prefill_batch_count": len(prefill_ranges),
+                    "stable_prefill_buffer": True,
+                    "prefill_buffer_capacity": routing_batch_capacity,
                     "prefill_duration_seconds": round(
                         prefill_finished - started,
                         4,
@@ -1391,6 +1580,155 @@ class SaltyNativeRuntime:
                     "adapter_activation_changed": False,
                 },
             )
+
+    def generate_identity(
+        self,
+        *,
+        messages: Sequence[dict[str, str]],
+        maximum_output_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        repetition_penalty: float,
+        seed: int | None,
+        stop_sequences: Sequence[str] = (),
+        should_stop: Callable[[], bool] | None = None,
+        on_text: Callable[[str], None] | None = None,
+        context_window_tokens: int | None = None,
+        reserved_output_tokens: int | None = None,
+        reasoning_mode: str = "instant",
+        maximum_output_mode: str = "manual",
+        enabled_adapter_ids: Sequence[str] | None = None,
+        allowed_first_tokens: Sequence[str] = (),
+        response_format: str = "text",
+    ) -> SaltyNativeGeneration:
+        """Generate a learned identity answer with the selected Chat context.
+
+        The auxiliary context shares the exact loaded model while isolating the
+        conditional adapter and its KV state from ordinary chat. The user's
+        selected 16K-through-262K value remains the ceiling; allocation expands
+        only when the prepared conversation actually needs more room.
+        """
+
+        with self._lock:
+            if (
+                not self.loaded
+                or not self._identity_context
+                or not self._identity_context_limit
+            ):
+                raise SaltyNativeRuntimeError(
+                    "The learned identity context is not loaded"
+                )
+            explicit = tuple(str(value) for value in (enabled_adapter_ids or ()))
+            known_identity = set(self.conditional_adapter_ids("identity_intent"))
+            if len(explicit) != 1 or explicit[0] not in known_identity:
+                raise ValueError(
+                    "Identity generation requires exactly one registered identity specialist"
+                )
+
+            main_profile = self.profile
+            main_context = self._context
+            main_limit = self._allocated_context_limit
+            main_active = self._active_adapter_ids
+            main_resident = self._resident_tokens
+            main_decode_buffer = self._decode_token_buffer
+            main_decode_batch = self._decode_token_batch
+            main_prompt_buffer = self._prompt_token_buffer
+            identity_allocated_limit = int(self._identity_context_limit)
+            selected_identity_ceiling = min(
+                main_profile.context_limit,
+                int(context_window_tokens or main_profile.initial_context_limit),
+            )
+            rendered_identity_prompt, _ = self._format_chat(
+                messages,
+                reasoning_mode,
+            )
+            identity_prompt_tokens = len(self._tokenize(rendered_identity_prompt))
+            identity_reserved_output = max(
+                int(maximum_output_tokens),
+                int(reserved_output_tokens or maximum_output_tokens),
+            )
+            requested_identity_limit = _adaptive_identity_context_limit(
+                selected_ceiling=selected_identity_ceiling,
+                resident_limit=main_profile.initial_context_limit,
+                prompt_tokens=identity_prompt_tokens,
+                reserved_output_tokens=identity_reserved_output,
+            )
+            self.profile = replace(
+                main_profile,
+                profile_id=f"{main_profile.profile_id}_identity_adaptive",
+                context_limit=main_profile.context_limit,
+                resident_context_limit=main_profile.initial_context_limit,
+                batch_size=min(main_profile.batch_size, requested_identity_limit),
+                micro_batch_size=min(
+                    main_profile.micro_batch_size,
+                    main_profile.batch_size,
+                    requested_identity_limit,
+                ),
+            )
+            self._context = self._identity_context
+            self._allocated_context_limit = identity_allocated_limit
+            self._active_adapter_ids = self._identity_active_adapter_ids
+            self._resident_tokens = self._identity_resident_tokens
+            self._decode_token_buffer = self._identity_decode_token_buffer
+            self._decode_token_batch = self._identity_decode_token_batch
+            self._prompt_token_buffer = self._identity_prompt_token_buffer
+            try:
+                generated = self.generate(
+                    messages=messages,
+                    maximum_output_tokens=maximum_output_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    repetition_penalty=repetition_penalty,
+                    seed=seed,
+                    stop_sequences=stop_sequences,
+                    should_stop=should_stop,
+                    on_text=on_text,
+                    context_window_tokens=requested_identity_limit,
+                    reserved_output_tokens=reserved_output_tokens,
+                    reasoning_mode=reasoning_mode,
+                    maximum_output_mode=maximum_output_mode,
+                    enabled_adapter_ids=explicit,
+                    allowed_first_tokens=allowed_first_tokens,
+                    response_format=response_format,
+                )
+                generated.technical_details.update(
+                    {
+                        "identity_context_used": True,
+                        "identity_context_mode": "prompt_sized_selected_ceiling",
+                        "identity_context_requested_limit": selected_identity_ceiling,
+                        "identity_context_selected_ceiling": selected_identity_ceiling,
+                        "identity_context_effective_limit": requested_identity_limit,
+                        "identity_context_prompt_tokens": identity_prompt_tokens,
+                        "identity_context_reserved_output_tokens": identity_reserved_output,
+                        "identity_context_limit": self._allocated_context_limit,
+                        "identity_selected_context_honored": (
+                            generated.technical_details.get("effective_context_limit")
+                            <= selected_identity_ceiling
+                        ),
+                        "main_context_preserved": True,
+                        "main_context_allocated_limit": main_limit,
+                        "main_context_active_adapter_ids": list(main_active),
+                    }
+                )
+                return generated
+            finally:
+                self._identity_context = self._context
+                self._identity_context_limit = self._allocated_context_limit
+                self._identity_active_adapter_ids = self._active_adapter_ids
+                self._identity_resident_tokens = self._resident_tokens
+                self._identity_decode_token_buffer = self._decode_token_buffer
+                self._identity_decode_token_batch = self._decode_token_batch
+                self._identity_prompt_token_buffer = self._prompt_token_buffer
+                self.profile = main_profile
+                self._context = main_context
+                self._allocated_context_limit = main_limit
+                self._active_adapter_ids = main_active
+                self._resident_tokens = main_resident
+                self._decode_token_buffer = main_decode_buffer
+                self._decode_token_batch = main_decode_batch
+                self._prompt_token_buffer = main_prompt_buffer
 
     def generate(
         self,
@@ -1411,6 +1749,7 @@ class SaltyNativeRuntime:
         maximum_output_mode: str = "manual",
         enabled_adapter_ids: Sequence[str] | None = None,
         allowed_first_tokens: Sequence[str] = (),
+        response_format: str = "text",
     ) -> SaltyNativeGeneration:
         with self._lock:
             if not self.loaded or not self._api or not self._context or not self._vocab:
@@ -1419,14 +1758,35 @@ class SaltyNativeRuntime:
                 self.profile.context_limit,
                 int(context_window_tokens or self.profile.context_limit),
             )
-            reserved = max(
-                maximum_output_tokens,
-                int(reserved_output_tokens or maximum_output_tokens),
-            )
             canonical_reasoning_mode = normalise_native_reasoning_mode(reasoning_mode)
+            checked_response_format = str(response_format or "text").strip().casefold()
+            if checked_response_format not in {"text", "json"}:
+                raise ValueError("response_format must be text or json")
             checked_output_mode = str(maximum_output_mode).strip().casefold()
             if checked_output_mode not in {"automatic", "manual"}:
                 raise ValueError("maximum_output_mode must be automatic or manual")
+            requested_reserved = max(
+                maximum_output_tokens,
+                int(reserved_output_tokens or maximum_output_tokens),
+            )
+            if checked_output_mode == "automatic":
+
+
+
+
+
+                reserved = min(
+                    requested_reserved,
+                    max(
+                        1,
+                        min(
+                            effective_context_limit - 1,
+                            max(128, effective_context_limit // 8),
+                        ),
+                    ),
+                )
+            else:
+                reserved = requested_reserved
             prompt_tokens, omitted_turns, reasoning_contract = self._prompt_with_budget(
                 messages,
                 reserved,
@@ -1469,14 +1829,29 @@ class SaltyNativeRuntime:
 
 
 
-            reusable_prefix = _common_prefix_length(
+            resident_tokens_before = len(self._resident_tokens)
+            common_prefix_candidate = _common_prefix_length(
                 self._resident_tokens,
                 prompt_tokens,
             )
 
 
-            reusable_prefix = max(0, min(reusable_prefix, len(prompt_tokens) - 1))
-            if reusable_prefix and self._api.native.llama_memory_seq_rm(
+            reusable_prefix = max(
+                0,
+                min(common_prefix_candidate, len(prompt_tokens) - 1),
+            )
+
+
+
+
+
+            append_only_prefix = bool(
+                reusable_prefix
+                and reusable_prefix == len(self._resident_tokens)
+            )
+            if append_only_prefix:
+                pass
+            elif reusable_prefix and self._api.native.llama_memory_seq_rm(
                 memory, 0, reusable_prefix, -1
             ):
                 del self._resident_tokens[reusable_prefix:]
@@ -1491,6 +1866,7 @@ class SaltyNativeRuntime:
                 top_k=top_k,
                 repetition_penalty=repetition_penalty,
                 seed=seed,
+                response_format=checked_response_format,
             )
 
 
@@ -1505,6 +1881,11 @@ class SaltyNativeRuntime:
             pieces: list[str] = []
             text_decoder = _Utf8TokenDecoder()
             stop_matcher = _StopSequenceMatcher(stop_sequences)
+            json_completion = (
+                _JsonCompletionDetector()
+                if checked_response_format == "json"
+                else None
+            )
             cancelled = False
             finish_reason = "maximum_output"
             started = time.perf_counter()
@@ -1517,7 +1898,17 @@ class SaltyNativeRuntime:
 
 
 
-            prompt_token_buffer: Any = None
+            prompt_buffer_capacity = self.profile.batch_size
+            prompt_buffer = getattr(self, "_prompt_token_buffer", None)
+            if (
+                prompt_buffer is None
+                or len(prompt_buffer) < prompt_buffer_capacity
+            ):
+                prompt_buffer = (
+                    ctypes.c_int32 * prompt_buffer_capacity
+                )()
+                self._prompt_token_buffer = prompt_buffer
+            prompt_token_buffer = prompt_buffer
             batch: Any = None
             try:
                 for chunk_index, (start, end) in enumerate(prompt_ranges):
@@ -1526,7 +1917,8 @@ class SaltyNativeRuntime:
                         finish_reason = "cancelled"
                         break
                     chunk = pending_tokens[start:end]
-                    prompt_token_buffer = (ctypes.c_int32 * len(chunk))(*chunk)
+                    for index, token in enumerate(chunk):
+                        prompt_token_buffer[index] = token
                     batch = self._api.native.llama_batch_get_one(
                         prompt_token_buffer,
                         len(chunk),
@@ -1582,6 +1974,9 @@ class SaltyNativeRuntime:
                     generated.append(token)
                     pieces.append(piece)
                     stop_index = stop_matcher.feed(piece)
+                    json_complete = bool(
+                        json_completion and json_completion.feed(piece)
+                    )
                     if stop_index is not None:
 
 
@@ -1592,6 +1987,9 @@ class SaltyNativeRuntime:
                         break
                     if on_text and piece:
                         on_text(piece)
+                    if json_complete:
+                        finish_reason = "json_complete"
+                        break
                     self._decode_token_buffer[0] = token
                     batch = self._decode_token_batch
                 trailing_text = text_decoder.finish()
@@ -1627,18 +2025,26 @@ class SaltyNativeRuntime:
                     "effective_context_limit": effective_context_limit,
                     "context_reallocated": context_reallocated,
                     "adapter_activation_changed": adapter_activation_changed,
+                    "resident_tokens_before": resident_tokens_before,
+                    "common_prefix_candidate_tokens": common_prefix_candidate,
                     "reused_prefix_tokens": reusable_prefix,
+                    "resident_prefix_append_only": append_only_prefix,
                     "prefilled_tokens": len(pending_tokens),
                     "kv_cache_reuse": (
                         "reused_resident_prefix" if reusable_prefix else "full_prefill"
                     ),
                     "reasoning_mode_effective": canonical_reasoning_mode,
                     "reasoning_prompt_contract": reasoning_contract,
+                    "response_format_effective": checked_response_format,
                     "maximum_output_mode_effective": checked_output_mode,
+                    "requested_reserved_output_tokens": requested_reserved,
+                    "reserved_output_tokens": reserved,
                     "maximum_output_token_ceiling": available_output,
                     "generated_output_tokens": len(generated),
                     "constrained_choice_count": len(allowed_token_ids),
                     "prefill_batch_count": len(prompt_ranges),
+                    "stable_prefill_buffer": True,
+                    "prefill_buffer_capacity": prompt_buffer_capacity,
                     "prefill_duration_seconds": (
                         round(prefill_duration, 4) if prefill_duration is not None else None
                     ),

@@ -22,6 +22,7 @@ APPLICATION_LAUNCH_CAPABILITY = "application.launch"
 WINDOW_CONTROL_CAPABILITY = "window.control"
 UI_AUTOMATION_CAPABILITY = "ui.automation"
 BROWSER_CAPABILITY = "browser.control"
+DISCORD_INSPECT_CAPABILITY = "discord.inspect"
 
 FILE_OPERATIONS = frozenset(
     {
@@ -249,6 +250,8 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "text": "string",
             "combo": "string",
             "post_action_delay_ms": "integer",
+            "expected_window_handle": "integer",
+            "expected_process_id": "integer",
         },
         required_arguments=("action",),
         operations=(
@@ -271,6 +274,8 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             'pixels. mouse_click also takes "button" and optional "double". '
             'mouse_scroll takes "clicks" (negative scrolls down). key_press takes '
             '"key". type_text takes "text". key_combo takes "combo" such as "Ctrl+S".'
+            ' When a window was observed, include its "expected_window_handle" '
+            'and "expected_process_id" so input is refused if focus moves.'
         ),
         agent_rules=(
             "- Take a screenshot before input.control, and only then. You need to "
@@ -288,6 +293,7 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "combo": "string|null",
             "character_count": "integer|null",
             "duration_ms": "number",
+            "foreground_window": "window|null",
         },
         observation_fields=(
             "action",
@@ -296,6 +302,7 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "button",
             "combo",
             "character_count",
+            "foreground_window",
         ),
         supported_observations=("input_dispatch_status",),
         requirements=("interactive Windows desktop", "focused target for keyboard input"),
@@ -397,6 +404,17 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "value": "string",
             "amount": "number",
             "horizontal": "boolean",
+            "vertical_percent": "number",
+            "post_action_delay_ms": "integer",
+            "scope_name": "string",
+            "scope_control_type": "string",
+            "scope_exact": "boolean",
+            "item_control_type": "string",
+            "scroller_name": "string",
+            "max_scrolls": "integer",
+            "post_scroll_delay_ms": "integer",
+            "reverse": "boolean",
+            "timeout_ms": "integer",
         },
         required_arguments=("command",),
         operations=tuple(sorted(UIA_COMMANDS)),
@@ -410,13 +428,17 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "as real controls rather than pixels. Prefer this over looking at the "
             "screen.\n"
             '  Arguments: {"command": "get_active_window"|"get_windows"|"get_tree"|'
-            '"find_control"|"get_text"|"get_properties"|"focus"|"invoke"|'
+            '"find_control"|"collect_list"|"get_text"|"get_properties"|"focus"|"invoke"|'
             '"set_value"|"select"|"toggle"|"expand"|"collapse"|"scroll", ...}\n'
             '  Scope a query with "process_id" (exact) or "window" (title text). '
             'Search with "name", "control_type", "automation_id", or "pattern" '
             '("Value" finds something you can type into, "Invoke" something you '
             'can press). find_control returns an "element" handle; pass that '
-            "handle to act on it."
+            "handle to act on it. A top-level window may be focused directly by "
+            'supplying its exact "process_id", "window_handle", or visible '
+            '"window" title to the focus command. Mutating commands may include '
+            '"post_action_delay_ms" before the next readback. scroll may use '
+            '"vertical_percent" from 0 to 100 for a verified collection boundary.'
         ),
         agent_rules=(
             "- To press a button or fill a field inside an application, find it "
@@ -434,9 +456,18 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "matches": "array[accessible_element]",
             "element": "accessible_element|null",
             "nodes": "array[accessible_element]",
+            "tree": "accessible_element_tree|null",
             "text": "bounded_text|null",
             "properties": "object|null",
             "count": "integer|null",
+            "node_count": "integer|null",
+            "truncated": "boolean|null",
+            "items": "array[accessible_element]",
+            "pages_read": "integer|null",
+            "scroll_boundary_reached": "boolean|null",
+            "boundary_basis": "string|null",
+            "last_vertical_percent": "number|null",
+            "truncated_by_limit": "boolean|null",
         },
         observation_fields=(
             "command",
@@ -445,9 +476,18 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "matches",
             "element",
             "nodes",
+            "tree",
             "text",
             "properties",
             "count",
+            "node_count",
+            "truncated",
+            "items",
+            "pages_read",
+            "scroll_boundary_reached",
+            "boundary_basis",
+            "last_vertical_percent",
+            "truncated_by_limit",
         ),
         supported_observations=(
             "active_window",
@@ -569,6 +609,168 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
         ),
         requirements=("Salty-owned browser session", "http or https target"),
     ),
+    DISCORD_INSPECT_CAPABILITY: CapabilityDescriptor(
+        capability_id=DISCORD_INSPECT_CAPABILITY,
+        display_name="Discord structured inspection",
+        description=(
+            "Execute exactly one model-selected Discord observation or navigation "
+            "operation through bounded, audited native controls."
+        ),
+        affordance="inspect Discord servers, channels, and visible messages",
+        argument_types={
+            "operation": "string",
+            "query": "string",
+            "channel": "string",
+            "channels": "array[string]",
+            "limit": "integer",
+            "max_scrolls": "integer",
+            "cursor": "integer",
+            "batch_limit": "integer",
+            "refresh": "boolean",
+        },
+        required_arguments=("operation",),
+        operations=(
+            "current_account",
+            "find_channels",
+            "inventory",
+            "list_servers",
+            "open_channel",
+            "read_channel",
+            "scan_batch",
+        ),
+        side_effect_class="mixed",
+        batch_capable=True,
+        verification="fresh Discord window, scoped control, and message-list readback",
+        cancellation="between_calls",
+        model_instructions=(
+            "discord.inspect — Use Discord's native Quick Switcher and Windows "
+            "accessibility as one reliable operation. Prefer this over composing "
+            "window, keyboard, and UI-tree calls yourself. It never sends, reacts, "
+            "joins, logs in, or reads a raw token. Call it directly for Discord "
+            "inspection: it locates, launches when absent, and focuses the installed "
+            "Discord app itself.\n"
+            "  Use only fields needed by the selected operation. Examples:\n"
+            '  complete inventory: {"operation":"inventory","refresh":false}\n'
+            '  discover: {"operation":"find_channels","query":"giveaway",'
+            '"limit":20,"max_scrolls":8}\n'
+            '  continue content scan: {"operation":"scan_batch","cursor":0,'
+            '"batch_limit":10}\n'
+            '  exact observed channel: {"operation":"read_channel",'
+            '"channel":"observed channel_key"}'
+        ),
+        agent_rules=(
+            "- You own the Discord workflow. Select current_account, discovery, "
+            "inventory, navigation, or reading only when the task and latest evidence "
+            "justify it. The application preserves your exact selected operation.\n"
+            "- If the request says every or all joined servers/channels, complete "
+            "inventory, exact coverage, or scan everything, the first operation must "
+            "be inventory. find_channels and list_servers are partial discovery and "
+            "can never satisfy that scope.\n"
+            "- open_channel and read_channel accept only an exact channel result "
+            "observed in this task or a query that resolves unambiguously. A "
+            "stable channel_key tolerates decorative emoji changes, but fresh "
+            "server/channel readback must still match.\n"
+            "- A channel name, keyword, or gift icon is discovery evidence only. "
+            "A live find_channels result is account-bound and may feed scan_batch "
+            "for a fast task-targeted pass; label that scope partial. Use a complete "
+            "inventory only when exhaustive joined-server coverage is required. "
+            "Use scan_batch with its returned next_cursor to inspect content. Treat "
+            "unparsed requirements and incomplete message coverage as blocking "
+            "evidence, never as eligibility.\n"
+            "- scan_batch may instead receive channels as an array of exact keys or "
+            "unambiguous names returned by a current-task inventory, including a "
+            "partial inventory. This explicit scope remains partial and every item "
+            "is reopened and verified before content is trusted.\n"
+            "- inventory validates any cached index against the freshly observed "
+            "account and complete server set. Use refresh=true when an exhaustive "
+            "channel-index rebuild is specifically required.\n"
+        ),
+        output_types={
+            "status": "string",
+            "operation": "string",
+            "account": "object|null",
+            "servers": "array[discord_server]",
+            "channels": "array[discord_channel]",
+            "inventory_gaps": "array[discord_inventory_gap]",
+            "discovery_candidate_count": "integer|null",
+            "candidate_index_size": "integer|null",
+            "candidate_server_count": "integer|null",
+            "scans": "array[discord_channel_scan]",
+            "scan_gaps": "array[discord_scan_gap]",
+            "cursor": "integer|null",
+            "next_cursor": "integer|null",
+            "done": "boolean|null",
+            "total_channels": "integer|null",
+            "index_scope": "string|null",
+            "selected_channel": "discord_channel|null",
+            "messages": "array[visible_message]",
+            "giveaway_items": "array[discord_giveaway_item]",
+            "active_giveaway_items": "array[discord_giveaway_item]",
+            "ended_giveaway_items": "array[discord_giveaway_item]",
+            "unknown_giveaway_items": "array[discord_giveaway_item]",
+            "newest_observed_giveaway": "discord_giveaway_item|null",
+            "giveaway_state_counts": "object",
+            "unassociated_rule_evidence": "array[discord_rule_evidence]",
+            "explicit_state": "string|null",
+            "requirements": "array[requirement]",
+            "discovery_signals": "object",
+            "candidate_classification": "string|null",
+            "criteria_status": "string|null",
+            "disposition": "string|null",
+            "window": "window|null",
+            "substeps": "array[discord_inspection_step]",
+            "coverage": "object",
+            "error": "string|null",
+        },
+        observation_fields=(
+            "operation",
+            "account",
+            "servers",
+            "channels",
+            "inventory_gaps",
+            "discovery_candidate_count",
+            "candidate_index_size",
+            "candidate_server_count",
+            "scans",
+            "scan_gaps",
+            "cursor",
+            "next_cursor",
+            "done",
+            "total_channels",
+            "index_scope",
+            "selected_channel",
+            "messages",
+            "giveaway_items",
+            "active_giveaway_items",
+            "ended_giveaway_items",
+            "unknown_giveaway_items",
+            "newest_observed_giveaway",
+            "giveaway_state_counts",
+            "unassociated_rule_evidence",
+            "explicit_state",
+            "requirements",
+            "discovery_signals",
+            "candidate_classification",
+            "criteria_status",
+            "disposition",
+            "window",
+            "substeps",
+            "coverage",
+            "error",
+        ),
+        supported_observations=(
+            "discord_account",
+            "discord_servers",
+            "discord_channels",
+            "discord_visible_messages",
+            "discord_explicit_item_state",
+        ),
+        requirements=(
+            "installed Discord desktop app",
+            "currently signed-in account",
+            "window control, UI Automation, and target-bound input",
+        ),
+    ),
 }
 
 CAPABILITIES = tuple(CAPABILITY_REGISTRY)
@@ -592,6 +794,7 @@ def get_capability_descriptor(capability: str) -> CapabilityDescriptor:
 __all__ = [
     "APPLICATION_LAUNCH_CAPABILITY",
     "BROWSER_CAPABILITY",
+    "DISCORD_INSPECT_CAPABILITY",
     "CAPABILITIES",
     "CAPABILITY_DISPLAY_NAMES",
     "CAPABILITY_FIELDS",

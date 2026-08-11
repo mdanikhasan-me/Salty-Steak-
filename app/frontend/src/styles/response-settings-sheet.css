@@ -1,6 +1,6 @@
 .response-settings-sheet {
   display: grid;
-  width: min(470px, calc(100vw - 28px));
+  width: min(520px, calc(100vw - 28px));
   max-height: min(720px, calc(100vh - 84px));
   grid-template-rows: auto minmax(0, 1fr);
   color: var(--r18-text-soft, #d4d0ca);
@@ -83,11 +83,13 @@
 .response-settings-sheet__text-action:hover { color: var(--r18-text, #f1efeb); background: rgb(255 255 255 / 4%); }
 .response-settings-sheet__model > .response-settings-sheet__text-action { margin: 7px 0 0 -5px; }
 
-.response-settings-sheet__quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--r18-line, rgb(255 255 255 / 7%)); border-bottom: 1px solid var(--r18-line, rgb(255 255 255 / 7%)); }
+.response-settings-sheet__quick-grid { display: grid; grid-template-columns: minmax(168px, .82fr) minmax(240px, 1.18fr); border-top: 1px solid var(--r18-line, rgb(255 255 255 / 7%)); border-bottom: 1px solid var(--r18-line, rgb(255 255 255 / 7%)); }
+.response-settings-sheet__image-canvas { margin: 12px 0 0; color: var(--text-tertiary); font-size: 11px; }
+.response-settings-sheet__image-canvas strong { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .response-settings-sheet__preset { display: grid; min-width: 0; align-content: start; gap: 7px; padding: 12px 0; }
 .response-settings-sheet__preset + .response-settings-sheet__preset { padding-left: 16px; border-left: 1px solid var(--r18-line, rgb(255 255 255 / 7%)); }
 .response-settings-sheet__preset > span:first-child { color: var(--r18-muted, #9b9690); font-size: 12px; }
-.response-settings-sheet__output-controls { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.response-settings-sheet__output-controls { display: grid; min-width: 0; grid-template-columns: minmax(102px, .95fr) minmax(112px, 1.05fr); gap: 6px; }
 .response-settings-sheet__output-controls > select:only-child { grid-column: 1 / -1; }
 .response-settings-sheet__numeric { display: grid; min-width: 0; gap: 7px; padding: 12px 0; }
 .response-settings-sheet__numeric + .response-settings-sheet__numeric { padding-left: 16px; border-left: 1px solid var(--r18-line, rgb(255 255 255 / 7%)); }

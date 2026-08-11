@@ -337,6 +337,16 @@ def parse_decision(reply: str) -> dict[str, Any]:
         )
 
     decision["action"] = action
+    if action in {GENERATE_IMAGE, REVISE_IMAGE} and not isinstance(
+        decision.get("brief"), Mapping
+    ):
+
+
+
+
+        image_payload = decision.get("with")
+        if isinstance(image_payload, Mapping):
+            decision["brief"] = dict(image_payload)
 
 
     if action == SINGLE_ACTION:

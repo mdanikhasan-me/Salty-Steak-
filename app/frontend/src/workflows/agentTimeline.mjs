@@ -15,6 +15,7 @@ const TOOL_PRESENTATION = {
   "application.launch": { label: "Application", icon: "app" },
   "window.control": { label: "Window", icon: "window" },
   "ui.automation": { label: "Interface", icon: "pointer" },
+  "discord.inspect": { label: "Discord", icon: "search" },
   "input.control": { label: "Input", icon: "keyboard" },
   respond: { label: "Result", icon: "check" },
   research: { label: "Research", icon: "search" },

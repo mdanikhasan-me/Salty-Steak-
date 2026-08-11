@@ -160,6 +160,9 @@ class TaskMetrics:
 
 
     planning_model_calls: int = 0
+    planning_output_tokens: int = 0
+    planning_output_characters: int = 0
+    context_compactions: int = 0
     image_model_calls: int = 0
     image_generation_seconds: float = 0.0
     image_revisions: int = 0
@@ -241,6 +244,11 @@ class TaskContext:
         self.current_step: int = 0
         self.current_capability: str | None = None
         self.current_plan: list[dict[str, Any]] = []
+        self.generation_preview: dict[str, Any] = {}
+        self.mission_step_limit: int | None = None
+        self.mission_duration_limit_seconds: float | None = None
+        self._preview_tokens = 0
+        self._preview_characters = 0
 
 
         self.waiting_for: str | None = None
@@ -374,6 +382,109 @@ class TaskContext:
     def note_screenshot(self) -> None:
         self.metrics.screenshots += 1
 
+    def configure_mission_budget(
+        self,
+        *,
+        step_limit: int | None,
+        duration_limit_seconds: float | None,
+    ) -> None:
+        """Publish the executor's real bounds without inventing a plan total."""
+
+        with self._lock:
+            self.mission_step_limit = (
+                max(1, int(step_limit)) if step_limit is not None else None
+            )
+            self.mission_duration_limit_seconds = (
+                max(0.0, float(duration_limit_seconds))
+                if duration_limit_seconds is not None
+                else None
+            )
+
+    def begin_generation_preview(self, summary: str) -> None:
+        """Start one model call's public, non-scratchpad progress counter."""
+
+        with self._lock:
+            self._preview_tokens = 0
+            self._preview_characters = 0
+            self.generation_preview = {
+                "kind": "planning",
+                "summary": str(summary)[:240],
+                "tail_text": "",
+                "token_count": 0,
+                "character_count": 0,
+                "active": True,
+            }
+        self._notify()
+
+    def note_generation_preview(self, value: Mapping[str, Any]) -> None:
+        """Record measured streaming counts while withholding private scratchpad."""
+
+        try:
+            tokens = max(0, int(value.get("token_count") or 0))
+        except (TypeError, ValueError):
+            tokens = 0
+        try:
+            characters = max(0, int(value.get("character_count") or 0))
+        except (TypeError, ValueError):
+            characters = 0
+        with self._lock:
+            self.metrics.planning_output_tokens += max(0, tokens - self._preview_tokens)
+            self.metrics.planning_output_characters += max(
+                0, characters - self._preview_characters
+            )
+            self._preview_tokens = max(self._preview_tokens, tokens)
+            self._preview_characters = max(self._preview_characters, characters)
+            self.generation_preview = {
+                "kind": "planning",
+                "summary": str(
+                    value.get("summary")
+                    or "Selecting the next audited action from observed state."
+                )[:240],
+
+
+                "tail_text": "",
+                "token_count": self._preview_tokens,
+                "character_count": self._preview_characters,
+                "active": True,
+            }
+        self._notify()
+
+    def finish_generation_preview(self) -> None:
+        with self._lock:
+            if self.generation_preview:
+                self.generation_preview = {
+                    **self.generation_preview,
+                    "active": False,
+                }
+        self._notify()
+
+    def note_tool_progress(self, value: Mapping[str, Any]) -> None:
+        """Publish public progress from one long-running compound capability."""
+
+        summary = str(value.get("summary") or "Working in the application")[:240]
+        with self._lock:
+            self.generation_preview = {
+                "kind": "tool",
+                "summary": summary,
+                "tail_text": "",
+                "token_count": self._preview_tokens,
+                "character_count": self._preview_characters,
+                "active": True,
+                **{
+                    str(key): item
+                    for key, item in value.items()
+                    if key
+                    in {
+                        "completed",
+                        "total",
+                        "channels",
+                        "cursor",
+                        "next_cursor",
+                    }
+                },
+            }
+        self._notify()
+
     def _notify(self) -> None:
         if self._on_change is None:
             return
@@ -388,6 +499,9 @@ class TaskContext:
     def snapshot(self, *, include_events: bool = False) -> dict[str, Any]:
         """The single shape every surface renders a task from."""
 
+        duration_limit = self.mission_duration_limit_seconds
+        elapsed = self.elapsed_seconds
+        step_limit = self.mission_step_limit
         payload: dict[str, Any] = {
             "schema": TASK_RUNTIME_SCHEMA,
             "task_id": self.task_id,
@@ -399,7 +513,7 @@ class TaskContext:
             "current_step": self.current_step,
             "current_capability": self.current_capability,
             "planned_step_count": len(self.current_plan) or None,
-            "elapsed_seconds": round(self.elapsed_seconds, 4),
+            "elapsed_seconds": round(elapsed, 4),
             "stop_requested": self.cancellation.tripped,
             "failure": self.failure,
             "metrics": self.metrics.to_dict(),
@@ -409,6 +523,21 @@ class TaskContext:
             "plan": list(self.current_plan),
             "waiting_for": self.waiting_for,
             "waiting_detail": dict(self.waiting_detail),
+            "generation_preview": dict(self.generation_preview),
+            "mission_budget": {
+                "duration_limit_seconds": duration_limit,
+                "remaining_seconds": (
+                    max(0.0, round(duration_limit - elapsed, 4))
+                    if duration_limit is not None
+                    else None
+                ),
+                "step_limit": step_limit,
+                "steps_remaining": (
+                    max(0, int(step_limit) - int(self.current_step))
+                    if step_limit is not None
+                    else None
+                ),
+            },
         }
         if include_events:
             payload["events"] = [event.to_dict() for event in self.events]

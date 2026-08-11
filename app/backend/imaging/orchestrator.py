@@ -39,6 +39,11 @@ ORCHESTRATOR_SCHEMA = "salty-steak-image-orchestrator-v1"
 
 MAX_BRIEF_CORRECTIONS = 1
 
+
+
+
+BRIEF_AUTHOR_MAX_TOKENS = 128
+
 CONTEXTUAL_IMAGE_REFERENCE = re.compile(
     r"\b(?:"
     r"what\s+(?:you|we)\s+(?:just\s+)?(?:described|said|wrote|mentioned|imagined|outlined|explained|discussed)"
@@ -71,6 +76,22 @@ pattern|concept_art|ui_mockup","goal":"","brand":"","style":"","composition":"",
 Keep the subject the one that was asked for. Elaborate it; never replace it. \
 Leave a field out rather than inventing a brand, a slogan or wording the \
 request does not have."""
+
+
+
+
+BRIEF_AUTHOR_INSTRUCTION = """\
+Write one compact render brief for a local diffusion image model.
+
+Reply with ONE JSON object and nothing else. Use short concrete phrases, not \
+paragraphs. Keep the requested subject unchanged. Include only useful fields:
+{"subject":"","image_type":"logo|icon|illustration|photograph|diagram|poster|\
+pattern|concept_art|ui_mockup","style":"","composition":"",\
+"required_elements":[],"negative_constraints":[]}
+
+Use at most 2 short required_elements and 2 short negative_constraints. Put \
+prohibitions only in negative_constraints. Omit brand, wording, or details the \
+request did not provide. The complete JSON must fit within 128 tokens."""
 
 
 class ImageOrchestrationError(RuntimeError):
@@ -142,17 +163,25 @@ class ImageOrchestrator:
             original_request=original_request,
             reference_context=reference_context,
         )
+        supplied_brief = decision.get("brief") or decision.get("arguments") or decision
         brief = build_brief(
-            decision.get("brief") or decision.get("arguments") or decision,
+            supplied_brief,
             original_request=original_request,
             fallback_subject=latest,
         )
-        brief = self._author_brief(
-            brief,
-            request=original_request,
-            validation_request=validation_request,
-            notes=notes,
-        )
+        if CONTEXTUAL_IMAGE_REFERENCE.search(latest) and str(reference_context).strip():
+
+
+
+
+            brief.goal = str(reference_context).strip()[:2_000]
+        if not _model_brief_is_render_ready(supplied_brief, brief):
+            brief = self._author_brief(
+                brief,
+                request=original_request,
+                validation_request=validation_request,
+                notes=notes,
+            )
 
 
 
@@ -409,9 +438,43 @@ def _validation_request(
     return "\n\n".join(parts)
 
 
+def _model_brief_is_render_ready(
+    payload: object,
+    brief: RenderBrief,
+) -> bool:
+    """Whether the routing model already supplied a useful render handoff.
+
+    A complete first decision should not trigger a second 50-second JSON pass.
+    The exact request remains in ``brief.goal``, so skipping enrichment cannot
+    lose details the user supplied. Contextual placeholders and thin fallback
+    briefs still use the authoring model once.
+    """
+
+    if not isinstance(payload, Mapping):
+        return False
+    subject = str(payload.get("subject") or "").strip()
+    if not subject or CONTEXTUAL_IMAGE_REFERENCE.search(subject):
+        return False
+    descriptive = any(
+        bool(payload.get(key))
+        for key in (
+            "goal",
+            "style",
+            "composition",
+            "colour",
+            "color",
+            "background",
+            "required_elements",
+            "negative_constraints",
+        )
+    )
+    return descriptive and inspect(brief, request=brief.original_request).ok
+
+
 __all__ = [
     "ImageOrchestrationError",
     "ImageOrchestrator",
+    "BRIEF_AUTHOR_MAX_TOKENS",
     "CONTEXTUAL_IMAGE_REFERENCE",
     "MAX_BRIEF_CORRECTIONS",
     "ORCHESTRATOR_SCHEMA",

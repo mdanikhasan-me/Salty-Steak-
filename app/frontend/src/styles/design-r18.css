@@ -263,6 +263,7 @@ button, input, textarea, select { font: inherit; }
 .composer__tools { gap: 1px; overflow: visible; }
 .composer-control { position: relative; display: inline-flex; min-width: 0; }
 .composer-control--model { max-width: min(200px, 26vw); }
+.composer-control--image { max-width: min(150px, 20vw); }
 .composer-tool--icon { width: 30px; justify-content: center; padding: 0; border-radius: 50%; }
 .composer-tool[aria-expanded="true"],
 .composer-selector[aria-expanded="true"] { color: var(--r18-text); background: rgb(255 255 255 / 7%); }

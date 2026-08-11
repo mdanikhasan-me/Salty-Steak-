@@ -141,6 +141,30 @@ def normalise_host_action_response(
             "title": "Create an image",
             "summary": prompt[:4_000],
             "arguments": {"prompt": prompt[:4_000]},
+            "image_settings": {
+                "models": [
+                    {
+                        "id": str(image_runtime.get("id") or "steak-gen-1-scaledfp8"),
+                        "name": str(
+                            image_runtime.get("display_name")
+                            or "Steak Gen 1 ScaledFP8"
+                        ),
+                    }
+                ]
+                if image_runtime
+                else [],
+                "default_model_id": str(
+                    (image_runtime or {}).get("id") or "steak-gen-1-scaledfp8"
+                ),
+                "minimum_dimension": 256,
+                "maximum_dimension": 1024,
+                "dimension_multiple": 16,
+                "minimum_steps": 1,
+                "maximum_steps": 50,
+                "default_width": 512,
+                "default_height": 512,
+                "default_steps": 8,
+            },
             "state": "pending_review" if runtime_ready else "blocked_runtime_unavailable",
             "requires_confirmation": True,
             "execution_allowed": False,

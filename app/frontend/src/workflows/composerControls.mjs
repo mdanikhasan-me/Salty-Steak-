@@ -73,6 +73,8 @@ export const MAXIMUM_OUTPUT_TOKEN_PRESETS = Object.freeze([
   2_048,
   4_096,
   8_192,
+  16_384,
+  32_768,
 ]);
 
 export function toggleComposerMenu(currentMenu, requestedMenu) {
@@ -120,6 +122,15 @@ export function normaliseMaximumOutputTokens(value, fallback = 512) {
   return MAXIMUM_OUTPUT_TOKEN_PRESETS.includes(fallbackValue) ? fallbackValue : 512;
 }
 
+export function contextWindowForMaximumOutput(value, currentContext = 32_768) {
+  const outputTokens = normaliseMaximumOutputTokens(value);
+  const selectedContext = normaliseContextWindowTokens(currentContext);
+  if (outputTokens < selectedContext) return selectedContext;
+  const preferredContext = Math.min(262_144, outputTokens * 2);
+  return CONTEXT_WINDOW_PRESETS.find((preset) => preset.tokens >= preferredContext)?.tokens
+    ?? CONTEXT_WINDOW_PRESETS.at(-1).tokens;
+}
+
 const GENERATION_SETTING_KEYS = Object.freeze([
   "context_window_tokens",
   "maximum_output_mode",
@@ -135,7 +146,34 @@ const GENERATION_SETTING_KEYS = Object.freeze([
   "system_prompt",
   "stop_sequences",
   "computer_authority_mode",
+  "image_model_id",
+  "image_aspect_ratio",
+  "image_resolution",
+  "image_steps",
 ]);
+
+export const IMAGE_RESOLUTION_PRESETS = Object.freeze([512, 768, 1024]);
+export const IMAGE_ASPECT_RATIO_PRESETS = Object.freeze(["1:1", "4:3", "3:4", "16:9", "9:16"]);
+export const IMAGE_STEP_PRESETS = Object.freeze([4, 8, 12, 20]);
+
+export function imageCanvasForSettings(resolution, aspectRatio) {
+  const edge = IMAGE_RESOLUTION_PRESETS.includes(Number(resolution))
+    ? Number(resolution)
+    : 512;
+  const ratio = IMAGE_ASPECT_RATIO_PRESETS.includes(String(aspectRatio))
+    ? String(aspectRatio)
+    : "1:1";
+  const [x, y] = ratio.split(":").map(Number);
+  if (x === y) return { width: edge, height: edge };
+  const landscape = x > y;
+  const shortEdge = Math.max(
+    256,
+    Math.round((edge * (landscape ? y / x : x / y)) / 16) * 16,
+  );
+  return landscape
+    ? { width: edge, height: shortEdge }
+    : { width: shortEdge, height: edge };
+}
 
 export function normaliseGenerationSettingsSnapshot(value, defaults = {}) {
   const supplied = value && typeof value === "object" && !Array.isArray(value)
@@ -178,11 +216,49 @@ export function normaliseGenerationSettingsSnapshot(value, defaults = {}) {
   settings.computer_authority_mode = normaliseComputerAuthorityMode(
     merged.computer_authority_mode,
   );
+  settings.image_model_id = String(
+    merged.image_model_id || defaults.image_model_id || "steak-gen-1-scaledfp8",
+  );
+  settings.image_aspect_ratio = IMAGE_ASPECT_RATIO_PRESETS.includes(
+    String(merged.image_aspect_ratio),
+  )
+    ? String(merged.image_aspect_ratio)
+    : "1:1";
+  settings.image_resolution = IMAGE_RESOLUTION_PRESETS.includes(
+    Number(merged.image_resolution),
+  )
+    ? Number(merged.image_resolution)
+    : 512;
+  const imageSteps = Number(merged.image_steps);
+  settings.image_steps = Number.isInteger(imageSteps) && imageSteps >= 1 && imageSteps <= 50
+    ? imageSteps
+    : 8;
   return settings;
 }
 
 export function generationSettingsForRequest(value, defaults = {}) {
   return normaliseGenerationSettingsSnapshot(value, defaults);
+}
+
+export function generationTurnSettingsForRequest(
+  value,
+  defaults = {},
+  {
+    agentMode = false,
+    researchMode = false,
+    researchCommand = false,
+    imageCommand = false,
+  } = {},
+) {
+  const researchEnabled = Boolean(researchMode) || Boolean(researchCommand);
+  return {
+    ...generationSettingsForRequest(value, defaults),
+    agent_mode: Boolean(agentMode),
+    research_available: researchEnabled,
+    research_command: Boolean(researchCommand),
+    image_mode: Boolean(imageCommand),
+    web_search_enabled: researchEnabled,
+  };
 }
 
 export function nextEnabledMenuIndex(currentIndex, direction, enabledItems) {
