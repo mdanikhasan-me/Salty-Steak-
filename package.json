@@ -8,12 +8,11 @@
   "scripts": {
     "dev": "vite --config app/frontend/vite.config.js --host 127.0.0.1",
     "build": "vite build --config app/frontend/vite.config.js",
-    "build:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\build_desktop.ps1",
-    "clean:generated": "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\clean_generated_artifacts.ps1",
-    "test:backend": ".venv\\Scripts\\python.exe -m pytest tests -q",
-    "test:frontend": "node --test app/frontend/src/**/*.test.mjs",
-    "test:all": "npm run test:frontend && npm run test:backend",
-    "start": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '.\\Salty Steak.exe'\"",
+    "check:python": ".venv\\Scripts\\python.exe -m compileall -q app",
+    "build:desktop": "dotnet build app\\desktop\\native\\SaltyPotatoAI.csproj -c Release",
+    "build:browser-host": "dotnet build app\\desktop\\browser\\SaltyBrowser.csproj -c Release",
+    "build:uia-host": "dotnet build app\\desktop\\uia\\SaltyUia.csproj -c Release",
+    "build:hosts": "npm run build:desktop && npm run build:browser-host && npm run build:uia-host",
     "server": ".venv\\Scripts\\python.exe -m app.backend.server"
   },
   "dependencies": {

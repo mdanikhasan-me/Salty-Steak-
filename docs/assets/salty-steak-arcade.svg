@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Salty Steak</title>
+  <desc id="desc">Animated retro pixel-art banner for the local-first Salty Steak desktop application</desc>
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="40%" r="75%">
+      <stop offset="0" stop-color="#2a2354"/>
+      <stop offset="0.52" stop-color="#171b39"/>
+      <stop offset="1" stop-color="#090d1c"/>
+    </radialGradient>
+    <radialGradient id="sun" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffd166" stop-opacity=".95"/>
+      <stop offset="1" stop-color="#f06d55" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .star{animation:twinkle 2.8s steps(2,end) infinite}.star-b{animation-delay:.8s}.star-c{animation-delay:1.6s}
+      .sprite{animation:bob 3.2s steps(4,end) infinite;transform-origin:226px 178px}
+      .steam-a{animation:steam 2.4s steps(5,end) infinite}.steam-b{animation:steam 2.4s .9s steps(5,end) infinite}
+      .cursor{animation:blink 1s steps(1,end) infinite}
+      @keyframes twinkle{0%,45%{opacity:.28;transform:scale(.7)}50%,100%{opacity:1;transform:scale(1)}}
+      @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+      @keyframes steam{0%{opacity:0;transform:translateY(10px)}30%{opacity:.75}100%{opacity:0;transform:translateY(-26px)}}
+      @keyframes blink{0%,48%{opacity:1}49%,100%{opacity:0}}
+      @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+    </style>
+  </defs>
+  <rect width="1200" height="360" fill="url(#sky)"/>
+  <circle cx="230" cy="176" r="150" fill="url(#sun)" opacity=".38"/>
+  <path d="M0 292C146 256 272 331 410 294s250-50 394-3 268 33 396-5v74H0z" fill="#0d1329"/>
+  <path d="M0 316c160-38 268 24 430 2s278-28 430 4 236 13 340-3v41H0z" fill="#111a32"/>
+  <g fill="#77e0dc" filter="url(#glow)">
+    <path class="star" d="M78 68h8v8h8v8h-8v8h-8v-8h-8v-8h8z"/>
+    <path class="star star-b" d="M430 58h6v6h6v6h-6v6h-6v-6h-6v-6h6z"/>
+    <path class="star star-c" d="M1090 86h7v7h7v7h-7v7h-7v-7h-7v-7h7z"/>
+    <path class="star star-b" d="M1015 265h5v5h5v5h-5v5h-5v-5h-5v-5h5z"/>
+  </g>
+  <g class="sprite" shape-rendering="crispEdges">
+    <rect x="150" y="112" width="144" height="128" rx="42" fill="#6f2f48"/>
+    <rect x="142" y="136" width="24" height="72" fill="#6f2f48"/>
+    <rect x="278" y="128" width="32" height="88" fill="#6f2f48"/>
+    <rect x="166" y="96" width="96" height="24" fill="#f06d55"/>
+    <rect x="158" y="120" width="120" height="88" fill="#f06d55"/>
+    <rect x="174" y="208" width="88" height="24" fill="#db4f53"/>
+    <rect x="190" y="126" width="56" height="54" fill="#ffd08a"/>
+    <rect x="202" y="138" width="32" height="30" fill="#fff1c9"/>
+    <rect x="178" y="190" width="16" height="16" fill="#fff1c9"/>
+    <rect x="246" y="184" width="16" height="16" fill="#fff1c9"/>
+    <rect x="198" y="190" width="16" height="8" fill="#2a1730"/>
+    <rect x="226" y="190" width="16" height="8" fill="#2a1730"/>
+    <rect x="210" y="208" width="24" height="8" fill="#2a1730"/>
+    <g fill="#f7d5ae">
+      <rect x="285" y="90" width="18" height="18"/>
+      <rect x="300" y="78" width="18" height="18"/>
+      <rect x="310" y="62" width="18" height="18"/>
+    </g>
+    <g fill="#f7d5ae" opacity=".78">
+      <rect class="steam-a" x="194" y="76" width="10" height="22"/>
+      <rect class="steam-b" x="232" y="70" width="10" height="22"/>
+    </g>
+  </g>
+  <g font-family="Consolas, 'Courier New', monospace">
+    <text x="400" y="146" fill="#fff4df" font-size="64" font-weight="800" letter-spacing="8">SALTY STEAK</text>
+    <text x="404" y="194" fill="#77e0dc" font-size="22" font-weight="700" letter-spacing="3">LOCAL-FIRST DESKTOP AI</text>
+    <text x="404" y="242" fill="#c5bce8" font-size="17" letter-spacing="1.5">THINK LOCAL  ·  ACT WITH PERMISSION  ·  VERIFY THE RESULT</text>
+    <text x="404" y="286" fill="#ffd166" font-size="16">&gt; source loaded · weights stay home · evidence wins</text>
+    <rect class="cursor" x="1055" y="272" width="12" height="18" fill="#f06d55"/>
+  </g>
+</svg>
