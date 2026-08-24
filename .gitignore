@@ -12,6 +12,12 @@ build/
 validation/
 workspace/
 models/
+backups/
+scratchpad/
+tests/
+tools/
+docs/internal/
+app/**/*.test.mjs
 *.gguf
 *.safetensors
 *.onnx

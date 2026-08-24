@@ -52,6 +52,7 @@ That is the whole game loop. The boss battle is usually a stale state flag.
 - `app/desktop/browser/` holds the isolated structured browser host.
 - `app/desktop/uia/` holds the isolated Windows UI Automation host.
 - `config/defaults.toml` contains safe source defaults. Private overrides belong outside version control.
+- `.codex/config.toml` requests the preferred contributor model, context window, and compaction threshold for new trusted-project Codex sessions. Provider and runtime caps still apply.
 
 ### Start from source
 
