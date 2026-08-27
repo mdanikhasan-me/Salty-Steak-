@@ -1,95 +1,217 @@
 <div align="center">
-  <img src="docs/assets/salty-steak-arcade.svg" width="100%" alt="Animated pixel-art Salty Steak banner">
+  <img src="docs/assets/salty-steak-arcade.svg" width="100%" alt="Animated pixel-art Salty Steak workstation">
 
   <br>
 
-  <img alt="Windows desktop" src="https://img.shields.io/badge/Windows-desktop-36A9E1?style=for-the-badge&logo=windows11&logoColor=white">
-  <img alt="Python backend" src="https://img.shields.io/badge/Python-backend-FFD166?style=for-the-badge&logo=python&logoColor=17324D">
-  <img alt="React 18" src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=11212B">
-  <img alt="Vite 6" src="https://img.shields.io/badge/Vite-6-9B72FF?style=for-the-badge&logo=vite&logoColor=white">
-  <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8-7B4DFF?style=for-the-badge&logo=dotnet&logoColor=white">
-  <img alt="Source available" src="https://img.shields.io/badge/license-source_available-F06D55?style=for-the-badge">
-  <img alt="Model files not included" src="https://img.shields.io/badge/model_files-not_in_repo-20263D?style=for-the-badge">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-desktop-36A9E1?style=flat-square&logo=windows11&logoColor=white">
+  <img alt="WebView2" src="https://img.shields.io/badge/WebView2-native_host-0EA5E9?style=flat-square&logo=microsoftedge&logoColor=white">
+  <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8-7C3AED?style=flat-square&logo=dotnet&logoColor=white">
+  <img alt="React 18" src="https://img.shields.io/badge/React-18-06B6D4?style=flat-square&logo=react&logoColor=082F49">
+  <img alt="Python backend" src="https://img.shields.io/badge/Python-local_service-FACC15?style=flat-square&logo=python&logoColor=172554">
+  <img alt="SQLite WAL" src="https://img.shields.io/badge/SQLite-WAL-22C55E?style=flat-square&logo=sqlite&logoColor=white">
+  <img alt="GGUF runtime" src="https://img.shields.io/badge/GGUF-native_worker-F97316?style=flat-square">
+  <img alt="Context window" src="https://img.shields.io/badge/context-32K_to_262K-EC4899?style=flat-square">
+  <img alt="Source available" src="https://img.shields.io/badge/license-source_available-E11D48?style=flat-square">
 
   <br><br>
 
   <strong>Base Steak 2.0 by MD Anik Hasan (Sawlper)</strong><br>
-  The Windows desktop application, local service, and automation layer I use around my local model.
+  Windows software for running my local model as a chat assistant, researcher, image workstation, and computer operator.
 </div>
 
-### What is in this repository
+## A note from me before the diagrams begin
 
-Salty Steak is a Windows desktop application built around a local text model. The desktop window is native C# and WebView2, the interface is React, and the application service is Python. The model is responsible for deciding whether a request needs a normal answer, research, an image job, one computer action, or a longer plan. The application owns execution, permissions, persistence, and verification.
+I started Salty Steak because I wanted one local model to be the brain of a desktop assistant without making the desktop app pretend to be the brain. The model reads the request and chooses a route. The application gives that route memory, tools, permissions, persistence, cancellation, and a way to prove what happened.
 
-This public repository contains the software source. It does not contain my model weights, tokenizer, checkpoints, training data, private runtime binaries, chat database, browser profile, generated files, installed build, or credentials. Those stay on my machine. There is no secret download command in the setup section; cloning a repository cannot magically produce a 9B model, however confident the terminal looks.
+This repository is the application source: the React interface, Python service, native Windows hosts, runtime adapters, databases, training workbench, and validation code. My model weights, tokenizer, learned adapters, vision projector, image model, private native binaries, conversations, credentials, generated files, and installed packages are deliberately absent. They live in an ignored workspace on my machine.
 
-The model presented by the application is **Base Steak 2.0**, trained by **MD Anik Hasan (Sawlper)**.
+That distinction matters. A public clone can build the software, but it cannot answer a chat prompt until a compatible local workspace is provisioned. `npm ci` is useful, but it has not learned how to download nine billion parameters by telepathy.
 
-### What the application currently contains
+## What actually starts when Salty Steak opens
 
-Chat keeps separate conversation histories, attachments, folders, search, response timing, source links, and a technical activity view. Conversation context belongs to one chat. A fresh chat does not quietly inherit instructions from another one.
+The installed application is not Electron and it is not a browser pointed at a cloud chat page. The main process is a .NET 8 Windows Forms host in `app/desktop/native/`. It owns the window, WebView2 lifecycle, single-instance behavior, startup reporting, process cleanup, and the bridge between the page and Windows.
 
-Global memory is separate and explicit. A user can choose what to save, inspect the saved entries, and remove them. Retrieval is relevance-ranked and bounded before it is added to a prompt.
+The host starts the local Python application service and loads the compiled React interface into WebView2. The service binds to loopback only. A non-loopback host is rejected rather than quietly exposing the API to the local network.
 
-Research runs through a source ledger instead of handing raw search snippets directly to the answer model. Pages are classified, observations retain their URL, contradictory findings can coexist, and final claims can be checked against the evidence that produced them.
+Startup then proceeds in a fixed order:
 
-Agent mode connects the model to a capability broker. The broker exposes only the capabilities granted for that turn, applies the selected authority level, records each invocation, and returns structured observations. Browser control, files, terminal commands, windows, input, screen capture, and UI Automation are implemented as separate capabilities rather than one unrestricted shell-shaped mystery box.
+1. `app/backend/system/config.py` loads `config/defaults.toml` and applies ignored machine-local overrides.
+2. `app/backend/system/files.py` creates and validates the workspace layout.
+3. `app/backend/database/control.py` opens the control database, migrates the schema, enables SQLite WAL mode, and reconciles interrupted operations.
+4. `app/backend/runtime/model_bundles.py` inspects registered `model.json` manifests and selects the active bundle for each role.
+5. `app/backend/application.py` checks the text model, companion artifacts, checksums, runtime family, and native library directory before it creates a model worker.
+6. A background warm-up starts for the selected text bundle. Vision integrity verification may run separately because a vision projector has a different loading contract.
+7. Chat, memory, research, imaging, automation, datasets, training, evaluation, versions, notifications, and plugins are attached to the same application service.
 
-Image work is routed to a separately provisioned image runtime. The text model writes the brief, image settings remain explicit, and revisions keep their own job state. The same workbench also contains dataset import, preparation, training, evaluation, and model-version screens.
+The UI can appear before every large model file is warm. That is why readiness has real states such as cold, preparing, and ready. It is also why a cold first turn is not a fair measurement of steady-state generation speed.
 
-If an action ran but did not produce the requested result, that is not success. If no action ran at all, the assistant does not get to write a victory speech about it.
-
-### How a request is handled
-
-The frontend sends the latest message, conversation identifier, selected model settings, mode, authority, and attachments to the loopback API. The Python service assembles the conversation context and any explicitly retrieved memory, then calls the local text runtime.
-
-The model returns one of the job shapes understood by `app/backend/chat/orchestrator.py`: a response, action, plan, research request, image generation, or image revision. Parsing a shape does not grant it authority. `app/backend/chat/dispatch.py` checks whether that job family is available for the current mode before selecting a runner.
-
-Actions and plan nodes go through the automation broker. Research uses its own bounded loop and evidence ledger. Image work goes through the image orchestrator and persistent job store. Long tasks receive cancellation, elapsed-time limits, stagnation detection, checkpoints, and compacted task state rather than an ever-growing transcript of every tool call.
-
-After execution, verification compares the requested outcome with newly observed state. The result and its evidence are persisted to SQLite before the frontend renders the final answer and activity record.
-
-The short version is this:
+## The process layout
 
 ```text
-React UI
-  to local Python API
-  to Base Steak routing decision
-  to the selected runner
-  to verification and SQLite
-  back to Chat with the answer and evidence
+Salty Steak.exe
+  native window + WebView2
+  starts and supervises the Python service
+    loopback HTTP API
+    control database and operation manager
+    ChatService
+      persistent text worker over anonymous pipes
+      isolated vision process when an image must be read
+      isolated image worker when an image must be rendered
+      research loop and source ledger
+      automation broker
+        browser host
+        UI Automation host
+        elevated terminal worker when required
 ```
 
-### Repository map
+The text worker does not listen on a port. `app/backend/runtime/salty_native_worker.py` is a private child process connected by UTF-8 JSON lines over anonymous stdin/stdout pipes. The parent assigns it to a Windows job object, so closing the application also closes the worker tree. Requests carry an ID; streamed events and the final response come back with that ID; cancellation uses a dedicated signal path and restarts a worker that refuses to acknowledge the stop deadline.
 
-`app/frontend/` contains the React 18 interface and Vite configuration.
+The structured browser and Windows UI Automation hosts are separate native processes. A browser crash should not take the chat window with it, and a broken accessibility tree should not be mistaken for model failure. Less glamorous than one giant process, much easier to debug at 3 AM.
 
-`app/backend/api/` contains request routing and response contracts. `app/backend/chat/` contains prompt assembly, orchestration, runners, task state, and goal verification.
+## How the software hosts a local text runtime
 
-`app/backend/automation/` contains the capability broker, grants, policy, filesystem operations, browser and UIA clients, credential references, and native Discord inspection.
+The public source defines a runtime interface; it does not publish a particular set of weights. A machine-local `model.json` selects a registered text role, names the runtime family, points to ignored artifacts, declares supported context settings, and records the checksums the loader must verify. The application rejects missing files, changed digests, unsupported runtime families, and incomplete companion-artifact sets before Chat becomes ready.
 
-`app/backend/research/`, `memory/`, `imaging/`, `training/`, and `runtime/` contain their respective services and runtime adapters.
+The selected text runtime stays in one supervised worker instead of being loaded again for every message. The worker accepts structured generation requests, streams typed events back to Chat, supports cancellation, and reports readiness separately from response generation. Runtime-specific loading and memory placement remain behind the adapter boundary, so they are not coupled to React, the HTTP routes, or conversation storage.
 
-`app/desktop/native/` is the main Windows Forms and WebView2 host. `app/desktop/browser/` is the isolated browser host. `app/desktop/uia/` is the isolated Windows UI Automation process.
+The software contract supports a 32,768-token default context, adaptive selections through 262,144 tokens, and a manual output ceiling up to 32,768 tokens when it fits inside the selected context. The interface receives its available context presets from the registered local manifest. Selecting a large ceiling does not force every short request to allocate or consume that entire amount.
 
-`config/defaults.toml` defines source defaults. `config/local.toml` is ignored and is the place for machine-specific overrides.
+Optional learned components can be registered for narrowly scoped routes. Their files, training data, weight layout, and evaluation artifacts remain private. The public code is responsible only for selection, checksum binding, activation boundaries, restoration of the ordinary runtime state, and a failure path when the declared component cannot be loaded safely.
 
-`.codex/config.toml` stores the preferred Codex settings for this repository. They are requests, not a way around account or provider limits.
+## Follow one chat turn from the Send button
 
-### Requirements
+Suppose a user sends a message with two files, chooses Cooking, leaves output allocation on Automatic, and enables Agent mode.
 
-The source checkout is intended for Windows. You need:
+### 1. The frontend commits the turn
 
-- Node.js and npm
-- Python compatible with the pinned packages in `requirements.txt`
-- .NET 8 SDK with Windows Desktop support
-- WebView2 Runtime
-- NuGet access while restoring the native projects
-- a separately provisioned Salty Steak workspace if you expect model-backed features to run
+`app/frontend/src/pages/ChatPage.jsx` creates the user message immediately, keeps it tied to the active conversation ID, and sends the selected model settings, authority mode, attachments, and idempotency key through `app/frontend/src/api/client.js`. The idempotency key prevents a retry from quietly creating a second external operation.
 
-CUDA, model files, image runtimes, and native inference binaries are not installed by npm or pip. Their exact requirements depend on the runtime bundle being used.
+Conversation state is keyed by conversation, not by whichever sidebar row happens to be visible when a late fetch returns. That sounds obvious because it is obvious. It still needed regression tests.
 
-### Set up the source checkout
+### 2. The API validates the request
+
+`app/backend/api/router.py` validates the route, body, multipart uploads, IDs, and limits before calling the application. Uploads first enter an isolated temporary location. The service hashes and inspects them before the chat turn may claim them.
+
+The request can include at most 32 attachments. Each file is limited to 512 MiB. Text, source code, CSV, JSON, office documents, ZIP/TAR archives, and single-stream compressed files receive bounded local inspection. Archive traversal is rejected, individual members are capped, total decompression is capped, and unknown binary data is represented by metadata rather than imaginary contents.
+
+### 3. Chat context is assembled
+
+`app/backend/chat/service.py` loads messages only from the requested conversation. It budgets the recent transcript against the selected context, reserves output space, incorporates bounded attachment excerpts, and retrieves global memory only when the memory feature is enabled and relevance warrants it.
+
+Large Agent missions do not keep appending every screenshot and tool response to the chat prompt. Their compact state retains the goal, relevant world observations, completed effects, open requirements, failures, and verification evidence. The visible chat and the working task state have different jobs, so they have different retention rules.
+
+### 4. The model chooses a job shape
+
+The prepared prompt goes to Base Steak 2.0. `app/backend/chat/orchestrator.py` accepts six top-level job families:
+
+- `respond` for a normal user-facing answer;
+- `action` for one registered capability call;
+- `plan` for a dependency-checked multi-step task;
+- `research` for evidence collection and synthesis;
+- `generate_image` for a new render;
+- `revise_image` for a change to an existing render brief.
+
+The model may name only registered capabilities. Returning JSON does not grant permission, and returning prose that claims a tool ran does not make the claim true. `app/backend/chat/dispatch.py` checks mode availability before selecting the runner.
+
+### 5. A runner does the actual work
+
+A direct answer returns to the model worker. Research enters the research loop. Image jobs enter the image orchestrator. Actions and plan nodes go through the automation broker. Long work receives a task context with cancellation, deadlines, checkpoints, live activity events, and stale-progress detection.
+
+### 6. The requested outcome is checked again
+
+`app/backend/chat/goal_state.py` turns the user's request into observable predicates. After execution, `app/backend/chat/verification.py` compares those predicates with newly observed state. A step saying “deleted file.txt” is evidence about that step; it is not evidence that every requested file was found, nor that an excluded file survived.
+
+The final response is stored with timing, token counts, route, sources, tool records, artifacts, and verification state. The activity panel renders events produced during the run. It is not supposed to invent a ceremonial twelve-step journey after the answer has already finished.
+
+## Instant and Cooking are generation policies, not personalities
+
+Instant closes the model's private thinking boundary and is intended for direct answers. Cooking opens the model's reasoning path and preserves the private channel until a final answer is available. The visible response contains the answer; the activity view contains concise progress summaries and technical measurements, not the raw hidden reasoning transcript.
+
+Maximum output can be Automatic or Manual. Automatic allocates from the request, selected context, and remaining budget. Manual exposes 256, 512, 1K, 2K, 4K, 8K, 16K, and 32K presets. Natural end-of-generation remains enabled, so selecting 32K does not force the model to turn “hi” into a novella.
+
+## Conversation context, global memory, and mission memory
+
+These are three separate systems because mixing them produced exactly the sort of ghost instructions nobody enjoys debugging.
+
+**Conversation context** lives in the control database. Messages from Chat A stay in Chat A. A new conversation starts without inheriting another conversation's style request, image preference, or unfinished instruction.
+
+**Global memory** lives in `salty-memory.db`. `app/backend/memory/store.py` uses SQLite WAL and an FTS5 index. `/save mem` is an explicit user command; saved entries can be listed and removed in the Memory panel. Retrieval combines text search with bounded relevance scoring before any memory is inserted into a prompt. Turning automatic memory off stops silent collection without deleting entries the user intentionally saved.
+
+**Mission memory** uses the same database file but different tables for principals, locations, items, actions, and events. It lets a long computer task remember which object was seen, what was attempted, and what changed without treating a 200-step operation log as prose to reread every turn.
+
+No amount of context-window marketing replaces either database. A KV cache is fast temporary working memory. SQLite is durable state. They are friends, not substitutes.
+
+## Research, from query to cited claim
+
+`app/backend/research/loop.py` does not hand the first search snippet to the answer model and hope the URL looks respectable. A research run owns a `ResearchLedger` containing queries, source records, extracted observations, claims, publisher identity, contradictions, confidence, and unresolved questions.
+
+Sources are classified and checked for independence. Several pages repeating the same publisher do not become three independent confirmations. A claim may remain disputed; the ledger keeps both sides and tells synthesis that the disagreement exists.
+
+The current profiles are:
+
+- **Verification**: up to 3 minutes, 8 queries, 16 sources, one validation round.
+- **Instant Research**: up to 5 minutes, 24 queries, 64 sources, one validation round.
+- **Cooking Research**: a hard 4-hour ceiling, up to 1,024 queries and 4,096 sources, two validation rounds.
+
+Those are ceilings, not quotas. Research stops early when coverage and independent-source requirements are satisfied, when repeated searches are barren, when the user cancels, or when the evidence cannot support the requested claim. Fewer defensible results beat ten Discord invite links that expire the moment somebody clicks them.
+
+The final answer receives the ledger, not an unlabelled bag of web text. Sources shown in Chat retain their URLs and claim relationship so the user can inspect where an answer came from.
+
+## Agent mode and Windows control
+
+`app/backend/automation/capability_registry.py` defines the operations the model can request. The current broker can expose filesystem management, terminal execution, application launch, window control, input control, screen capture, Windows UI Automation, the isolated browser, and read-oriented Discord inspection.
+
+Before a task starts, the broker snapshots the granted capabilities and selected authority. Each invocation is schema-validated, risk-classified, bounded, written to the audit log, and returned as a structured observation. The model cannot add a capability by spelling a convincing new name in JSON.
+
+Plans are validated as a whole before the first node runs. `app/backend/workflow/plan.py` checks node shape, dependencies, cycles, connector names, and capability slots. The live runner allows up to 40 nodes in one accepted plan and can replan from observed failure, but it caps depth, repeated attempts, retained steps, observation size, and parse failures. The Agent loop has an eight-hour mission ceiling and 8,192 iteration guard. Reaching a high number is not the goal; completing the predicates is.
+
+The policy engine separates consequence from capability. Reading a UI tree is not the same as clicking Send. Local writes, destructive operations, external messages, and financial actions receive different treatment. Approval is bound to the exact action arguments; approval for one target cannot be replayed against another.
+
+The automation broker also watches recent human input. If the user takes back the mouse or keyboard, foreground automation yields until the desktop has been idle for the configured interval. The validation tools use monitor 2 when instructed, because a development assistant that steals the active monitor is technically functional and practically unbearable.
+
+## Images and vision
+
+Image generation is a separate runtime role loaded by an isolated local worker. The public interface exposes 512, 768, and 1024 pixel long-edge presets; 1:1, 4:3, 3:4, 16:9, and 9:16 aspect ratios; and 4, 8, 12, or 20 quality steps. The image weights and their private manifest are not part of this repository.
+
+The text model first writes a durable `RenderBrief`. `app/backend/imaging/brief.py` separates subject, purpose, composition, style, colour, required elements, optional elements, and negative constraints. Revisions merge into the original brief instead of replacing it with the last six words the user typed. Negative constraints go to negative conditioning rather than being copied into the positive prompt where the diffusion model might faithfully draw the thing it was told not to draw.
+
+`app/backend/runtime/steak_gen_engine.py` verifies that the selected private bundle matches the public runtime contract before loading it. Image jobs are persisted, cancellable, and reconciled after restart. Generation time shown in Chat comes from the actual job lifecycle, not only the final GPU call.
+
+Vision uses a different isolated path with a text model, projector, one-use input permission, size-bound staging area, and verified runtime manifest. Attaching a picture does not automatically authorize a screen capture, and a capture permission cannot be reused for a later unrelated image.
+
+## Dataset, training, evaluation, and versions
+
+The Models & training workbench is backed by the same operation system as Chat. Dataset import supports TXT, JSONL, JSON, CSV, and Parquet. Source inspection records schema and lineage before preparation. Packing, truncation, train/validation splits, tokenizer identity, and prepared-artifact policies are stored rather than inferred later from filenames.
+
+Training writes recovery state at configured intervals. Finalisation runs checkpoint inspection, isolated load, integrity checks, evaluation, policy checks, and version creation as separate stages. A saved version keeps lineage to its source data and training operation. Promotion is a decision backed by evidence; renaming a folder to `final-final-really-final` is not a promotion strategy.
+
+Identity post-training has its own training, holdout, retention, natural-language acceptance, and live-promotion reports. Dataset contents, learned parameters, checkpoints, and private evaluation results are not published here. Cloning the harness does not reproduce a private training run.
+
+## Persistence and recovery
+
+The control database stores conversations, messages, operations, operation events, datasets, prepared artifacts, training runs, versions, runtime state, image jobs, chat artifacts, notifications, connector configuration, grants, and automation audit records. Schema migration happens at startup inside the application, not in the frontend.
+
+Operations have durable states and heartbeats. On restart, incomplete work is reconciled instead of simply disappearing from the UI. Training and image jobs keep their own recovery rules because “resume generation” and “resume optimiser state” are not the same operation.
+
+Generated artifacts are written beneath the ignored workspace and attached to their conversation records. The native file download path serves the exact stored bytes; it does not reconstruct a file from whatever happens to be visible in a code block.
+
+## Repository map
+
+`app/frontend/` contains the React 18 interface, state, accessible components, chat workflows, and CSS.
+
+`app/backend/api/` contains the loopback HTTP adapter and response contracts. `app/backend/chat/` contains context assembly, routing, runners, goal predicates, task state, live activity, and verification.
+
+`app/backend/runtime/` contains the text, vision, and image worker clients plus the native model adapter. `app/backend/automation/` contains the capability broker, policy engine, grants, audit records, browser/UIA clients, filesystem operations, and elevated terminal worker.
+
+`app/backend/research/`, `memory/`, `imaging/`, `datasets/`, `training/`, `evaluation/`, and `versions/` contain the corresponding subsystems. `app/backend/database/control.py` owns the central schema.
+
+`app/desktop/native/` is the main WebView2 shell. `app/desktop/browser/` is the structured browser process. `app/desktop/uia/` is the Windows accessibility process.
+
+`config/defaults.toml` is the source default file. `config/local.toml`, `.codex/`, `workspace/`, model files, build output, evidence, caches, and installed packages are local-only or ignored as appropriate.
+
+## Build the public source
+
+The checkout is intended for Windows. Install Node.js, Python, the .NET 8 SDK with Windows Desktop support, WebView2 Runtime, and NuGet access.
 
 From PowerShell in the repository root:
 
@@ -100,42 +222,32 @@ python -m venv .venv
 npm ci
 ```
 
-Check that both source halves compile:
+Build the React interface and compile-check the Python tree:
 
 ```powershell
 npm run build
 npm run check:python
 ```
 
-The frontend build is written to `dist/`. Python compilation checks the modules under `app/` without starting the model runtime.
-
-### Run the development interface
-
-Start the backend in one PowerShell terminal:
+Run the development service and Vite in separate terminals:
 
 ```powershell
 npm run server
 ```
 
-Start Vite in another:
-
 ```powershell
 npm run dev
 ```
 
-The backend listens on `127.0.0.1:8080` by default. Vite serves the development UI at `http://127.0.0.1:5173` and proxies API requests to the backend.
+The default service URL is `http://127.0.0.1:8080`; Vite uses `http://127.0.0.1:5173` and proxies API calls locally.
 
-The server reads `config/defaults.toml`, then applies machine-local configuration. Its default workspace path is `workspace/` below the repository root. The public checkout intentionally does not provide a ready workspace, so startup may report missing model or runtime artifacts until you supply them.
-
-### Build the Windows hosts
-
-Build the main desktop shell, structured browser host, and UI Automation host together:
+Build all three Windows hosts:
 
 ```powershell
 npm run build:hosts
 ```
 
-Or build them separately while working on one host:
+Or build one host while working on it:
 
 ```powershell
 npm run build:desktop
@@ -143,41 +255,17 @@ npm run build:browser-host
 npm run build:uia-host
 ```
 
-The projects target `net8.0-windows` and `win-x64`. The main shell depends on WebView2 and pythonnet; the browser host depends on WebView2; the UIA host uses WPF automation APIs. These commands produce developer build output under each project's `bin/` and `obj/` directories. They do not recreate my sealed installed package.
+These commands produce developer output. They do not recreate my signed or sealed installed package, and they do not provision the private workspace.
 
-### Supplying local models and runtimes
+## Add a local runtime without publishing it
 
-Runtime paths are resolved from the workspace and model bundle metadata. A local bundle is described by `model.json`; the large files referenced by that manifest remain ignored by Git.
+Model roles are registered under the ignored workspace with a `model.json` manifest. The manifest names the role, artifact, checksum, runtime family, context policy, companion artifacts, and activation state. The referenced large files must already exist locally.
 
-The application distinguishes text generation, vision, and image generation roles. A missing image runtime should disable image generation without pretending the text model can render pixels. A missing text runtime prevents model-backed chat from becoming ready.
+Machine paths and secrets belong in ignored configuration or the credential store. Do not put access tokens in `config/defaults.toml`, commit a personal workspace, or paste a full runtime manifest into a public issue. The repository `.gitignore` excludes conversations, screenshots, logs, databases, weights, checkpoints, adapters, tokenizers, model bundles, local Codex state, native packages, and validation evidence.
 
-Keep credentials and machine paths in ignored local configuration or the application's credential store. Do not add tokens to `config/defaults.toml`, commit them to a manifest, or paste them into an issue.
+## Checks and what they do not prove
 
-### Context and memory
-
-The selected context size is a runtime allocation, not a promise that every old message is copied into every request. The service trims and budgets conversation history around the current turn and reserves room for output. Agent tasks maintain a smaller task state containing the goal, observations, completed effects, remaining work, and verification evidence.
-
-Saved global memory is another input source. It is queried only when relevant and remains inspectable. This separation is deliberate: a long context window is useful, but it is not a database and should not be treated like one.
-
-### Permissions and computer control
-
-Computer operations are available only through registered capabilities. The interface exposes Agent mode and an authority selector; the backend enforces both again. Approval records are tied to one task and one action shape so approval for one operation cannot be reused for a different target.
-
-Read-only observation and external mutation are treated differently. Sending a message, changing an account, deleting a file, running an administrator command, or entering data into another application carries a different consequence than reading a page or listing a folder. Execution results include structured evidence so later verification can tell what actually changed.
-
-This repository provides the mechanism. Anyone adapting it is responsible for using services and applications within the authorization they actually have.
-
-### Network and privacy boundary
-
-The application service rejects non-loopback binds. Conversations, memory, operation records, browser state, logs, generated images, and local model files live under the ignored workspace on the user's machine.
-
-That does not mean Salty Steak is permanently offline. Research fetches public pages. Browser automation visits sites. Configured connectors and MCP servers can use the network. External links open the default browser. These operations occur only when the corresponding feature is configured and selected for the task.
-
-Credentials are referenced by identifier and resolved at execution time. They should not be inserted into model prompts, activity summaries, screenshots, or Git history.
-
-### What the public checks prove
-
-The repeatable source checks are:
+The public source gates are:
 
 ```powershell
 npm ci
@@ -187,15 +275,21 @@ npm run check:python
 npm run build:hosts
 ```
 
-Passing them proves dependency installation, frontend compilation, Python syntax compilation, and .NET host compilation for the public tree. It does not prove that a private model bundle is good, that an installed package matches a manifest, or that automation succeeded in a live desktop application. Those require separate runtime, package, and rendered acceptance evidence.
+They prove that dependencies install, the frontend compiles, Python modules compile, and the three .NET hosts build from the published tree. They do not prove that a private weight bundle loads, that 262K allocation fits a particular machine, that an installed package matches its manifest, that the image model meets a speed target, or that a desktop automation completed its real task.
 
-### License and authorship
+Those claims need different evidence: checksum audits for packages, native generation probes for runtime limits, rendered screenshots for UI acceptance, measured jobs for performance, and observed postconditions for automation. A green toast is pleasant. It is not a lab report.
 
-This is source-available software, not open-source software. The [Salty Steak Source-Available License](LICENSE) permits viewing and running an unmodified copy for the uses it describes. Modification, rebranding, redistribution, sublicensing, selling, hosted-service use, or removal of attribution requires written permission from MD Anik Hasan (Sawlper).
+## A note about the older Git dates
 
-The Salty Steak name, emblem, and Base Steak 2.0 identity remain the work of MD Anik Hasan (Sawlper). Third-party packages keep their own licenses. This repository grants no rights to model weights or other artifacts that are not included here.
+I began this project in January 2026, before this GitHub repository existed. The source survived a drive failure and a move to another computer; the original local Git timestamps did not. The January-to-August dates on the older commits are therefore reconstructed estimates. Their parent order and file changes are preserved, so they remain useful for answering “what changed before this?”, but the exact day and clock time should not be treated as forensic evidence. Work committed after the repository was established keeps its normal timestamp.
+
+## License and authorship
+
+The [Salty Steak Source-Available License](LICENSE) permits viewing the source and running an unmodified copy for the uses it describes. Modification, rebranding, redistribution, sublicensing, selling, hosted-service use, or removal of attribution requires written permission from **MD Anik Hasan (Sawlper)**.
+
+Salty Steak, its emblem, and the Base Steak 2.0 identity belong to MD Anik Hasan (Sawlper). Third-party packages retain their own licenses. No rights are granted to model weights, checkpoints, datasets, tokenizers, private runtimes, or other artifacts that are not included in this repository.
 
 <div align="center">
   <img src="app/frontend/public/assets/salty-potato-symbol.svg" width="54" alt="Salty Steak emblem"><br>
-  <sub>MD Anik Hasan (Sawlper) · Salty Steak</sub>
+  <sub>MD Anik Hasan (Sawlper) / Salty Steak</sub>
 </div>
