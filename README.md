@@ -9,113 +9,193 @@
   <img alt="Vite 6" src="https://img.shields.io/badge/Vite-6-9B72FF?style=for-the-badge&logo=vite&logoColor=white">
   <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8-7B4DFF?style=for-the-badge&logo=dotnet&logoColor=white">
   <img alt="Source available" src="https://img.shields.io/badge/license-source_available-F06D55?style=for-the-badge">
+  <img alt="Model files not included" src="https://img.shields.io/badge/model_files-not_in_repo-20263D?style=for-the-badge">
 
   <br><br>
 
-  <strong>Base Steak 2.0</strong> · by <strong>MD Anik Hasan (Sawlper)</strong><br>
-  Local-first Windows desktop source for chat, research, model workflows, and permission-gated computer work.
+  <strong>Base Steak 2.0 by MD Anik Hasan (Sawlper)</strong><br>
+  The Windows desktop application, local service, and automation layer I use around my local model.
 </div>
 
-### Insert cartridge
+### What is in this repository
 
-This repository is the application source: the interface, local service, native Windows hosts, orchestration, memory, research, training tools, and verification machinery.
+Salty Steak is a Windows desktop application built around a local text model. The desktop window is native C# and WebView2, the interface is React, and the application service is Python. The model is responsible for deciding whether a request needs a normal answer, research, an image job, one computer action, or a longer plan. The application owns execution, permissions, persistence, and verification.
 
-Model weights, checkpoints, private datasets, tokenizer files, packaged runtimes, installed binaries, conversations, credentials, screenshots, and machine-local workspace data are deliberately absent. Bring the runtime; Git is not a model warehouse.
+This public repository contains the software source. It does not contain my model weights, tokenizer, checkpoints, training data, private runtime binaries, chat database, browser profile, generated files, installed build, or credentials. Those stay on my machine. There is no secret download command in the setup section; cloning a repository cannot magically produce a 9B model, however confident the terminal looks.
 
-### The playable build
+The model presented by the application is **Base Steak 2.0**, trained by **MD Anik Hasan (Sawlper)**.
 
-- **Chat that stays organized:** local conversations, attachments, per-chat context, explicit global memory, search, folders, and response provenance.
-- **Four deliberate lanes:** Instant for direct replies, Cooking for longer model reasoning, Research for evidence-backed retrieval, and Agent for computer actions.
-- **Research with receipts:** source pages enter a ledger, claims keep their evidence, and incomplete validation remains incomplete.
-- **Native Windows control:** a C# WebView2 shell plus isolated browser and UI Automation hosts.
-- **Permission before consequence:** capabilities pass through persisted grants, per-invocation policy, audit records, cancellation, and read-back verification.
-- **Model workbench:** dataset inspection, preparation, training, evaluation, versions, and separately provisioned text, vision, and image runtimes.
+### What the application currently contains
 
-The operating rule is pleasantly unglamorous: if nothing ran, the app is not allowed to declare victory.
+Chat keeps separate conversation histories, attachments, folders, search, response timing, source links, and a technical activity view. Conversation context belongs to one chat. A fresh chat does not quietly inherit instructions from another one.
 
-### How a turn travels
+Global memory is separate and explicit. A user can choose what to save, inspect the saved entries, and remove them. Retrieval is relevance-ranked and bounded before it is added to a prompt.
 
-1. The React interface sends the latest request and the selected mode to a loopback-only Python service.
-2. The text model chooses a response, research job, image job, single action, or plan.
-3. The runtime validates that route against the mode, available capabilities, connector state, and local policy.
-4. Specialized workers do the bounded work: research, browser control, files, terminal, windows, input, UI Automation, or image generation.
-5. The verifier observes the result again. Unknown is not silently promoted to success.
-6. Chat receives the answer, evidence, artifacts, timing, and a readable activity trail; technical detail stays available without taking over the page.
+Research runs through a source ledger instead of handing raw search snippets directly to the answer model. Pages are classified, observations retain their URL, contradictory findings can coexist, and final claims can be checked against the evidence that produced them.
 
-That is the whole game loop. The boss battle is usually a stale state flag.
+Agent mode connects the model to a capability broker. The broker exposes only the capabilities granted for that turn, applies the selected authority level, records each invocation, and returns structured observations. Browser control, files, terminal commands, windows, input, screen capture, and UI Automation are implemented as separate capabilities rather than one unrestricted shell-shaped mystery box.
 
-### Source map
+Image work is routed to a separately provisioned image runtime. The text model writes the brief, image settings remain explicit, and revisions keep their own job state. The same workbench also contains dataset import, preparation, training, evaluation, and model-version screens.
 
-- `app/frontend/` holds the React 18 and Vite 6 interface.
-- `app/backend/` holds the loopback API, orchestration, memory, research, policy, training, runtime adapters, and tools.
-- `app/desktop/native/` holds the Windows Forms and WebView2 desktop shell.
-- `app/desktop/browser/` holds the isolated structured browser host.
-- `app/desktop/uia/` holds the isolated Windows UI Automation host.
-- `config/defaults.toml` contains safe source defaults. Private overrides belong outside version control.
-- `.codex/config.toml` requests the preferred contributor model, context window, and compaction threshold for new trusted-project Codex sessions. Provider and runtime caps still apply.
+If an action ran but did not produce the requested result, that is not success. If no action ran at all, the assistant does not get to write a victory speech about it.
 
-### Start from source
+### How a request is handled
 
-You need Windows, Node.js with npm, a Python installation compatible with `requirements.txt`, and the .NET 8 SDK. Native project restore also needs access to NuGet.
+The frontend sends the latest message, conversation identifier, selected model settings, mode, authority, and attachments to the loopback API. The Python service assembles the conversation context and any explicitly retrieved memory, then calls the local text runtime.
+
+The model returns one of the job shapes understood by `app/backend/chat/orchestrator.py`: a response, action, plan, research request, image generation, or image revision. Parsing a shape does not grant it authority. `app/backend/chat/dispatch.py` checks whether that job family is available for the current mode before selecting a runner.
+
+Actions and plan nodes go through the automation broker. Research uses its own bounded loop and evidence ledger. Image work goes through the image orchestrator and persistent job store. Long tasks receive cancellation, elapsed-time limits, stagnation detection, checkpoints, and compacted task state rather than an ever-growing transcript of every tool call.
+
+After execution, verification compares the requested outcome with newly observed state. The result and its evidence are persisted to SQLite before the frontend renders the final answer and activity record.
+
+The short version is this:
+
+```text
+React UI
+  to local Python API
+  to Base Steak routing decision
+  to the selected runner
+  to verification and SQLite
+  back to Chat with the answer and evidence
+```
+
+### Repository map
+
+`app/frontend/` contains the React 18 interface and Vite configuration.
+
+`app/backend/api/` contains request routing and response contracts. `app/backend/chat/` contains prompt assembly, orchestration, runners, task state, and goal verification.
+
+`app/backend/automation/` contains the capability broker, grants, policy, filesystem operations, browser and UIA clients, credential references, and native Discord inspection.
+
+`app/backend/research/`, `memory/`, `imaging/`, `training/`, and `runtime/` contain their respective services and runtime adapters.
+
+`app/desktop/native/` is the main Windows Forms and WebView2 host. `app/desktop/browser/` is the isolated browser host. `app/desktop/uia/` is the isolated Windows UI Automation process.
+
+`config/defaults.toml` defines source defaults. `config/local.toml` is ignored and is the place for machine-specific overrides.
+
+`.codex/config.toml` stores the preferred Codex settings for this repository. They are requests, not a way around account or provider limits.
+
+### Requirements
+
+The source checkout is intended for Windows. You need:
+
+- Node.js and npm
+- Python compatible with the pinned packages in `requirements.txt`
+- .NET 8 SDK with Windows Desktop support
+- WebView2 Runtime
+- NuGet access while restoring the native projects
+- a separately provisioned Salty Steak workspace if you expect model-backed features to run
+
+CUDA, model files, image runtimes, and native inference binaries are not installed by npm or pip. Their exact requirements depend on the runtime bundle being used.
+
+### Set up the source checkout
+
+From PowerShell in the repository root:
 
 ```powershell
 python -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 npm ci
+```
+
+Check that both source halves compile:
+
+```powershell
 npm run build
 npm run check:python
 ```
 
-For split frontend and backend development, use two terminals:
+The frontend build is written to `dist/`. Python compilation checks the modules under `app/` without starting the model runtime.
+
+### Run the development interface
+
+Start the backend in one PowerShell terminal:
 
 ```powershell
 npm run server
 ```
 
+Start Vite in another:
+
 ```powershell
 npm run dev
 ```
 
-Vite serves the development interface at `http://127.0.0.1:5173`. Backend initialization and model-backed features still require a separately provisioned local workspace and runtime.
+The backend listens on `127.0.0.1:8080` by default. Vite serves the development UI at `http://127.0.0.1:5173` and proxies API requests to the backend.
 
-Build the three Windows hosts when working on the native shell or automation layer:
+The server reads `config/defaults.toml`, then applies machine-local configuration. Its default workspace path is `workspace/` below the repository root. The public checkout intentionally does not provide a ready workspace, so startup may report missing model or runtime artifacts until you supply them.
+
+### Build the Windows hosts
+
+Build the main desktop shell, structured browser host, and UI Automation host together:
 
 ```powershell
 npm run build:hosts
 ```
 
-These commands build source projects. They do not produce the private, fully provisioned Salty Steak installation used by its owner.
+Or build them separately while working on one host:
 
-### Memory without context soup
+```powershell
+npm run build:desktop
+npm run build:browser-host
+npm run build:uia-host
+```
 
-Conversation context belongs to its conversation. A new chat does not inherit another chat's instructions.
+The projects target `net8.0-windows` and `win-x64`. The main shell depends on WebView2 and pythonnet; the browser host depends on WebView2; the UIA host uses WPF automation APIs. These commands produce developer build output under each project's `bin/` and `obj/` directories. They do not recreate my sealed installed package.
 
-Global memory is a separate, explicit lane. The user chooses what to retain, can inspect it in the interface, and can remove it later. Retrieval is bounded and relevance-ranked so memory helps the current turn instead of becoming a second, noisier prompt.
+### Supplying local models and runtimes
 
-### Local-first, honestly scoped
+Runtime paths are resolved from the workspace and model bundle metadata. A local bundle is described by `model.json`; the large files referenced by that manifest remain ignored by Git.
 
-The service rejects non-loopback binds, and ignored `workspace/` paths hold local conversations, memory, artifacts, logs, and runtime state. Credentials remain machine-local and may use Windows DPAPI where the relevant connector supports it.
+The application distinguishes text generation, vision, and image generation roles. A missing image runtime should disable image generation without pretending the text model can render pixels. A missing text runtime prevents model-backed chat from becoming ready.
 
-Local-first does not mean the network is imaginary. Research, browser automation, configured connectors, MCP services, and external links may access the network when the operator enables or requests them. Screen capture and computer automation can observe user-visible machine state after the required permission is granted.
+Keep credentials and machine paths in ignored local configuration or the application's credential store. Do not add tokens to `config/defaults.toml`, commit them to a manifest, or paste them into an issue.
 
-### Verification cheatsheet
+### Context and memory
+
+The selected context size is a runtime allocation, not a promise that every old message is copied into every request. The service trims and budgets conversation history around the current turn and reserves room for output. Agent tasks maintain a smaller task state containing the goal, observations, completed effects, remaining work, and verification evidence.
+
+Saved global memory is another input source. It is queried only when relevant and remains inspectable. This separation is deliberate: a long context window is useful, but it is not a database and should not be treated like one.
+
+### Permissions and computer control
+
+Computer operations are available only through registered capabilities. The interface exposes Agent mode and an authority selector; the backend enforces both again. Approval records are tied to one task and one action shape so approval for one operation cannot be reused for a different target.
+
+Read-only observation and external mutation are treated differently. Sending a message, changing an account, deleting a file, running an administrator command, or entering data into another application carries a different consequence than reading a page or listing a folder. Execution results include structured evidence so later verification can tell what actually changed.
+
+This repository provides the mechanism. Anyone adapting it is responsible for using services and applications within the authorization they actually have.
+
+### Network and privacy boundary
+
+The application service rejects non-loopback binds. Conversations, memory, operation records, browser state, logs, generated images, and local model files live under the ignored workspace on the user's machine.
+
+That does not mean Salty Steak is permanently offline. Research fetches public pages. Browser automation visits sites. Configured connectors and MCP servers can use the network. External links open the default browser. These operations occur only when the corresponding feature is configured and selected for the task.
+
+Credentials are referenced by identifier and resolved at execution time. They should not be inserted into model prompts, activity summaries, screenshots, or Git history.
+
+### What the public checks prove
+
+The repeatable source checks are:
 
 ```powershell
 npm ci
+npm audit
 npm run build
 npm run check:python
 npm run build:hosts
 ```
 
-The public source drop does not include private acceptance fixtures or the installed runtime. These checks prove source and host compilation, not model quality, packaged-runtime integrity, or live computer-control acceptance.
+Passing them proves dependency installation, frontend compilation, Python syntax compilation, and .NET host compilation for the public tree. It does not prove that a private model bundle is good, that an installed package matches a manifest, or that automation succeeded in a live desktop application. Those require separate runtime, package, and rendered acceptance evidence.
 
-### License, identity, and the fine print
+### License and authorship
 
-The application source is available under the [Salty Steak Source-Available License](LICENSE). It is not an open-source license. Viewing and running an unmodified copy are permitted within the license; modifying, rebranding, redistributing, sublicensing, selling, or removing attribution requires written permission from MD Anik Hasan (Sawlper).
+This is source-available software, not open-source software. The [Salty Steak Source-Available License](LICENSE) permits viewing and running an unmodified copy for the uses it describes. Modification, rebranding, redistribution, sublicensing, selling, hosted-service use, or removal of attribution requires written permission from MD Anik Hasan (Sawlper).
 
-**Salty Steak** and **Base Steak 2.0** identify work by **MD Anik Hasan (Sawlper)**. Third-party dependencies keep their own licenses. No model weights or third-party rights are granted by this repository.
+The Salty Steak name, emblem, and Base Steak 2.0 identity remain the work of MD Anik Hasan (Sawlper). Third-party packages keep their own licenses. This repository grants no rights to model weights or other artifacts that are not included here.
 
 <div align="center">
   <img src="app/frontend/public/assets/salty-potato-symbol.svg" width="54" alt="Salty Steak emblem"><br>
-  <sub>Built locally. Verified loudly. Seasoned to taste.</sub>
+  <sub>MD Anik Hasan (Sawlper) · Salty Steak</sub>
 </div>
