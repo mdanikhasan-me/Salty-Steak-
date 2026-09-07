@@ -237,7 +237,8 @@ export function normaliseGenerationSettingsSnapshot(value, defaults = {}) {
 }
 
 export function generationSettingsForRequest(value, defaults = {}) {
-  return normaliseGenerationSettingsSnapshot(value, defaults);
+  const settings = normaliseGenerationSettingsSnapshot(value, defaults);
+  return { ...settings, stop_sequences: settings.stop_sequences.filter((sequence) => sequence !== "") };
 }
 
 export function generationTurnSettingsForRequest(
@@ -245,6 +246,8 @@ export function generationTurnSettingsForRequest(
   defaults = {},
   {
     agentMode = false,
+    codeMode = false,
+    workspaceMode,
     researchMode = false,
     researchCommand = false,
     imageCommand = false,
@@ -254,6 +257,8 @@ export function generationTurnSettingsForRequest(
   return {
     ...generationSettingsForRequest(value, defaults),
     agent_mode: Boolean(agentMode),
+    code_mode: Boolean(codeMode),
+    ...(workspaceMode ? { workspace_mode: workspaceMode } : {}),
     research_available: researchEnabled,
     research_command: Boolean(researchCommand),
     image_mode: Boolean(imageCommand),

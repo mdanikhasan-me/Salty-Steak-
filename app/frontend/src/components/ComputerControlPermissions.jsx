@@ -1,4 +1,4 @@
-import { AppWindow, Layers, Monitor, MousePointerClick, Terminal } from "lucide-react";
+import { AppWindow, Layers, Monitor, MousePointerClick, Terminal, Folder, Globe, MessageCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   COMPUTER_CONTROL_CAPABILITIES,
@@ -18,6 +18,10 @@ import {
 
 const ICONS = {
   terminal: Terminal,
+  files: Folder,
+  browser_control: Globe,
+  ui_automation: AppWindow,
+  discord_inspect: MessageCircle,
   screen_capture: Monitor,
   input_control: MousePointerClick,
   application_launch: AppWindow,
@@ -284,7 +288,7 @@ export function ComputerControlPermissions({
       {loading ? <p className="automation-permission-notice" role="status">Checking the local broker...</p> : null}
       <div className="plugins-list" role="list">
         {status.capabilities.map((item) => {
-          const Icon = ICONS[item.uiId];
+          const Icon = ICONS[item.uiId] || AppWindow;
           const busy = busyId === item.id;
           const actionDisabled = busy || !item.available || (item.granted && !item.effectiveEnabled);
           return (

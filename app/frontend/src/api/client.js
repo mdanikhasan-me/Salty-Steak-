@@ -123,6 +123,17 @@ function operationRequest(path, body, requestKey) {
   });
 }
 
+const conversationReads = new Map();
+function readConversation(id) {
+  const key = String(id);
+  if (!conversationReads.has(key)) {
+    const promise = request(`/chat/conversations/${encodeURIComponent(key)}`)
+      .finally(() => conversationReads.delete(key));
+    conversationReads.set(key, promise);
+  }
+  return conversationReads.get(key);
+}
+
 export const api = {
   makeRequestKey,
 
@@ -323,9 +334,13 @@ export const api = {
       },
     },
   ),
-  listConversations: () => request("/chat/conversations"),
-  createConversation: () => request("/chat/conversations", { method: "POST", body: {} }),
-  getConversation: (id) => request(`/chat/conversations/${encodeURIComponent(id)}`),
+  listConversations: (workspaceMode) => request(withQuery("/chat/conversations", { workspace_mode: workspaceMode })),
+  createConversation: (workspaceMode = "chat") => request("/chat/conversations", { method: "POST", body: { workspace_mode: workspaceMode } }),
+  getWorkspaceState: (mode) => request(`/chat/workspaces/${encodeURIComponent(mode)}/state`),
+  getUiPreferences: () => request("/preferences/ui"),
+  saveUiPreferences: (preferences) => request("/preferences/ui", { method: "POST", body: preferences }),
+  saveWorkspaceState: (mode, state) => request(`/chat/workspaces/${encodeURIComponent(mode)}/state`, { method: "POST", body: state }),
+  getConversation: readConversation,
   sendMessage: (
     conversationId,
     content,
@@ -411,9 +426,9 @@ export const api = {
 
   openExternal: (url) =>
     request("/chat/open-external", { method: "POST", body: { url } }),
-  listConversationLabels: () => request("/chat/labels"),
-  createConversationLabel: (name, tone) =>
-    request("/chat/labels", { method: "POST", body: { name, tone } }),
+  listConversationLabels: (workspaceMode) => request(withQuery("/chat/labels", { workspace_mode: workspaceMode })),
+  createConversationLabel: (name, tone, workspaceMode = "chat") =>
+    request("/chat/labels", { method: "POST", body: { name, tone, workspace_mode: workspaceMode } }),
   updateConversationLabel: (id, changes) =>
     request(`/chat/labels/${encodeURIComponent(id)}`, {
       method: "POST",

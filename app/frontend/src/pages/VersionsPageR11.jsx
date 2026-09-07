@@ -118,7 +118,7 @@ export function VersionsPageR11({ onNavigate }) {
   return (
     <div className="page page--versions-r11">
       <PageHeader title="Models">
-        <p>Manage local language models without mixing them with future vision, image, audio, or retrieval runtimes.</p>
+        <p>Manage the models available to your workspace.</p>
       </PageHeader>
       <nav className="model-role-switch" aria-label="Model roles">
         {roles.map((role) => (

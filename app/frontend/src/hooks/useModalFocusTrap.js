@@ -21,7 +21,9 @@ export function useModalFocusTrap({ active = true, onClose, canClose = true } = 
     if (!active || !containerRef.current) return undefined;
     const root = containerRef.current;
     const previous = document.activeElement;
-    const focusable = () => Array.from(root.querySelectorAll(FOCUSABLE));
+    const focusable = () => Array.from(root.querySelectorAll(FOCUSABLE)).filter(
+      (node) => node.getClientRects().length > 0 && !node.closest("[inert]"),
+    );
     window.requestAnimationFrame(() => focusable()[0]?.focus());
 
     function handleKeyDown(event) {

@@ -32,8 +32,9 @@ export function ResponseSettingsSheet({
   onReset,
   onClose,
   initialSection = "response",
+  embedded = false,
 }) {
-  const sheetRef = useModalFocusTrap({ onClose });
+  const sheetRef = useModalFocusTrap({ active: !embedded, onClose });
   const imageSectionRef = useRef(null);
   const availableModels = normaliseModels(models, selectedModelId, modelLabel);
   const status = modelStatusLabel || (modelReady ? "Ready" : "Needs setup");
@@ -89,7 +90,7 @@ export function ResponseSettingsSheet({
   }
 
   return (
-    <aside ref={sheetRef} className="response-settings-sheet" role="dialog" aria-modal="true" aria-labelledby="response-settings-title" tabIndex="-1">
+    <aside ref={sheetRef} className={`response-settings-sheet ${embedded ? "settings-embedded" : ""} response-section--${initialSection}`} role={embedded ? undefined : "dialog"} aria-modal={embedded ? undefined : "true"} aria-labelledby="response-settings-title" tabIndex="-1">
       <header className="response-settings-sheet__header">
         <div>
           <h2 id="response-settings-title">{title}</h2>
@@ -187,7 +188,7 @@ export function ResponseSettingsSheet({
             </label>
           </div>
 
-          <details className="response-settings-sheet__advanced">
+          <details className="response-settings-sheet__advanced" open={initialSection === "advanced" || undefined}>
             <summary>
               <span><strong>Advanced</strong><small>Sampling, seed, and instruction</small></span>
               <ChevronDown aria-hidden="true" />
@@ -223,6 +224,10 @@ export function ResponseSettingsSheet({
                   onChange={(event) => update({ system_prompt: event.currentTarget.value })}
                 />
                 <small>{String(settings.system_prompt || "").length.toLocaleString()} / 4,000</small>
+              </label>
+              <label className="response-settings-sheet__instruction">
+                <span>Stop sequences</span>
+                <textarea rows="2" aria-label="Stop sequences" placeholder="One sequence per line" value={(settings.stop_sequences || []).join("\n")} onChange={(event) => update({ stop_sequences: event.target.value.split("\n").slice(0, 8).map((line) => line.slice(0, 64)) })} />
               </label>
             </div>
           </details>

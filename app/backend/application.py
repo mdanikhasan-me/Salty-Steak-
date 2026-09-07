@@ -4929,11 +4929,11 @@ class Application:
             media_type=media_type,
         )
 
-    def list_conversations(self) -> list[dict[str, Any]]:
-        return self.chat.list_conversations()
+    def list_conversations(self, workspace_mode: str | None = None) -> list[dict[str, Any]]:
+        return self.chat.list_conversations(workspace_mode)
 
-    def create_conversation(self) -> dict[str, Any]:
-        return self.chat.create_conversation()
+    def create_conversation(self, workspace_mode: str | None = None) -> dict[str, Any]:
+        return self.chat.create_conversation(workspace_mode)
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         return self.chat.get_conversation(conversation_id)
@@ -4972,13 +4972,13 @@ class Application:
             conversation_id, bool(payload.get("pinned"))
         )
 
-    def list_conversation_labels(self) -> dict[str, Any]:
-        return {"labels": self.chat.list_labels()}
+    def list_conversation_labels(self, workspace_mode: str | None = None) -> dict[str, Any]:
+        return {"labels": self.chat.list_labels(workspace_mode)}
 
     def create_conversation_label(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return {
             "label": self.chat.create_label(
-                payload.get("name"), str(payload.get("tone") or "neutral")
+                payload.get("name"), str(payload.get("tone") or "neutral"), str(payload.get("workspace_mode") or "chat")
             )
         }
 

@@ -315,6 +315,7 @@ export function TrainPageR11({ onNavigate }) {
         </div>
       </PageHeader>
 
+      <Disclosure summary="Identity post-training" open={identityActive} className="identity-training-disclosure">
       <section className="r11-identity-card" aria-labelledby="r11-identity-title">
         <header className="r11-identity-card__header">
           <div className="r11-identity-card__title">
@@ -434,6 +435,8 @@ export function TrainPageR11({ onNavigate }) {
           </InlineNotice>
         ) : null}
       </section>
+
+      </Disclosure>
 
       {readyDatasets.length && eligibleVersions.length ? (
         <>
@@ -639,13 +642,13 @@ export function TrainPageR11({ onNavigate }) {
             icon={GraduationCap}
             title={
               !readyDatasets.length
-                ? "Prepare verified training data for general training"
-                : "A verified starting version is required for general training"
+                ? "Prepare your training data"
+                : "Choose a starting version"
             }
             description={
               !readyDatasets.length
-                ? "The learned identity and routing workflow above is independent. Add a prepared dataset only for a separate general training run."
-                : "The learned identity and routing workflow above remains available while general checkpoints are prepared."
+                ? "Import, validate and prepare a dataset to configure a training run."
+                : "A verified checkpoint is needed to continue training. Identity post-training is available separately."
             }
             action={
               <Button

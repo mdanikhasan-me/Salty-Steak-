@@ -49,29 +49,21 @@ export function validConversationTitle(value) {
 
 export function groupConversationsByRecency(conversations, now = new Date()) {
   const current = now instanceof Date ? now : new Date(now);
-  const today = new Date(
-    current.getFullYear(),
-    current.getMonth(),
-    current.getDate(),
-  ).getTime();
-  const groups = {
-    Today: [],
-    Yesterday: [],
-    Older: [],
-  };
+  const dayKey = (date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  const today = dayKey(current);
+  const groups = new Map();
   for (const conversation of conversations || []) {
-    const timestamp = new Date(
-      conversation?.updated_at || conversation?.created_at || 0,
-    ).getTime();
-    const age = today - timestamp;
-    const label = Number.isFinite(timestamp) && age < 24 * 60 * 60 * 1000
-      ? "Today"
-      : Number.isFinite(timestamp) && age < 48 * 60 * 60 * 1000
-        ? "Yesterday"
-        : "Older";
-    groups[label].push(conversation);
+    const stamp = conversation?.updated_at || conversation?.created_at;
+    const date = stamp ? new Date(stamp) : new Date(NaN);
+    const valid = Number.isFinite(date.getTime());
+    const day = valid ? dayKey(date) : -Infinity;
+    const age = today - day;
+    const label = !valid ? "Date unavailable" : age === 0 ? "Today" : age === 86400000 ? "Yesterday"
+      : date.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...(date.getFullYear() !== current.getFullYear() ? { year: "numeric" } : {}) });
+    if (!groups.has(day)) groups.set(day, { label, items: [] });
+    groups.get(day).items.push(conversation);
   }
-  return ["Today", "Yesterday", "Older"]
-    .filter((label) => groups[label].length)
-    .map((label) => ({ label, items: groups[label] }));
+  return [...groups.entries()].sort(([left],[right]) => right-left).map(([,group]) => ({
+    ...group, items: group.items.sort((left,right) => new Date(right.updated_at || right.created_at).getTime() - new Date(left.updated_at || left.created_at).getTime()),
+  }));
 }

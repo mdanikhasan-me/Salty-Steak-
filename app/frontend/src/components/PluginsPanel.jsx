@@ -13,12 +13,13 @@ import {
   normaliseConnector,
 } from "../workflows/pluginConnections.mjs";
 import { ComputerControlPermissions } from "./ComputerControlPermissions.jsx";
+import { GmailBrand, CalendarBrand, CloudBrand } from "./ConnectorBrand.jsx";
 import "../styles/plugins-panel.css";
 
 const CONNECTOR_ICONS = {
-  gmail: Mail,
-  google_calendar: CalendarDays,
-  icloud_calendar: Cloud,
+  gmail: GmailBrand,
+  google_calendar: CalendarBrand,
+  icloud_calendar: CloudBrand,
 };
 
 export function PluginsPanel({

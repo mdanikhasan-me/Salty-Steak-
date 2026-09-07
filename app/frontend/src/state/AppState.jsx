@@ -59,7 +59,8 @@ export function AppStateProvider({ children }) {
   }, [operations]);
 
   const addNotification = useCallback((notification) => {
-    dispatchNotification({ type: "add", notification });
+    if (!notification?.message) return;
+    dispatchNotification({ type: "add", notification: { ...notification, id: notification.id || api.makeRequestKey() } });
   }, []);
 
   const dismissNotification = useCallback((id) => {
@@ -74,12 +75,14 @@ export function AppStateProvider({ children }) {
     dispatchNotification({ type: "resume", id, now: Date.now() });
   }, []);
 
+  const hasTimedNotifications = notifications.some((notification) => !notification.persistent);
   useEffect(() => {
+    if (!hasTimedNotifications) return undefined;
     const timer = window.setInterval(() => {
       dispatchNotification({ type: "expire", now: Date.now() });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [hasTimedNotifications]);
 
   const reportError = useCallback(
     (error, id = `error:${Date.now()}`) => {
@@ -256,6 +259,7 @@ export function AppStateProvider({ children }) {
     [refreshDomain],
   );
 
+  const hasActiveOperations = Object.values(operations).some(isActive);
   useEffect(() => {
     let cancelled = false;
     let timer;
@@ -308,12 +312,12 @@ export function AppStateProvider({ children }) {
       if (!cancelled) timer = window.setTimeout(poll, pollDelayRef.current);
     }
 
-    timer = window.setTimeout(poll, 750);
+    timer = window.setTimeout(poll, hasActiveOperations ? 200 : 750);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [applyOperations, refreshAfterOperation]);
+  }, [applyOperations, refreshAfterOperation, hasActiveOperations]);
 
   const startOperation = useCallback(
     async ({ launch, type, targetId, requestKey: suppliedRequestKey }) => {

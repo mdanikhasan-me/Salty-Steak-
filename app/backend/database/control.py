@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 OPERATION_STATES = frozenset(
     {"queued", "running", "stop_requested", "completed", "interrupted", "failed"}
 )
@@ -883,6 +883,8 @@ class Database:
             self._migrate_training_policy(connection)
             self._migrate_chat_runtime_provenance(connection)
             self._migrate_conversation_organisation(connection)
+            from .conversation_workspaces import migrate_conversation_workspaces
+            migrate_conversation_workspaces(connection)
             self._migrate_files_capability(connection)
             now = utc_now()
             connection.execute(

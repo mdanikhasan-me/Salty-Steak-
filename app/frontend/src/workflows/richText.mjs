@@ -1,4 +1,4 @@
-const FENCE = /^```\s*([\w.+-]*)\s*$/;
+const FENCE = /^```[ \t]*([\w.+-]*)(?:[ \t]+(?:file|filename)=[^\r\n]+)?[ \t]*$/;
 const HEADING = /^(#{1,4})\s+(.+)$/;
 const UNORDERED = /^\s*[-*+]\s+(.+)$/;
 const ORDERED = /^\s*\d+[.)]\s+(.+)$/;

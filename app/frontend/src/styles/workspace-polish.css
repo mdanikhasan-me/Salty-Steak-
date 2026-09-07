@@ -1,0 +1,69 @@
+.workspace-heading { grid-column:2; min-width:0; }
+.workspace-opening { height:100%; display:flex; align-items:center; justify-content:center; gap:14px; font-size:12px; color:var(--muted); }
+.workspace-opening button { border:0; color:var(--accent); background:#ffffff06; padding:7px 10px; border-radius:6px; }
+.app-toolbar:not(.app-toolbar--sidebar-open) { grid-template-columns:0 minmax(0,1fr); }
+.app-toolbar:not(.app-toolbar--sidebar-open) .workspace-brand { position:absolute; left:18px; top:14px; width:30px; height:30px; padding:0; background:transparent; z-index:2; }
+.app-toolbar:not(.app-toolbar--sidebar-open) .workspace-heading { padding-left:66px; }
+.workspace-brand .app-menu-button { transition:background 140ms,color 140ms; }
+.workspace-brand .app-menu-button:hover { background:#ffffff07; color:var(--ink); }
+.workspace-brand .app-menu-button:focus:not(:focus-visible) { outline:0; }
+.workspace-brand .app-menu-button:focus-visible { outline-offset:1px; border-radius:6px; }
+.chat-page { --context-width:0px; }
+.chat-page[data-workspace-mode] { grid-template-columns:var(--chat-rail) minmax(0,1fr) var(--context-width); }
+.chat-page.chat-page--activity-open,.chat-page.chat-page--details-open { --context-width:340px; }
+.conversation-workspace { animation:workspace-arrive 150ms ease-out; }
+.conversation-workspace>.composer { width:min(680px,calc(100% - 48px)); }
+.message-scroll,.chat-sidebar__body { overscroll-behavior:contain; }
+.chat-section__heading { text-transform:none; letter-spacing:0; font-size:11px; margin-bottom:5px; }
+.chat-row__open { font-size:12px; }
+.chat-row__actions { background:var(--rail); }
+.chat-sidebar__footer { padding-top:12px; }
+.chat-page>.cooking-activity,.chat-page>.agent-activity,.chat-page>.response-details { margin:14px 18px 20px 0; }
+.activity-overview { padding:0 0 20px; }
+.activity-overview__status { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink-soft); }
+.activity-overview__status svg { width:15px; height:15px; color:var(--success); }
+.activity-overview__status[data-state="failed"] svg { color:var(--danger); }
+.activity-overview p { font-size:12px; line-height:1.7; margin:12px 0 0; color:var(--muted); }
+.activity-overview__actions { display:flex; gap:8px; margin-top:16px; }
+.activity-overview__actions button { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--ink-soft); background:#ffffff07; border:0; padding:7px 10px; border-radius:6px; }
+.activity-overview__actions svg { width:13px; height:13px; }
+.activity-history { margin:0; padding:0; list-style:none; display:grid; gap:18px; }
+.activity-history li { display:grid; grid-template-columns:16px minmax(0,1fr); gap:9px; font-size:12px; }
+.activity-history svg { width:14px; height:14px; color:var(--muted); margin-top:2px; }
+.activity-history strong { font-weight:450; color:var(--ink-soft); }
+.activity-history small { display:block; color:var(--muted-light); font-size:10px; margin-top:3px; }
+.activity-diagnostics { margin-top:24px; }
+.activity-diagnostics>summary { cursor:pointer; font-size:11px; color:var(--muted); padding:5px 0; }
+.activity-diagnostics>.cooking-activity__metrics { margin:16px 0; }
+.activity-diagnostics .cooking-activity__section-title { display:none; }
+.activity-diagnostics .cooking-activity__journal { margin-top:20px; }
+.activity-diagnostics .cooking-activity__journal p { color:var(--muted); font-size:10px; }
+.cooking-activity__body { padding:8px 18px 20px; }
+.activity-source { display:block; color:var(--ink-soft); font-size:11px; overflow-wrap:anywhere; margin:9px 0; }
+.agent-activity__header { min-height:60px; }
+.agent-activity__header .agent-activity__eyebrow { display:none; }
+.agent-activity__group-title strong { font-weight:500; font-size:12px; }
+.agent-activity__group-body>p { font-size:11px; line-height:1.7; }
+.agent-activity__group-marker { background:transparent; border:0; }
+.agent-activity__groups>li::after { display:none; }
+.plugin-row__icon svg { width:20px; height:20px; }
+.plugin-row__icon--terminal { color:#b5aae9; }
+.plugin-row__icon--files { color:#d5b878; }
+.plugin-row__icon--browser_control,.plugin-row__icon--screen_capture { color:#87bad3; }
+.plugin-row__icon--ui_automation,.plugin-row__icon--input_control { color:#b9a8d9; }
+.plugin-row__icon--discord_inspect { color:#9198ec; }
+.plugin-row__icon--application_launch,.plugin-row__icon--window_control { color:#88b89e; }
+.workspace-settings .plugins-settings-sheet__chrome strong { font-size:20px; font-weight:500; }
+.composer-tool--research-on { color:#b7b1df; background:#bab5ea10; }
+.composer-control--authority { margin-left:2px; }
+.background-generation-note { width:min(680px,calc(100% - 48px)); margin:0 auto 12px; font-size:11px; color:var(--muted); display:flex; align-items:center; justify-content:space-between; }
+.background-generation-note button { color:var(--accent); background:none; font-size:11px; }
+@keyframes workspace-arrive { from { opacity:.55; transform:translateY(3px); } to { opacity:1; transform:none; } }
+@media(max-width:1100px) {
+  .chat-page.chat-page--activity-open,.chat-page.chat-page--details-open { --context-width:0px; }
+  .chat-page>.cooking-activity,.chat-page>.agent-activity,.chat-page>.response-details { margin:0; width:min(340px,calc(100% - 24px)); }
+}
+@media(max-width:960px) {
+  .app-toolbar--sidebar-open .workspace-brand { background:var(--canvas); }
+}
+@media(prefers-reduced-motion:reduce) { .conversation-workspace { animation:none; } }

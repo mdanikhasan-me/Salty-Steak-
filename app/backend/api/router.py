@@ -351,11 +351,20 @@ class ApiRouter:
         ):
             self._read_json()
             return app.retry_vision_analysis(parts[2])
+        if parts == ("preferences", "ui") and method in ("GET", "POST"):
+            from ..chat.workspace_state import ui_preferences
+            return ui_preferences(app.database, self._read_json() if method == "POST" else None)
+        if len(parts) == 4 and parts[:2] == ("chat", "workspaces") and parts[3] == "state":
+            from ..chat.workspace_state import load_workspace_state, save_workspace_state
+            if method == "GET":
+                return load_workspace_state(app.database, parts[2])
+            if method == "POST":
+                return save_workspace_state(app.database, parts[2], self._read_json())
         if method == "GET" and parts == ("chat", "conversations"):
-            return app.list_conversations()
+            return app.list_conversations(query.get("workspace_mode", [None])[0])
         if method == "POST" and parts == ("chat", "conversations"):
-            self._read_json()
-            return app.create_conversation()
+            body = self._read_json()
+            return app.create_conversation(body.get("workspace_mode", "chat"))
         if (
             method == "GET"
             and len(parts) == 3
@@ -383,7 +392,7 @@ class ApiRouter:
 
 
         if method == "GET" and parts == ("chat", "labels"):
-            return app.list_conversation_labels()
+            return app.list_conversation_labels(query.get("workspace_mode", [None])[0])
         if method == "POST" and parts == ("chat", "labels"):
             return app.create_conversation_label(self._read_json())
         if method == "POST" and len(parts) == 3 and parts[:2] == ("chat", "labels"):

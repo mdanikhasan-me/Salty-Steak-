@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
+  Brain,
+  Layers,
+  SlidersHorizontal,
+  Plug,
+  Bell,
   Folder,
   FolderOpen,
   FolderInput,
@@ -35,9 +40,9 @@ import {
 
 const SECTION_STORAGE_KEY = "salty-steak:sidebar-sections";
 
-function storedSections() {
+function storedSections(mode) {
   try {
-    return JSON.parse(window.localStorage.getItem(SECTION_STORAGE_KEY) || "{}");
+    return JSON.parse(window.localStorage.getItem(`${SECTION_STORAGE_KEY}:${mode}`) || "{}");
   } catch {
     return {};
   }
@@ -59,6 +64,10 @@ export function ConversationSidebar({
   onRenameFolder,
   onDeleteFolder,
   onAfterSelect,
+  onSettings,
+  onTraining,
+  onNotifications,
+  mode = "chat",
 }) {
   const [query, setQuery] = useState("");
   const [browsing, setBrowsing] = useState(null);
@@ -70,10 +79,17 @@ export function ConversationSidebar({
   const [newFolderName, setNewFolderName] = useState("");
   const [renamingFolderId, setRenamingFolderId] = useState(null);
   const [folderDraft, setFolderDraft] = useState("");
-  const [collapsed, setCollapsed] = useState(storedSections);
+  const [collapsed, setCollapsed] = useState(() => storedSections(mode));
   const triggerRefs = useRef(new Map());
   const renameRef = useRef(null);
 
+  const [today, setToday] = useState(() => new Date());
+  useEffect(() => {
+    const now = new Date();
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const timer = window.setTimeout(() => setToday(new Date()), midnight-now+100);
+    return () => clearTimeout(timer);
+  }, [today]);
   const organised = useMemo(
     () =>
       organiseConversations({
@@ -81,14 +97,15 @@ export function ConversationSidebar({
         folders,
         query,
         openFolderId: browsing,
+        now: today,
       }),
-    [conversations, folders, query, browsing],
+    [conversations, folders, query, browsing, today],
   );
   const current = openFolder(organised);
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(SECTION_STORAGE_KEY, JSON.stringify(collapsed));
+      window.localStorage.setItem(`${SECTION_STORAGE_KEY}:${mode}`, JSON.stringify(collapsed));
     } catch {
 
     }
@@ -393,7 +410,7 @@ export function ConversationSidebar({
       className={`workspace-sidebar chat-sidebar ${
         open ? "workspace-sidebar--open" : "workspace-sidebar--closed"
       }`}
-      aria-label="Chats"
+      aria-label={`${mode[0].toUpperCase() + mode.slice(1)} conversations`}
       aria-hidden={!open}
       inert={!open ? "" : undefined}
     >
@@ -405,7 +422,7 @@ export function ConversationSidebar({
           onClick={onNewChat}
         >
           <Plus aria-hidden="true" />
-          <span>{creating ? "Creating" : "New chat"}</span>
+          <span>{creating ? "Creating" : mode === "code" ? "New coding task" : mode === "agent" ? "New task" : "New chat"}</span>
         </button>
         <label className="chat-sidebar__search">
           <Search aria-hidden="true" />
@@ -423,6 +440,7 @@ export function ConversationSidebar({
             }}
           />
         </label>
+        <button type="button" className="chat-sidebar__new" onClick={() => onSettings?.("memory")}><Brain aria-hidden="true" /><span>Memory</span></button>
       </div>
 
       {organised.filtered ? (
@@ -551,6 +569,14 @@ export function ConversationSidebar({
           </p>
         ) : null}
       </nav>
+      <footer className="chat-sidebar__footer">
+        <button type="button" className="training-destination" onClick={onTraining}><Layers aria-hidden="true" /><span>Models & training</span><ChevronRight aria-hidden="true" /></button>
+        <div className="sidebar-utilities">
+          <button type="button" aria-label="Settings" title="Settings" onClick={() => onSettings?.("general")}><SlidersHorizontal aria-hidden="true" /></button>
+          <button type="button" aria-label="Connections" title="Connections" onClick={() => onSettings?.("plugins")}><Plug aria-hidden="true" /></button>
+          <button type="button" aria-label="Notifications" title="Notifications" onClick={onNotifications}><Bell aria-hidden="true" /></button>
+        </div>
+      </footer>
     </aside>
   );
 }

@@ -4,6 +4,8 @@ import App from "./App.jsx";
 import { FRONTEND_BUILD_ID, verifyBuildIdentity } from "./api/client.js";
 import { AppStateProvider } from "./state/AppState.jsx";
 import "./styles/global.css";
+import "./styles/approved-workspace.css";
+import "./styles/workspace-polish.css";
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 

@@ -644,6 +644,10 @@ internal sealed class MainWindow : Form
     private CoreWebView2Environment? webViewEnvironment;
     private readonly Action interfaceReady;
     private bool saveInProgress;
+    private CompanionWindow? companion;
+    private CompanionPreferences companionPreferences = new();
+    private bool reducedMotion;
+    private readonly string companionPreferencesPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Salty Steak", "companion.json");
 
     public MainWindow(string projectRoot, string applicationUrl, Action interfaceReady)
     {
@@ -662,11 +666,11 @@ internal sealed class MainWindow : Form
 
         AutoScaleDimensions = new SizeF(96f, 96f);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(1360, 860);
+        ClientSize = new Size(1440, 810);
 
 
         MinimumSize = new Size(960, 640);
-        BackColor = Color.FromArgb(29, 29, 28);
+        BackColor = Color.FromArgb(25, 26, 27);
 
         var iconPath = Path.Combine(
             projectRoot,
@@ -689,6 +693,12 @@ internal sealed class MainWindow : Form
         StartupTimeline.Mark("webview_control_object_created");
         Controls.Add(browser);
         Shown += OpenApplication;
+        FormClosed += (_, _) => { companion?.Close(); companion = null; };
+        try {
+            if (File.Exists(companionPreferencesPath)) companionPreferences = (JsonSerializer.Deserialize<CompanionPreferences>(File.ReadAllText(companionPreferencesPath)) ?? new()).Checked();
+        } catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException) {
+            DesktopDiagnostics.Write(projectRoot, "companion_preferences_unavailable", error);
+        }
     }
 
     protected override void OnHandleCreated(EventArgs eventArgs)
@@ -767,6 +777,21 @@ internal sealed class MainWindow : Form
         }
     }
 
+    private void ApplyCompanionPreferences()
+    {
+        if (!companionPreferences.enabled) { companion?.Close(); companion = null; return; }
+        if (webViewEnvironment is null) return;
+        var effective = companionPreferences with { reducedMotion = reducedMotion || companionPreferences.reducedMotion };
+        if (companion is not null) { companion.ApplyPreferences(effective); return; }
+        var window = new CompanionWindow(webViewEnvironment, applicationUri, Handle, effective, error => {
+            DesktopDiagnostics.Write(projectRoot, "companion_start_failed", error);
+            browser.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "companion_error", message = "The desktop companion could not open. Re-enable it to retry." }));
+        });
+        companion = window;
+        window.Closed += (_, _) => { if (ReferenceEquals(companion, window)) companion = null; };
+        try { window.Show(); } catch { companion = null; window.Close(); throw; }
+    }
+
     private void ConfigureBrowser(CoreWebView2 core)
     {
         core.Settings.AreDevToolsEnabled = false;
@@ -825,11 +850,37 @@ internal sealed class MainWindow : Form
         {
             try
             {
+                if (!IsApplicationAddress(eventArgs.Source)) return;
                 using var message = JsonDocument.Parse(eventArgs.WebMessageAsJson);
                 var root = message.RootElement;
                 var messageType = root.TryGetProperty("type", out var type)
                     ? type.GetString()
                     : null;
+                if (messageType == "application_motion") {
+                    reducedMotion = root.TryGetProperty("reducedMotion", out var motion) && motion.ValueKind == JsonValueKind.True;
+                    ApplyCompanionPreferences();
+                    return;
+                }
+                if (messageType == "companion_get_settings") {
+                    core.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "companion_settings", settings = companionPreferences }));
+                    return;
+                }
+                if (messageType == "companion_settings" && root.TryGetProperty("settings", out var preferences)) {
+                    try {
+                        var next = (preferences.Deserialize<CompanionPreferences>() ?? new()).Checked();
+                        Directory.CreateDirectory(Path.GetDirectoryName(companionPreferencesPath)!);
+                        var temporary = companionPreferencesPath + ".tmp";
+                        File.WriteAllText(temporary, JsonSerializer.Serialize(next));
+                        File.Move(temporary, companionPreferencesPath, true);
+                        companionPreferences = next;
+                        ApplyCompanionPreferences();
+                        core.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "companion_settings", settings = companionPreferences }));
+                    } catch (Exception error) {
+                        DesktopDiagnostics.Write(projectRoot, "companion_update_failed", error);
+                        core.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "companion_error", message = "The desktop companion could not be updated. Your other settings are unchanged." }));
+                    }
+                    return;
+                }
                 if (
                     messageType == "open_browser"
                     && root.TryGetProperty("url", out var url)
@@ -862,6 +913,7 @@ internal sealed class MainWindow : Form
                 DesktopDiagnostics.Write(projectRoot, "invalid_native_web_message", error);
             }
         };
+        core.NavigationCompleted += (_, navigation) => { if (navigation.IsSuccess) ApplyCompanionPreferences(); };
         core.ProcessFailed += (_, _) =>
         {
             DesktopDiagnostics.Write(projectRoot, "webview_process_failed", null);

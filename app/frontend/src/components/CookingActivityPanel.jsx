@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Globe2, X } from "lucide-react";
+import { Check, CircleAlert, Square, ChevronRight, Globe2, X } from "lucide-react";
 import { splitAssistantContent } from "../workflows/chatContent.mjs";
 import {
   activityEntryTelemetry,
@@ -7,6 +7,8 @@ import {
   normaliseActivityJournal,
 } from "../workflows/activityJournal.mjs";
 import { formatDuration } from "../workflows/formatters.js";
+import { activitySummary } from "../workflows/responseActivitySummary.mjs";
+import { completionState } from "../workflows/responseProvenance.mjs";
 import { CookingGlyph, CookingStatus } from "./CookingStatus.jsx";
 
 export function CookingActivityPanel({
@@ -15,6 +17,8 @@ export function CookingActivityPanel({
   mode = "instant",
   operation = null,
   onClose,
+  onStop,
+  stopBusy = false,
 }) {
   const preview = active
     ? (operation?.result?.generation_preview || operation?.progress?.generation_preview || null)
@@ -62,67 +66,21 @@ export function CookingActivityPanel({
     ? title
     : `${title} activity`;
 
+  const completion = completionState(details);
+  const summary = activitySummary(journal, { active, stopped: ["stopped","interrupted","cancelled"].includes(operation?.state) || completion === "stopped" || cookingIncomplete, failed: operation?.state === "failed" || completion === "failed" });
   return (
     <aside id="cooking-activity-panel" className="cooking-activity" aria-label={panelLabel}>
-      <header className="cooking-activity__header">
-        <div>
-          <strong>{title}</strong>
-          <span>
-            {active
-              ? stage
-              : cookingIncomplete
-                ? "The final answer was not reached before generation stopped."
-                : durationSeconds === null
-                ? "Response activity"
-                : `Completed in ${formatDuration(durationSeconds)}`}
-          </span>
-        </div>
-        <button type="button" aria-label="Close cooking activity" onClick={onClose}>
-          <X aria-hidden="true" />
-        </button>
-      </header>
+      <header className="cooking-activity__header"><div><strong>Activity</strong><span>{summary.state === "running" ? "In progress" : summary.state === "failed" ? "Needs attention" : summary.state === "stopped" ? "Stopped" : durationSeconds === null ? "This response" : `Finished in ${formatDuration(durationSeconds)}`}</span></div><button type="button" aria-label="Close cooking activity" onClick={onClose}><X aria-hidden="true" /></button></header>
       <div className="cooking-activity__body">
-        {active ? (
-          <div className="cooking-activity__live">
-            <CookingStatus label={stage} busy />
-            <ActivityMetrics items={activity} />
-            <ActivityJournal entries={journal} active />
-            {
-                                                                   }
-            {answerDraft ? (
-              <section className="cooking-activity__trace">
-                <div className="cooking-activity__section-title">
-                  <CookingGlyph />
-                  <span>Answer draft</span>
-                </div>
-                <p className="cooking-activity__content cooking-activity__draft">{answerDraft}</p>
-              </section>
-            ) : null}
-            {reasoning ? <RawTrace text={reasoning} active /> : null}
-            {!journal.length && !preview ? <p>Waiting for model output.</p> : null}
-          </div>
-        ) : reasoning || sources.length || activity.length || journal.length ? (
-          <>
-            <ActivityMetrics items={activity} />
-            <ActivityJournal entries={journal} />
-            {sources.length ? (
-              <section className="cooking-activity__research">
-                <div className="cooking-activity__section-title">
-                  <Globe2 aria-hidden="true" />
-                  <span>Searched {sources.length} source{sources.length === 1 ? "" : "s"}</span>
-                </div>
-                <ol>
-                  {sources.map((source) => (
-                    <li key={source}><a href={source} target="_blank" rel="noreferrer">{source}</a></li>
-                  ))}
-                </ol>
-              </section>
-            ) : null}
-            {reasoning ? <RawTrace text={reasoning} /> : null}
-          </>
-        ) : (
-          <p className="cooking-activity__empty">No model-produced reasoning was saved for this response.</p>
-        )}
+        <section className="activity-overview">
+          <div className="activity-overview__status" data-state={summary.state}>{summary.state === "failed" ? <CircleAlert aria-hidden="true" /> : summary.state === "running" ? <CookingGlyph /> : summary.state === "stopped" ? <Square aria-hidden="true" /> : <Check aria-hidden="true" />}<span>{active ? stage : summary.label}</span></div>
+          {summary.failure ? <p role="alert">{summary.failure}</p> : null}
+          {cookingIncomplete ? <p>The response stopped before a final answer was ready.</p> : null}
+          {active && onStop ? <div className="activity-overview__actions"><button type="button" onClick={onStop} disabled={stopBusy}><Square aria-hidden="true" />{stopBusy ? "Stopping\u2026" : "Stop response"}</button></div> : null}
+        </section>
+        {summary.steps.length ? <ol className="activity-history" aria-label="Progress summary">{summary.steps.map((entry) => <li key={entry.id}>{entry.state === "failed" ? <CircleAlert /> : entry.state === "completed" ? <Check /> : <ChevronRight />}<div><strong>{entry.label}</strong><small>{entry.state === "completed" ? "Complete" : entry.state === "failed" ? "Failed" : entry.state === "running" ? "In progress" : entry.state === "skipped" ? "Not needed" : "Planned"}</small></div></li>)}</ol> : null}
+        {sources.length ? <section className="cooking-activity__research"><h3 className="cooking-activity__section-title"><Globe2 />Sources</h3>{sources.map((source,index) => { const url = typeof source === "string" ? source : source.url; return url && /^https?:\/\//i.test(url) ? <a className="activity-source" key={url+index} href={url} target="_blank" rel="noreferrer">{source.title || new URL(url).hostname}</a> : null; })}</section> : null}
+        <details className="activity-diagnostics"><summary>Technical details &middot; {journal.length} events</summary><ActivityMetrics items={activity} /><ActivityJournal entries={journal} active={false} />{reasoning ? <RawTrace text={reasoning} /> : null}</details>
       </div>
     </aside>
   );

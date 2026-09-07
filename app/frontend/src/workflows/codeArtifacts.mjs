@@ -32,6 +32,16 @@ const LANGUAGE_EXTENSIONS = Object.freeze({
 const CODE_FENCE = /```([^\n`]*)\r?\n([\s\S]*?)```/g;
 const FILE_TOKEN = /(?:^|\s)(?:file|filename)=['"]?([^\s'"]+)['"]?/i;
 
+export function normaliseNamedCodeFences(value) {
+  return String(value || "").replace(CODE_FENCE, (fence, header, body) => {
+    if (FILE_TOKEN.test(header)) return fence;
+    // Some local models put their explicit file marker below the fence label.
+    const marker = body.match(/^\s*(?:file|filename)=([^\s'"=]+\.[a-z0-9]+)\r?\n/i);
+    if (!marker) return fence;
+    return `\`\`\`${header.trim()} file=${marker[1]}\n${body.slice(marker[0].length)}\`\`\``;
+  });
+}
+
 function safeFilename(value, fallback) {
   const leaf = String(value || "").split(/[\\/]/).at(-1) || fallback;
   const cleaned = leaf
@@ -43,7 +53,7 @@ function safeFilename(value, fallback) {
 
 
 export function codeArtifactsFromText(value) {
-  const text = String(value || "");
+  const text = normaliseNamedCodeFences(value);
   const artifacts = [];
   for (const match of text.matchAll(CODE_FENCE)) {
     const header = String(match[1] || "").trim();

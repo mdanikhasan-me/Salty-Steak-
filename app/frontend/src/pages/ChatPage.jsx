@@ -47,6 +47,8 @@ import { MemoryPanel } from "../components/MemoryPanel.jsx";
 import { ResponseSettingsSheet } from "../components/ResponseSettingsSheet.jsx";
 import { useModalFocusTrap } from "../hooks/useModalFocusTrap.js";
 import { useShell } from "../components/AppShell.jsx";
+import { WorkspaceSettings, GeneralSettings, CompanionSettings } from "../components/WorkspaceSettings.jsx";
+import { workspaceModeDetails } from "../workflows/workspaceModes.mjs";
 import { AboutPage } from "./AboutPage.jsx";
 import { Dialog } from "../components/Dialog.jsx";
 import { Field, FormActions } from "../components/Forms.jsx";
@@ -145,9 +147,9 @@ const DEFAULT_GENERATION_SETTINGS = {
   image_steps: 8,
 };
 
-function initialGenerationSettings() {
+function initialGenerationSettings(storageKey = GENERATION_SETTINGS_KEY) {
   try {
-    const stored = window.localStorage.getItem(GENERATION_SETTINGS_KEY);
+    const stored = window.localStorage.getItem(storageKey);
     const parsed = JSON.parse(stored || "{}");
 
 
@@ -234,9 +236,50 @@ export function connectedAppIcon(app) {
   return matched ? matched[1] : Plug;
 }
 
-export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
+const workspaceSessions = new Map();
+function sessionFor(mode) {
+  if (!workspaceSessions.has(mode)) workspaceSessions.set(mode, { drafts: new Map(), instructions: new Map(), settings: null });
+  return workspaceSessions.get(mode);
+}
+const pendingWorkspaceSaves = new Map();
+function persistWorkspace(mode, session) {
+  const snapshot = {
+    selectedId: session.selectedId || null, settings: session.settings,
+    drafts: [...session.drafts].slice(-32).map(([id, value]) => [id, { draft: value.draft, settings: value.settings }]),
+    instructions: [...session.instructions].slice(-64),
+  };
+  const previous = pendingWorkspaceSaves.get(mode) || Promise.resolve();
+  const next = previous.catch(() => {}).then(() => api.saveWorkspaceState(mode, snapshot));
+  pendingWorkspaceSaves.set(mode, next);
+  return next;
+}
+export function ChatPage(props) {
+  const { workspaceMode } = useShell();
+  const [loaded, setLoaded] = useState(null);
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    setLoadError("");
+    const session = sessionFor(workspaceMode);
+    if (session.loaded) { setLoaded(workspaceMode); return; }
+    api.getWorkspaceState(workspaceMode).then((saved) => {
+      if (cancelled) return;
+      Object.assign(session, { ...saved, drafts: new Map(saved.drafts || []), instructions: new Map(saved.instructions || []), loaded: true });
+      setLoaded(workspaceMode);
+    }).catch(() => { if (!cancelled) setLoadError("This workspace could not be opened. Try again."); });
+    return () => { cancelled = true; };
+  }, [workspaceMode]);
+  if (loaded !== workspaceMode) return <div className="workspace-opening" role="status">{loadError || "Opening workspace…"}{loadError ? <button type="button" onClick={() => window.location.reload()}>Try again</button> : null}</div>;
+  return <ChatWorkspace key={workspaceMode} {...props} workspaceMode={workspaceMode} />;
+}
+
+function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceMode }) {
+  const session = sessionFor(workspaceMode);
+  const selectionKey = `${SELECTED_CONVERSATION_KEY}:${workspaceMode}`;
+  const settingsKey = `${GENERATION_SETTINGS_KEY}:${workspaceMode}`;
+  const freshDraft = session.drafts.get(session.selectedId || "new") || {};
   const {
-    conversations,
+    conversations: allConversations,
     chatStatus,
     operations,
     versions,
@@ -245,16 +288,18 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     addNotification: notify,
     setResources,
     startOperation,
+    applyOperations,
   } = useAppState();
+  const conversations = useMemo(() => allConversations.filter((item) => (item.workspace_mode || "chat") === workspaceMode), [allConversations, workspaceMode]);
   const [selectedId, setSelectedId] = useState(() => {
     try {
-      return window.sessionStorage.getItem(SELECTED_CONVERSATION_KEY);
+      return session.selectedId ?? window.sessionStorage.getItem(selectionKey);
     } catch {
       return null;
     }
   });
   const [conversation, setConversation] = useState(null);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(freshDraft.draft || "");
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [sending, setSending] = useState(false);
   const [activeGeneration, setActiveGeneration] = useState(null);
@@ -274,7 +319,8 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const [actionsFor, setActionsFor] = useState(null);
   const initialGenerationSettingsRef = useRef(null);
   if (!initialGenerationSettingsRef.current) {
-    initialGenerationSettingsRef.current = initialGenerationSettings();
+    initialGenerationSettingsRef.current = initialGenerationSettings(settingsKey);
+    if (session.settings) initialGenerationSettingsRef.current.settings = session.settings;
   }
   const [generationSettings, setGenerationSettingsState] = useState(
     initialGenerationSettingsRef.current.settings,
@@ -285,7 +331,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
 
 
 
-  const conversationInstructionDraftsRef = useRef(new Map());
+  const conversationInstructionDraftsRef = useRef(session.instructions);
   const setGenerationSettings = useCallback((next) => {
     generationDefaultsAppliedRef.current = true;
     setGenerationSettingsState((current) => {
@@ -306,7 +352,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   }, []);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [settingsView, setSettingsView] = useState("response");
-  const [attachments, setAttachments] = useState([]);
+  const [attachments, setAttachments] = useState(freshDraft.attachments || []);
   const [pluginState, setPluginState] = useState(null);
   const [pluginLoadError, setPluginLoadError] = useState("");
   const [pluginBusyId, setPluginBusyId] = useState("");
@@ -325,7 +371,11 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   const locallyCreatedConversationIdsRef = useRef(new Set());
   const generationTaskRef = useRef(0);
   const activeGenerationRef = useRef(null);
-  const [agentMode, setAgentMode] = useState(false);
+  const { settingsRequest, openNotifications, setWorkspaceMode } = useShell();
+  const agentMode = workspaceMode === "agent";
+  const modeDetails = workspaceModeDetails(workspaceMode);
+  const workspaceModeRef = useRef(workspaceMode);
+  workspaceModeRef.current = workspaceMode;
 
 
   const [researchMode, setResearchMode] = useState(false);
@@ -378,13 +428,35 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     window.requestAnimationFrame(() => textareaRef.current?.focus());
   }, []);
 
-  const selectConversation = useCallback((conversationId) => (
-    synchronizeConversationSelection(
-      selectedIdRef,
-      setSelectedId,
-      conversationId,
-    )
-  ), []);
+  const draftSnapshot = useRef(null);
+  draftSnapshot.current = { draft, attachments, settings: generationSettings, selectedId };
+  useEffect(() => () => {
+    const latest = draftSnapshot.current;
+    session.drafts.set(latest.selectedId || "new", latest);
+    session.selectedId = latest.selectedId;
+    session.settings = latest.settings;
+    void persistWorkspace(workspaceMode, session).catch(() => {});
+    generationTaskRef.current += 1;
+  }, [session]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const latest = draftSnapshot.current;
+      session.drafts.set(latest.selectedId || "new", latest);
+      session.selectedId = latest.selectedId; session.settings = latest.settings;
+      void persistWorkspace(workspaceMode, session).catch(() => notify({ id: "workspace-save", message: "Workspace changes could not be saved. Keep the app open and try again.", kind: "error" }));
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [draft, generationSettings, selectedId, session, workspaceMode, notify]);
+  const selectConversation = useCallback((conversationId) => {
+    if (String(conversationId) === String(selectedIdRef.current)) return;
+    session.drafts.set(selectedIdRef.current || "new", draftSnapshot.current);
+    const next = session.drafts.get(conversationId || "new") || {};
+    setDraft(next.draft || ""); setAttachments(next.attachments || []);
+    setCookingActivityMessageId(null); setResponseDetails(null); setComposerMenu(null);
+    if (next.settings) setGenerationSettingsState(next.settings);
+    session.selectedId = conversationId;
+    return synchronizeConversationSelection(selectedIdRef, setSelectedId, conversationId);
+  }, [session]);
 
   const openConversation = useCallback(async (conversationId) => {
     const wanted = String(conversationId || "");
@@ -397,6 +469,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       const payload = await api.getConversation(wanted);
       if (String(selectedIdRef.current) !== wanted) return;
       const fetched = payload?.conversation || payload;
+      if ((fetched.workspace_mode || "chat") !== workspaceMode) { selectConversation(null); setConversation(null); return; }
       const localDraft = conversationInstructionDraftsRef.current.get(wanted);
       setGenerationSettingsState((current) => ({
         ...current,
@@ -425,10 +498,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   }, [conversations, notify, reportError, selectConversation]);
 
   function closeCompactSidebar() {
-    const compactWindow = window.matchMedia("(max-width: 1000px)").matches;
-    const sharedMediumWorkspace = activityWorkspaceOpen
-      && window.matchMedia("(max-width: 1440px)").matches;
-    if (compactWindow || sharedMediumWorkspace) closeSidebar();
+    if (window.matchMedia("(max-width: 960px)").matches) closeSidebar();
   }
 
   const readiness = getReadiness(chatStatus);
@@ -457,7 +527,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   useEffect(() => {
     let cancelled = false;
     api
-      .listConversationLabels()
+      .listConversationLabels(workspaceMode)
       .then((payload) => {
         if (!cancelled) setLabels(asList(payload, ["labels"]));
       })
@@ -484,9 +554,10 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       cookingActivityMessageId === "active" &&
       (!sending || generationTerminal(activeGeneration))
     ) {
-      setCookingActivityMessageId(null);
+      const finished = conversation?.messages?.findLast((message) => message.role === "assistant" && !message.pending);
+      setCookingActivityMessageId(finished?.id || null);
     }
-  }, [activeGeneration, cookingActivityMessageId, sending]);
+  }, [activeGeneration, cookingActivityMessageId, sending, conversation?.messages]);
 
   useEffect(() => {
 
@@ -507,7 +578,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     }
     const persisted = current?.id ? operations?.[current.id] : null;
     if (persisted && generationTerminal(persisted)) {
-      if (isImageGenerationOperation(persisted)) {
+      if (persisted) {
         const owner = persisted?.result?.conversation_id
           ?? persisted?.details?.conversation_id
           ?? persisted?.target_id;
@@ -589,7 +660,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       const persistentSettings = { ...generationSettings };
       delete persistentSettings.system_prompt;
       window.localStorage.setItem(
-        GENERATION_SETTINGS_KEY,
+        settingsKey,
         JSON.stringify(persistentSettings),
       );
     } catch {
@@ -624,7 +695,8 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   }, [refreshPlugins]);
 
   useEffect(() => {
-    if (!selectedId && conversations.length) {
+    if (selectedId && allConversations.some((item) => String(item.id) === String(selectedId) && (item.workspace_mode || "chat") !== workspaceMode)) { selectConversation(null); setConversation(null); return; }
+    if (!selectedId && conversations.length && session.selectedId !== null) {
       selectConversation(conversations[0].id);
       return;
     }
@@ -639,9 +711,9 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   useEffect(() => {
     try {
       if (selectedId) {
-        window.sessionStorage.setItem(SELECTED_CONVERSATION_KEY, selectedId);
+        window.sessionStorage.setItem(selectionKey, selectedId);
       } else {
-        window.sessionStorage.removeItem(SELECTED_CONVERSATION_KEY);
+        window.sessionStorage.removeItem(selectionKey);
       }
     } catch {
 
@@ -660,6 +732,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
       .then((payload) => {
         if (!cancelled) {
           const fetched = payload?.conversation || payload;
+          if ((fetched.workspace_mode || "chat") !== workspaceMode) { selectConversation(null); setConversation(null); return; }
           const localDraft = conversationInstructionDraftsRef.current.get(
             String(selectedId),
           );
@@ -695,7 +768,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     return () => {
       cancelled = true;
     };
-  }, [conversations, notify, reportError, selectConversation, selectedId]);
+  }, [notify, reportError, selectConversation, selectedId, workspaceMode]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -912,7 +985,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
         let operation = await serialGenerationTransitionRef.current(async () => {
           conversationId = conversationId || selectedIdRef.current;
           if (!conversationId) {
-            const createdPayload = await api.createConversation();
+            const createdPayload = await api.createConversation(workspaceMode);
             const created = createdPayload?.conversation || createdPayload;
             conversationId = created.id;
             locallyCreatedConversationIdsRef.current.add(String(created.id));
@@ -949,6 +1022,8 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
             DEFAULT_GENERATION_SETTINGS,
             {
               agentMode: agentModeRef.current,
+              codeMode: workspaceModeRef.current === "code",
+              workspaceMode: workspaceModeRef.current,
               researchMode: researchModeRef.current,
               researchCommand: commandModes.research_mode,
               imageCommand: commandModes.image_mode,
@@ -964,12 +1039,13 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               .filter(Boolean),
           );
           activeGenerationRef.current = submitted;
+          applyOperations([submitted], { announceTransitions: false });
           return submitted;
         });
         if (ownsGenerationTask(generationTaskRef.current, taskId)) {
           setActiveGeneration(operation);
         }
-        while (!generationTerminal(operation)) {
+        while (!generationTerminal(operation) && ownsGenerationTask(generationTaskRef.current, taskId)) {
           await waitFor(GENERATION_PREVIEW_POLL_MS);
           operation = await api.getOperation(operation.id);
           if (ownsGenerationTask(generationTaskRef.current, taskId)) {
@@ -978,6 +1054,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           }
         }
         if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
+        applyOperations([operation]);
         const refreshed = await api.getConversation(conversationId);
         if (String(selectedIdRef.current) === String(conversationId)) {
           setConversation(refreshed?.conversation || refreshed);
@@ -1040,7 +1117,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
         let operation = await serialGenerationTransitionRef.current(async () => {
           conversationId = conversationId || selectedIdRef.current;
           if (!conversationId) {
-            const createdPayload = await api.createConversation();
+            const createdPayload = await api.createConversation(workspaceMode);
             const created = createdPayload?.conversation || createdPayload;
             conversationId = created.id;
             locallyCreatedConversationIdsRef.current.add(String(created.id));
@@ -1058,6 +1135,8 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
             DEFAULT_GENERATION_SETTINGS,
             {
               agentMode: agentModeRef.current,
+              codeMode: workspaceModeRef.current === "code",
+              workspaceMode: workspaceModeRef.current,
               researchMode: researchModeRef.current,
               researchCommand: commandModes.research_mode,
               imageCommand: commandModes.image_mode,
@@ -1073,10 +1152,11 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
             fileAttachments.map((item) => item.inspection).filter(Boolean),
           );
           activeGenerationRef.current = submitted;
+          applyOperations([submitted], { announceTransitions: false });
           return submitted;
         });
         if (ownsGenerationTask(generationTaskRef.current, taskId)) setActiveGeneration(operation);
-        while (!generationTerminal(operation)) {
+        while (!generationTerminal(operation) && ownsGenerationTask(generationTaskRef.current, taskId)) {
           await waitFor(GENERATION_PREVIEW_POLL_MS);
           operation = await api.getOperation(operation.id);
           if (ownsGenerationTask(generationTaskRef.current, taskId)) {
@@ -1085,6 +1165,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           }
         }
         if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
+        applyOperations([operation]);
         const refreshed = await api.getConversation(conversationId);
         if (String(selectedIdRef.current) === String(conversationId)) {
           setConversation(refreshed?.conversation || refreshed);
@@ -1117,25 +1198,15 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     [refreshDomain, selectConversation, setResources, generationSettings],
   );
 
-  async function newChat() {
+  function newChat() {
     closeCompactSidebar();
-    setCreating(true);
-    try {
-      const payload = await api.createConversation();
-      const created = payload?.conversation || payload;
-      locallyCreatedConversationIdsRef.current.add(String(created.id));
-      setResources((previous) => ({
-        ...previous,
-        conversations: [created, ...previous.conversations.filter((item) => item.id !== created.id)],
-      }));
-      selectConversation(created.id);
-      setConversation({ ...created, messages: created.messages || [] });
-      setDraft("");
-    } catch (error) {
-      if (error) notify({ message: errorMessage(error), kind: "error" });
-    } finally {
-      setCreating(false);
-    }
+    selectConversation(null);
+    session.selectedId = null;
+    setConversation(null);
+    setDraft(""); setAttachments([]);
+    setGenerationSettingsState((current) => ({ ...current, system_prompt: "" }));
+    setInspectorOpen(false);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
   function submit(event) {
@@ -1536,7 +1607,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     try {
       const [conversationPayload, labelPayload] = await Promise.all([
         api.listConversations(),
-        api.listConversationLabels(),
+        api.listConversationLabels(workspaceMode),
       ]);
       setResources((previous) => ({
         ...previous,
@@ -1578,7 +1649,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
 
   async function createFolderForConversation(name, item) {
     try {
-      const created = await api.createConversationLabel(name, "neutral");
+      const created = await api.createConversationLabel(name, "neutral", workspaceMode);
       const folder = created?.label || created;
       if (item && folder?.id) {
         await moveConversationToFolder(item, folder.id);
@@ -1664,6 +1735,8 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
         api.deleteConversation(deletedId),
       );
       locallyCreatedConversationIdsRef.current.delete(String(deletedId));
+      session.drafts.delete(String(deletedId));
+      session.instructions.delete(String(deletedId));
       if (String(activeGenerationRef.current?.target_id) === String(deletedId)) {
         generationTaskRef.current += 1;
         activeGenerationRef.current = null;
@@ -1863,6 +1936,9 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
     setSettingsView(view);
     setInspectorOpen(true);
   };
+  useEffect(() => {
+    if (settingsRequest) openSettings(settingsRequest.section);
+  }, [settingsRequest]);
   const reviewHostAction = (proposal) => {
     if (!proposal) return;
     if (proposal.kind === "image.generate") {
@@ -1983,7 +2059,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
   }, [closeCookingActivity, cookingActivityOpen]);
 
   return (
-    <div className={`chat-page ${sidebarOpen ? "chat-page--sidebar-open" : ""} ${
+    <div data-workspace-mode={workspaceMode} className={`chat-page ${sidebarOpen ? "chat-page--sidebar-open" : ""} ${
       activityWorkspaceOpen ? "chat-page--activity-open" : ""
     } ${responseDetailsFor ? "chat-page--details-open" : ""}`}>
       {sidebarOpen ? (
@@ -2014,12 +2090,17 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
         onCreateFolder={createFolderForConversation}
         onRenameFolder={renameFolder}
         onDeleteFolder={removeFolder}
+        mode={workspaceMode}
+        onSettings={openSettings}
+        onTraining={() => onNavigate("training-center")}
+        onNotifications={openNotifications}
       />
 
       {showAbout ? (
         <AboutPage onBack={onCloseAbout} />
       ) : (
       <section className={`conversation-workspace ${emptyConversation ? "conversation-workspace--empty" : ""}`}>
+
         {recoveredCandidate ? (
           <div className="model-caution-strip model-caution-strip--floating" role="note">
             <ShieldAlert aria-hidden="true" />
@@ -2041,10 +2122,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
             </div>
           ) : !messages.length && !selectedConversationGenerating ? (
             <div className="chat-welcome">
-              <img src="/assets/salty-potato-symbol.svg" alt="" width="38" height="38" />
-              <h1>Start a conversation</h1>
-              <p>Your messages and model stay on this device.</p>
-              <span className="chat-welcome__eyebrow">Private · Local · Your computer</span>
+              <h1>{modeDetails.heading}</h1>
               {readiness.key === "no_version" ? (
                 <button type="button" onClick={() => onNavigate("versions")}>Choose a local model</button>
               ) : null}
@@ -2137,6 +2215,14 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
           </button>
         ) : null}
 
+        {globalActiveGeneration && !ownsConversationGeneration(globalActiveGeneration, selectedId) ? <div className="background-generation-note"><span>A response is running in another conversation.</span><button type="button" onClick={() => {
+          const owner = globalActiveGeneration.result?.conversation_id || globalActiveGeneration.progress?.conversation_id || globalActiveGeneration.target_id;
+          const item = allConversations.find((row) => String(row.id) === String(owner));
+          if (!item) return;
+          const mode = item.workspace_mode || "chat";
+          if (mode === workspaceMode) selectConversation(item.id);
+          else { sessionFor(mode).selectedId = item.id; setWorkspaceMode(mode); }
+        }}>Go to conversation</button></div> : null}
         <form className="composer" onSubmit={submit}>
           <div className="composer__surface">
             <label>
@@ -2145,7 +2231,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               ref={textareaRef}
               rows="1"
               value={draft}
-              placeholder="Message Salty Steak"
+              placeholder={modeDetails.placeholder}
               onChange={(event) => {
                 setDraft(event.target.value);
                 setSlashCommandsDismissed(false);
@@ -2263,25 +2349,6 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                       />
                     </ComposerPopover>
                   ) : null}
-                </div>
-                <div className="composer-control composer-control--agent">
-                  <button
-                    type="button"
-                    className={`composer-tool composer-tool--agent ${
-                      agentMode ? "composer-tool--agent-on" : ""
-                    }`}
-                    aria-pressed={agentMode}
-                    aria-label="Computer-use agent mode"
-                    title={
-                      agentMode
-                        ? "Agent mode is on: Salty Steak will use the computer to complete your request"
-                        : "Agent mode is off: Salty Steak will answer without using the computer"
-                    }
-                    onClick={() => setAgentMode((current) => !current)}
-                  >
-                    <MousePointerClick aria-hidden="true" />
-                    <span>Agent</span>
-                  </button>
                 </div>
                 <div className="composer-control composer-control--research">
                   <button
@@ -2595,6 +2662,8 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                 : activeReasoningMode}
               operation={activeGeneration}
               onClose={closeCookingActivity}
+              onStop={stopGeneration}
+              stopBusy={generationActionBusy}
             />
           )}
         </>
@@ -2626,8 +2695,12 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
             if (event.target === event.currentTarget) setInspectorOpen(false);
           }}
         >
-          {settingsView === "plugins" ? (
-            <PluginsSettingsSheet active={!pluginSetup} onClose={() => setInspectorOpen(false)}>
+          <WorkspaceSettings section={settingsView} onSectionChange={setSettingsView} onClose={() => setInspectorOpen(false)} active={!pluginSetup}>
+          {settingsView === "general" ? <GeneralSettings onSectionChange={setSettingsView} onNavigate={(destination) => { setInspectorOpen(false); onNavigate(destination); }} />
+          : settingsView === "companion" ? <CompanionSettings />
+          : settingsView === "about" ? <AboutPage onBack={() => setSettingsView("general")} />
+          : settingsView === "plugins" ? (
+            <PluginsSettingsSheet embedded active={false} title="Connections" onClose={() => setInspectorOpen(false)}>
               <PluginsPanel
                 automaticWebSearch={{
                   available: webSearchPlugin?.availability === "available",
@@ -2655,7 +2728,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                     setSending(true);
                     let conversationId = selectedIdRef.current;
                     if (!conversationId) {
-                      const createdPayload = await api.createConversation();
+                      const createdPayload = await api.createConversation(workspaceMode);
                       const created = createdPayload?.conversation || createdPayload;
                       conversationId = created.id;
                       locallyCreatedConversationIdsRef.current.add(String(created.id));
@@ -2680,7 +2753,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
                     );
                     activeGenerationRef.current = operation;
                     setActiveGeneration(operation);
-                    while (!generationTerminal(operation)) {
+                    while (!generationTerminal(operation) && ownsGenerationTask(generationTaskRef.current, taskId)) {
                       await waitFor(GENERATION_PREVIEW_POLL_MS);
                       operation = await api.getOperation(operation.id);
                       activeGenerationRef.current = operation;
@@ -2730,7 +2803,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               />
             </PluginsSettingsSheet>
           ) : settingsView === "memory" ? (
-            <PluginsSettingsSheet
+            <PluginsSettingsSheet embedded active={false}
               title="Memory"
               subtitle="Only context you explicitly saved"
               closeLabel="Close memory"
@@ -2739,7 +2812,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               <MemoryPanel />
             </PluginsSettingsSheet>
           ) : (
-            <ResponseSettingsSheet
+            <ResponseSettingsSheet embedded key={settingsView}
               title={
                 settingsView === "image"
                   ? "Image generation"
@@ -2769,6 +2842,7 @@ export function ChatPage({ onNavigate, showAbout = false, onCloseAbout }) {
               initialSection={settingsView}
             />
           )}
+          </WorkspaceSettings>
         </div>
       ) : null}
 
@@ -2984,10 +3058,11 @@ function PluginsSettingsSheet({
   title = "Plugins",
   subtitle = "Connections and permissions",
   closeLabel = "Close plugins",
+  embedded = false,
 }) {
   const sheetRef = useModalFocusTrap({ active, onClose });
   return (
-    <aside ref={sheetRef} className="plugins-settings-sheet" role="dialog" aria-modal="true" aria-labelledby="plugins-settings-title" tabIndex="-1">
+    <aside ref={sheetRef} className={`plugins-settings-sheet ${embedded ? "settings-embedded" : ""}`} role={embedded ? undefined : "dialog"} aria-modal={embedded ? undefined : "true"} aria-labelledby="plugins-settings-title" tabIndex="-1">
       <header className="plugins-settings-sheet__chrome">
         <div>
           <strong id="plugins-settings-title">{title}</strong>

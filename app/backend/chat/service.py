@@ -1694,6 +1694,7 @@ class ChatService:
 
 
             "agent_mode": bool(supplied.get("agent_mode", False)),
+            "code_mode": supplied.get("code_mode") is True,
 
 
 
@@ -1714,17 +1715,16 @@ class ChatService:
             "image_mode": bool(supplied.get("image_mode", False)),
         }
 
-    def list_conversations(self) -> list[dict[str, Any]]:
+    def list_conversations(self, workspace_mode: str | None = None) -> list[dict[str, Any]]:
+        from ..database.conversation_workspaces import checked_workspace_mode
+        if workspace_mode is not None:
+            checked_workspace_mode(workspace_mode)
+        where = "WHERE c.workspace_mode = ?" if workspace_mode is not None else ""
         conversations = self.database.fetch_all(
-            """
-            SELECT c.*, COUNT(m.id) AS message_count
-            FROM conversations c LEFT JOIN messages m ON m.conversation_id = c.id
-            GROUP BY c.id
-            -- Pinned first, then both groups by recency. Ordering here rather
-            -- than in the interface means every caller sees the same order and
-            -- a reload cannot rearrange the list.
-            ORDER BY (c.pinned_at IS NULL), c.pinned_at DESC, c.updated_at DESC
-            """
+            f"""SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) AS message_count
+            FROM conversations c {where}
+            ORDER BY (c.pinned_at IS NULL), c.pinned_at DESC, c.updated_at DESC""",
+            (workspace_mode,) if workspace_mode is not None else (),
         )
         links = self.database.fetch_all(
             """
@@ -1794,8 +1794,8 @@ class ChatService:
         )
         return row
 
-    def list_labels(self) -> list[dict[str, Any]]:
-        return self.database.fetch_all(
+    def list_labels(self, workspace_mode: str | None = None) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all(
             """
             SELECT b.*, COUNT(l.conversation_id) AS conversation_count
             FROM conversation_labels b
@@ -1804,15 +1804,23 @@ class ChatService:
             """
         )
 
-    def create_label(self, name: str, tone: str = "neutral") -> dict[str, Any]:
+        if workspace_mode is not None:
+            from ..database.conversation_workspaces import checked_workspace_mode
+            checked_workspace_mode(workspace_mode)
+            rows = [item for item in rows if item["workspace_mode"] == workspace_mode]
+        return rows
+
+    def create_label(self, name: str, tone: str = "neutral", workspace_mode: str = "chat") -> dict[str, Any]:
+        from ..database.conversation_workspaces import checked_workspace_mode
+        checked_workspace_mode(workspace_mode)
         checked = _checked_label_name(name)
         identifier = new_id()
         now = utc_now()
         try:
             self.database.execute(
-                "INSERT INTO conversation_labels(id, name, tone, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (identifier, checked, _checked_tone(tone), now, now),
+                "INSERT INTO conversation_labels(id, name, tone, created_at, updated_at, workspace_mode) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (identifier, checked, _checked_tone(tone), now, now, workspace_mode),
             )
         except sqlite3.IntegrityError as error:
             raise ValueError(f"A label called {checked!r} already exists") from error
@@ -1823,6 +1831,7 @@ class ChatService:
             "created_at": now,
             "updated_at": now,
             "conversation_count": 0,
+            "workspace_mode": workspace_mode,
         }
 
     def update_label(
@@ -1884,6 +1893,9 @@ class ChatService:
                 "SELECT 1 FROM conversation_labels WHERE id = ?", (label_id,)
             ).fetchone() is None:
                 raise KeyError(f"Label does not exist: {label_id}")
+            scopes = connection.execute("SELECT c.workspace_mode AS conversation_mode,b.workspace_mode AS label_mode FROM conversations c JOIN conversation_labels b ON b.id=? WHERE c.id=?", (label_id,conversation_id)).fetchone()
+            if scopes["conversation_mode"] != scopes["label_mode"]:
+                raise ValueError("A folder and its conversation must belong to the same workspace")
             if applied:
                 connection.execute(
                     "INSERT OR IGNORE INTO conversation_label_links("
@@ -1898,20 +1910,32 @@ class ChatService:
                 )
         return self.conversation_summary(conversation_id)
 
-    def create_conversation(self) -> dict[str, Any]:
+    def create_conversation(self, workspace_mode: str | None = None) -> dict[str, Any]:
+        from ..database.conversation_workspaces import checked_workspace_mode
+        mode = checked_workspace_mode(workspace_mode or "chat")
         identifier = new_id()
         now = utc_now()
         self.database.execute(
-            "INSERT INTO conversations(id, title, created_at, updated_at) VALUES (?, 'New chat', ?, ?)",
-            (identifier, now, now),
+            "INSERT INTO conversations(id, title, created_at, updated_at, workspace_mode, workspace_locked) VALUES (?, 'New chat', ?, ?, ?, ?)",
+            (identifier, now, now, mode, int(workspace_mode is not None)),
         )
-        return {
-            "id": identifier,
-            "title": "New chat",
-            "created_at": now,
-            "updated_at": now,
-            "messages": [],
-        }
+        return {"id": identifier, "title": "New chat", "created_at": now,
+                "updated_at": now, "workspace_mode": mode, "messages": []}
+
+    def _settings_in_workspace(self, conversation_id, settings):
+        from ..database.conversation_workspaces import checked_workspace_mode
+        row = self.database.fetch_one("SELECT workspace_mode,workspace_locked FROM conversations WHERE id=?", (conversation_id,))
+        if row is None:
+            raise KeyError(f"Conversation does not exist: {conversation_id}")
+        supplied = dict(settings or {})
+        requested = supplied.get("workspace_mode")
+        if requested is not None and checked_workspace_mode(requested) != row["workspace_mode"]:
+            raise ValueError("This conversation belongs to a different workspace. Start a conversation in the selected mode.")
+        if row["workspace_locked"] or requested is not None:
+            mode = row["workspace_mode"]
+            supplied["agent_mode"] = mode == "agent"
+            supplied["code_mode"] = mode == "code"
+        return supplied
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         conversation = self.database.fetch_one(
@@ -2265,12 +2289,16 @@ class ChatService:
         exact = str(content)
         if not exact.strip():
             raise ValueError("Message cannot be empty")
-        checked_settings = self._normalise_generation_settings(generation_settings)
+        checked_settings = self._normalise_generation_settings(self._settings_in_workspace(conversation_id, generation_settings))
         attachment_manifest, attachment_prompt_context = _normalise_turn_attachments(
             attachments
         )
         with self._generation_lock:
             self.get_conversation(conversation_id)
+            if (generation_settings or {}).get("workspace_mode") is not None:
+                active = self._active_generation()
+                if active is not None and str(active.get("target_id")) != str(conversation_id):
+                    raise ValueError("A response is still running in another conversation. Wait for it to finish or stop it there first.")
             self._cancel_active_generation(reason="superseded_by_new_request")
 
 
@@ -3045,7 +3073,7 @@ class ChatService:
         user_message_id: str,
         generation_settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        checked_settings = self._normalise_generation_settings(generation_settings)
+        checked_settings = self._normalise_generation_settings(self._settings_in_workspace(conversation_id, generation_settings))
         with self._generation_lock:
             user_message, previous_response = self._retry_target(
                 conversation_id, user_message_id
@@ -3096,7 +3124,7 @@ class ChatService:
             raise PermissionError("A one-use vision input token is required")
         if not str(permission_request_id).strip():
             raise PermissionError("Vision analysis requires an idempotency request key")
-        checked_settings = self._normalise_generation_settings(generation_settings)
+        checked_settings = self._normalise_generation_settings(self._settings_in_workspace(conversation_id, generation_settings))
         attachment_manifest, attachment_prompt_context = _normalise_turn_attachments(
             attachments
         )
@@ -6955,6 +6983,9 @@ class ChatService:
 
 
 
+        from .code_workspace import code_workspace_history
+
+        history = code_workspace_history(history, enabled=generation_settings.get("code_mode") is True)
         turn_started = time.monotonic()
         relationship = {
             "conversation_id": conversation_id,

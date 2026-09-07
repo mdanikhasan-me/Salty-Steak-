@@ -28,7 +28,7 @@ import { executionEvents, timelineFor } from "../workflows/agentTimeline.mjs";
 import { HostActionProposal } from "./HostActionProposal.jsx";
 import { RichText } from "./RichText.jsx";
 import { generationFailureForMessage } from "../workflows/generationFailure.mjs";
-import { codeArtifactsFromText } from "../workflows/codeArtifacts.mjs";
+import { codeArtifactsFromText, normaliseNamedCodeFences } from "../workflows/codeArtifacts.mjs";
 
 export function ChatMessage({
   message,
@@ -209,7 +209,7 @@ export function ChatMessage({
             </figure>
           ) : null}
           {visibleContent.answer && !generatedImage ? (
-            <RichText className="message__content">{visibleContent.answer}</RichText>
+            <RichText className="message__content">{codeArtifacts.length ? normaliseNamedCodeFences(visibleContent.answer) : visibleContent.answer}</RichText>
           ) : (!actionProposal && !generatedImage ? (
             <p className="message__content">No response text was returned.</p>
           ) : null)}
@@ -319,7 +319,7 @@ export function ChatMessage({
   );
 }
 
-function downloadCodeArtifact(artifact) {
+export function downloadCodeArtifact(artifact) {
   if (requestNativeSave({
     source: "text",
     suggested_name: artifact.filename,

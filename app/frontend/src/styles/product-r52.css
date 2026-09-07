@@ -626,53 +626,6 @@
 
 
 
-@media (max-width: 1000px) {
-  .chat-page,
-  .chat-page.chat-page--sidebar-open {
-    position: relative;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .chat-page .chat-sidebar {
-    position: absolute;
-    z-index: 72;
-    inset: 0 auto 0 0;
-    display: flex;
-    width: min(288px, calc(100vw - 3.5rem));
-    min-width: 0;
-    visibility: hidden;
-    pointer-events: none;
-    background: var(--surface);
-    box-shadow: 18px 0 42px rgb(0 0 0 / 38%);
-    transform: translateX(-100%);
-  }
-
-  @media (prefers-reduced-motion: no-preference) {
-    .chat-page .chat-sidebar {
-      transition: transform var(--motion-enter, 180ms) var(--ease-enter, ease-out),
-        visibility var(--motion-enter, 180ms);
-    }
-  }
-
-  .chat-page.chat-page--sidebar-open .chat-sidebar {
-    visibility: visible;
-    pointer-events: auto;
-    transform: translateX(0);
-  }
-
-  .chat-page.chat-page--sidebar-open .chat-sidebar-backdrop {
-    position: absolute;
-    z-index: 71;
-    inset: 0;
-    display: block;
-    width: 100%;
-    height: 100%;
-    padding: 0;
-    border: 0;
-    background: rgb(5 7 9 / 50%);
-  }
-}
-
 .message-generated-image figcaption button {
   appearance: none;
   border: 0;
@@ -690,65 +643,7 @@
 
 
 
-@media (min-width: 1001px) and (max-width: 1440px) {
-  .chat-page.chat-page--activity-open,
-  .chat-page.chat-page--sidebar-open.chat-page--activity-open {
-    position: relative;
-    grid-template-columns: 0 minmax(0, 1fr) 380px;
-  }
 
-
-
-
-
-  .chat-page.chat-page--activity-open > .conversation-workspace {
-    grid-column: 2;
-  }
-
-  .chat-page.chat-page--activity-open > .cooking-activity,
-  .chat-page.chat-page--activity-open > .agent-activity,
-  .chat-page.chat-page--details-open > .response-details {
-    grid-column: 3;
-  }
-
-  .chat-page.chat-page--sidebar-open.chat-page--activity-open .chat-sidebar {
-    position: absolute;
-    z-index: 72;
-    inset: 0 auto 0 0;
-    display: flex;
-    width: 252px;
-    min-width: 0;
-    visibility: visible;
-    pointer-events: auto;
-    background: var(--surface);
-    box-shadow: 18px 0 42px rgb(0 0 0 / 38%);
-    transform: translateX(0);
-  }
-
-  .chat-page.chat-page--sidebar-open.chat-page--activity-open .chat-sidebar-backdrop {
-    position: absolute;
-    z-index: 71;
-    inset: 0 380px 0 0;
-    display: block;
-    width: auto;
-    height: 100%;
-    padding: 0;
-    border: 0;
-    background: rgb(5 7 9 / 50%);
-  }
-
-  @media (prefers-reduced-motion: no-preference) {
-    .chat-page.chat-page--sidebar-open.chat-page--activity-open .chat-sidebar {
-      animation: chat-medium-sidebar-in var(--motion-enter, 180ms)
-        var(--ease-enter, ease-out);
-    }
-  }
-}
-
-@keyframes chat-medium-sidebar-in {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(0); }
-}
 
 
 

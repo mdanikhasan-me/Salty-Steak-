@@ -1,5 +1,5 @@
 export const DEFAULT_TRAINING_PAGE = "data";
-export const TRAINING_PAGES = Object.freeze(["data", "train", "versions", "system"]);
+export const TRAINING_PAGES = Object.freeze(["data", "train", "versions", "evaluate", "system"]);
 export const APP_PAGES = new Set(["chat", "about", "evaluate", ...TRAINING_PAGES, "project"]);
 
 export function pageFromHash(hash) {

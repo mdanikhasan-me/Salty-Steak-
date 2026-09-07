@@ -15,11 +15,11 @@ internal sealed class StartupWindowV2 : Form
     private const uint SpiGetClientAreaAnimation = 0x1042;
     private const string MarkResourceName =
         "SaltyPotatoAI.Assets.salty-potato-mark.png";
-    private static readonly Color Surface = Color.FromArgb(20, 20, 19);
-    private static readonly Color PrimaryText = Color.FromArgb(242, 240, 237);
-    private static readonly Color SecondaryText = Color.FromArgb(161, 155, 149);
-    private static readonly Color Accent = Color.FromArgb(176, 124, 99);
-    private static readonly Color InactiveAccent = Color.FromArgb(72, 55, 47);
+    private static readonly Color Surface = Color.FromArgb(20, 21, 22);
+    private static readonly Color PrimaryText = Color.FromArgb(227, 229, 231);
+    private static readonly Color SecondaryText = Color.FromArgb(153, 157, 162);
+    private static readonly Color Accent = Color.FromArgb(186, 181, 234);
+    private static readonly Color InactiveAccent = Color.FromArgb(65, 63, 78);
 
     private readonly Label heading;
     private readonly Label stage;

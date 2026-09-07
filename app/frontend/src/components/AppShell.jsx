@@ -5,6 +5,7 @@ import {
   useEffect,
   useReducer,
   useRef,
+  useState,
 } from "react";
 import {
   Archive,
@@ -12,12 +13,19 @@ import {
   GraduationCap,
   MessageCircle,
   MonitorCog,
+  FlaskConical,
+  Bell,
+  X,
   Sprout,
 } from "lucide-react";
 import { useAppState } from "../state/AppState.jsx";
 import { drawerReducer } from "../workflows/drawer.mjs";
 import { isTrainingPage } from "../workflows/navigation.mjs";
 import { NotificationCenter } from "./NotificationCenter.jsx";
+import { api } from "../api/client.js";
+
+import { WORKSPACE_MODES, normaliseWorkspaceMode } from "../workflows/workspaceModes.mjs";
+import { applyAppearance, readAppearance } from "./WorkspaceSettings.jsx";
 
 const SIDEBAR_STORAGE_KEY = "salty-potato:sidebar-open";
 const ShellContext = createContext(null);
@@ -26,6 +34,7 @@ const TRAINING_DESTINATIONS = [
   { id: "data", label: "Data", description: "Sources and preparation", icon: Database },
   { id: "train", label: "Train", description: "Runs and telemetry", icon: Sprout },
   { id: "versions", label: "Models", description: "Local runtimes and checkpoints", icon: Archive },
+  { id: "evaluate", label: "Evaluate", description: "Metrics and comparisons", icon: FlaskConical },
   { id: "system", label: "System", description: "Runtime and diagnostics", icon: MonitorCog },
 ];
 
@@ -49,7 +58,40 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
     undefined,
     readSidebarPreference,
   );
-  const { connection, chatStatus } = useAppState();
+  const { connection, chatStatus, notifications } = useAppState();
+  const [workspaceMode, setWorkspaceModeState] = useState(() => {
+    try { return normaliseWorkspaceMode(sessionStorage.getItem("salty-steak:workspace-mode")); } catch { return "chat"; }
+  });
+  const [settingsRequest, setSettingsRequest] = useState(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const setWorkspaceMode = (mode) => {
+    const next = normaliseWorkspaceMode(mode);
+    if (next === workspaceMode) return;
+    setSettingsRequest(null);
+    setWorkspaceModeState(next);
+    try { sessionStorage.setItem("salty-steak:workspace-mode", next); } catch {}
+  };
+  useEffect(() => {
+    let active = true;
+    api.getUiPreferences().then((saved) => {
+      if (!active) return;
+      const appearance = { ...readAppearance(), ...saved };
+      applyAppearance(appearance);
+      try { localStorage.setItem("salty-steak:appearance-v1", JSON.stringify(appearance)); } catch {}
+      if (typeof saved.sidebarOpen === "boolean") dispatchSidebar({ type: saved.sidebarOpen ? "open" : "close" });
+      if (saved.workspaceMode) setWorkspaceModeState(normaliseWorkspaceMode(saved.workspaceMode));
+      setPreferencesLoaded(true);
+    }).catch(() => { if (active) { applyAppearance(readAppearance()); setPreferencesLoaded(true); } });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    if (preferencesLoaded) void api.saveUiPreferences({ sidebarOpen, workspaceMode }).catch(() => {});
+  }, [preferencesLoaded, sidebarOpen, workspaceMode]);
+  const requestSettings = (section = "general") => {
+    setSettingsRequest({ section, id: Date.now() });
+    if (page !== "chat") onNavigate("chat");
+  };
 
 
 
@@ -95,7 +137,8 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
   }, [sidebarOpen]);
 
   const shellValue = {
-    sidebarOpen,
+    sidebarOpen, workspaceMode, setWorkspaceMode, settingsRequest, requestSettings,
+    openNotifications: () => setNotificationsOpen((open) => !open),
     toggleSidebar: () => dispatchSidebar({ type: "toggle" }),
     closeSidebar: () => dispatchSidebar({ type: "close" }),
   };
@@ -111,40 +154,23 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
           Skip to content
         </a>
 
-        <header className="app-toolbar">
-          <button
-            className="icon-button app-menu-button"
-            type="button"
-            aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
-            aria-expanded={sidebarOpen}
-            aria-controls="workspace-sidebar"
-            onClick={() => dispatchSidebar({ type: "toggle" })}
-          >
-            <SidebarGlyph aria-hidden="true" />
-          </button>
-
-          <nav className="workspace-switch" aria-label="Primary workspace">
-            <button
-              className={!trainingMode ? "workspace-switch__button is-active" : "workspace-switch__button"}
-              type="button"
-              aria-current={!trainingMode ? "page" : undefined}
-              onClick={() => onNavigate("chat")}
-            >
-              <MessageCircle aria-hidden="true" />
-              <span>Chat</span>
-            </button>
-            <button
-              className={trainingMode ? "workspace-switch__button is-active" : "workspace-switch__button"}
-              type="button"
-              aria-current={trainingMode ? "page" : undefined}
-              onClick={() => onNavigate("training-center")}
-            >
-              <GraduationCap aria-hidden="true" />
-              <span>Models & training</span>
-            </button>
-          </nav>
-
-          <RuntimeStatus connection={connection} chatStatus={chatStatus} />
+        <header className={`app-toolbar ${sidebarOpen ? "app-toolbar--sidebar-open" : ""}`}>
+          <div className="workspace-brand">
+            <img src="/assets/salty-potato-symbol.svg" width="19" height="19" alt="" />
+            <span>salty steak</span>
+            <button className="icon-button app-menu-button" type="button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} aria-controls="workspace-sidebar" onClick={() => dispatchSidebar({ type: "toggle" })}><SidebarGlyph aria-hidden="true" /></button>
+          </div>
+          <div className="workspace-heading">
+            <span className="workspace-context">{trainingMode ? (TRAINING_DESTINATIONS.find((item) => item.id === page)?.label || "Models & training") : workspaceMode === "code" ? "Code workspace" : workspaceMode === "agent" ? "Agent workspace" : "Workspace"}</span>
+            {trainingMode ? (
+              <nav className="workspace-return" aria-label="Primary workspace"><button type="button" onClick={() => onNavigate("chat")}><MessageCircle aria-hidden="true" /><span>Chat</span></button><span>Models & training</span></nav>
+            ) : (
+              <nav className="workspace-modes" aria-label="Primary workspace" style={{ "--mode-index": WORKSPACE_MODES.findIndex((mode) => mode.id === workspaceMode) }}>
+                {WORKSPACE_MODES.map((mode) => <button key={mode.id} type="button" aria-pressed={workspaceMode === mode.id} onClick={() => setWorkspaceMode(mode.id)}>{mode.label}</button>)}
+              </nav>
+            )}
+            <RuntimeStatus connection={connection} chatStatus={chatStatus} />
+          </div>
         </header>
 
         <div className={`app-frame ${trainingMode ? "app-frame--training" : ""}`}>
@@ -180,6 +206,7 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
           </main>
         </div>
 
+        {notificationsOpen ? <aside className="workspace-notifications" aria-label="Notification history"><header><h2>Notifications</h2><button className="icon-button" aria-label="Close notifications" onClick={() => setNotificationsOpen(false)}><X /></button></header>{notifications.length ? notifications.map((item) => <p key={item.id}>{item.message}</p>) : <p>You're all caught up.</p>}</aside> : null}
         <NotificationCenter page={page} />
       </div>
     </ShellContext.Provider>
@@ -216,7 +243,7 @@ function TrainingSidebar({ page, open, onNavigate }) {
     >
       <div className="workspace-sidebar__heading">
         <span>Models & training</span>
-        <small>Local workspace</small>
+        <small>Model workbench</small>
       </div>
       <nav className="workspace-sidebar__navigation" aria-label="Training destinations">
         {TRAINING_DESTINATIONS.map((item) => {
@@ -239,13 +266,7 @@ function TrainingSidebar({ page, open, onNavigate }) {
           );
         })}
       </nav>
-      <div className="workspace-sidebar__local-state">
-        <span className="connection-dot" aria-hidden="true" />
-        <span>
-          <strong>Local workspace</strong>
-          <small>Data remains on this computer</small>
-        </span>
-      </div>
+      <div className="workspace-sidebar__footer"><button type="button" className="sidebar-about" onClick={() => onNavigate("chat")}><MessageCircle aria-hidden="true" /><span>Back to workspace</span></button></div>
     </aside>
   );
 }
