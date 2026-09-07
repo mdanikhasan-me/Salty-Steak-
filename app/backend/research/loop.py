@@ -285,7 +285,15 @@ class ResearchLoop:
                 wave = self._wave(query)
             self._save_checkpoint(next_query=query)
 
-            candidates = list(self.search(query) or [])
+            try:
+                candidates = list(self.search(query) or [])
+            except Exception as error:
+                wave["state"] = "failed"
+                wave["error"] = str(error)[:240]
+                self._event("research_search_failed", query=query, error=str(error)[:240])
+                self._publish("search_failed")
+                ended = "search_unavailable"
+                break
 
 
 
@@ -309,8 +317,9 @@ class ResearchLoop:
 
 
                     break
-                halt, _ = self.ledger.should_stop()
-                if halt:
+                halt, halt_reason = self.ledger.should_stop()
+                # The final allowed query still owns its result-reading wave.
+                if halt and halt_reason != "query_budget":
                     break
 
                 url = str(candidate.get("url") or "")
@@ -471,7 +480,7 @@ class ResearchLoop:
             self._save_checkpoint(next_query=query)
 
         for wave in self.waves:
-            wave["state"] = "done"
+            if wave.get("state") != "failed": wave["state"] = "done"
 
 
 

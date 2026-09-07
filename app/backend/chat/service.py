@@ -1707,7 +1707,8 @@ class ChatService:
 
 
             "research_available": research_requested,
-            "research_forced": bool(supplied.get("research_command", False)),
+            "research_command": bool(supplied.get("research_command", supplied.get("research_forced", False))),
+            "research_forced": bool(supplied.get("research_command", supplied.get("research_forced", False))),
 
 
 
@@ -2647,12 +2648,7 @@ class ChatService:
     def _research_runtime_available(self) -> bool:
         """Whether a turn can search and then read its evidence right now."""
 
-        from ..automation.broker import BROWSER_CAPABILITY
-
-        return (
-            self.web_search is not None
-            and BROWSER_CAPABILITY in self.granted_automation_capabilities()
-        )
+        return self.web_search is not None
 
     def start_agent_task(
         self,
@@ -5463,10 +5459,7 @@ class ChatService:
         }.get(research_profile, 8)
 
         def search(query: str):
-            try:
-                return self._search_web(query, limit=search_limit)
-            except Exception:
-                return []
+            return self._search_web(query, limit=search_limit)
 
 
 
@@ -5570,6 +5563,7 @@ class ChatService:
             phase_value = str(progress.get("phase") or "preparing").casefold()
             phase_label = {
                 "searching": f"Searching {sites} websites",
+                "search_failed": "Web search unavailable",
                 "reading": "Reading and validating pages",
                 "validating": "Rejecting unusable evidence",
                 "comparing": "Comparing evidence",
@@ -5680,9 +5674,11 @@ class ChatService:
         from ..automation.broker import BROWSER_CAPABILITY
         from ..tooling.web_search import SEARCH_ENDPOINT, _unwrap_result_url
 
+        search_error = None
         try:
             results = self.web_search.search(query, limit=limit)
-        except Exception:
+        except Exception as error:
+            search_error = error
             results = []
         if results:
             return results
@@ -5690,6 +5686,8 @@ class ChatService:
             self.automation is None
             or BROWSER_CAPABILITY not in self.granted_automation_capabilities()
         ):
+            if search_error is not None:
+                raise RuntimeError(f"Web search is unavailable: {search_error}") from search_error
             return []
 
         address = SEARCH_ENDPOINT + "?" + urllib.parse.urlencode({"q": query})
@@ -5707,8 +5705,8 @@ class ChatService:
         try:
             call("open_url", url=address)
             found = call("query", role="link", limit=60)
-        except Exception:
-            return []
+        except Exception as error:
+            raise RuntimeError(f"The browser search fallback failed: {error}") from error
         collected: list[dict[str, str]] = []
         seen: set[str] = set()
         for item in found.get("matches") or []:
@@ -5737,15 +5735,16 @@ class ChatService:
         return collected
 
     def _read_source(self, url: str) -> dict[str, Any]:
-        """Fetch one source's structured text for the research ledger.
-
-        Reading goes through the browser capability the user granted, in the
-        session Salty Steak owns. That is deliberate: research reads real pages
-        with the same audited boundary as every other host action, rather than
-        opening a second, unaudited way out to the network.
-        """
+        """Read bounded public text first, then an authorized browser if needed."""
 
         from ..automation.broker import BROWSER_CAPABILITY
+        from ..tooling.web_page import read_public_page
+
+        try:
+            return read_public_page(url)
+        except Exception as public_error:
+            if self.automation is None or BROWSER_CAPABILITY not in self.granted_automation_capabilities():
+                raise RuntimeError(f"Public source could not be read: {public_error}") from public_error
 
         if self.automation is None:
             raise RuntimeError("Local computer automation is unavailable in this build.")
@@ -7282,6 +7281,14 @@ class ChatService:
                         "output_tokens": 0,
                         "model_sharing_context": True,
                     }
+                elif generation.get("research_forced"):
+                    learned_route = "research"
+                    learned_route_details = {
+                        "available": True, "controller": "explicit_research_mode",
+                        "adapter_ids": [], "route": "research", "fail_closed": False,
+                        "duration_seconds": 0.0, "output_tokens": 0,
+                        "model_sharing_context": True,
+                    }
                 else:
                     learned_route, learned_route_details = self._learned_route_decision(
                         search_query,
@@ -7868,12 +7875,8 @@ class ChatService:
                     if use_identity_context
                     else "main_chat_context"
                 )
-                if explicit_image_mode:
-
-
-
-
-
+                if explicit_image_mode or generation.get("research_forced"):
+                    explicit_mode = "explicit_image_mode" if explicit_image_mode else "explicit_research_mode"
                     runtime_details = dict(self.model_bundle_runtime.describe())
                     effective_window = int(generation["context_window_tokens"])
                     runtime_details.update(
@@ -7890,7 +7893,7 @@ class ChatService:
                             "prefill_duration_seconds": 0.0,
                             "generation_duration_seconds": 0.0,
                             "time_to_first_token_seconds": 0.0,
-                            "finish_reason": "explicit_image_mode",
+                            "finish_reason": explicit_mode,
                             "response_format_effective": "json",
                         }
                     )
@@ -7898,18 +7901,18 @@ class ChatService:
                         cancelled=False,
                         text=json.dumps(
                             {
-                                "action": "generate_image",
-                                "reason": "The user explicitly selected Image mode.",
+                                "action": "generate_image" if explicit_image_mode else "research",
+                                "reason": "The user explicitly selected this mode.",
                             },
                             separators=(",", ":"),
                         ),
                         token_ids=[],
                         omitted_turns=0,
-                        finish_reason="explicit_image_mode",
+                        finish_reason=explicit_mode,
                         technical_details=runtime_details,
                     )
-                    relationship["explicit_image_execution_path"] = (
-                        "single_model_authored_brief"
+                    relationship["explicit_image_execution_path" if explicit_image_mode else "explicit_research_execution_path"] = (
+                        "single_model_authored_brief" if explicit_image_mode else "direct_research_dispatch"
                     )
                 else:
                     response = (

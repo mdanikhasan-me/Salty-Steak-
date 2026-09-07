@@ -94,7 +94,7 @@ export function ResponseSettingsSheet({
       <header className="response-settings-sheet__header">
         <div>
           <h2 id="response-settings-title">{title}</h2>
-          <p>Model, context, and response behavior for the next reply.</p>
+          <p>{initialSection === "image" ? "Image model, canvas and quality for your next image." : "Model and response controls for this conversation."}</p>
         </div>
         {onClose ? (
           <button className="response-settings-sheet__close" type="button" aria-label="Close response settings" onClick={onClose}>

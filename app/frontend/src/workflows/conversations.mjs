@@ -52,14 +52,19 @@ export function groupConversationsByRecency(conversations, now = new Date()) {
   const dayKey = (date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
   const today = dayKey(current);
   const groups = new Map();
+  const dateLabels = new Map();
   for (const conversation of conversations || []) {
     const stamp = conversation?.updated_at || conversation?.created_at;
     const date = stamp ? new Date(stamp) : new Date(NaN);
     const valid = Number.isFinite(date.getTime());
     const day = valid ? dayKey(date) : -Infinity;
     const age = today - day;
-    const label = !valid ? "Date unavailable" : age === 0 ? "Today" : age === 86400000 ? "Yesterday"
-      : date.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...(date.getFullYear() !== current.getFullYear() ? { year: "numeric" } : {}) });
+    let label = dateLabels.get(day);
+    if (!label) {
+      label = !valid ? "Date unavailable" : age === 0 ? "Today" : age === 86400000 ? "Yesterday"
+        : date.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...(date.getFullYear() !== current.getFullYear() ? { year: "numeric" } : {}) });
+      dateLabels.set(day, label);
+    }
     if (!groups.has(day)) groups.set(day, { label, items: [] });
     groups.get(day).items.push(conversation);
   }

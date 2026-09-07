@@ -70,6 +70,7 @@ export function ConversationSidebar({
   mode = "chat",
 }) {
   const [query, setQuery] = useState("");
+  const [historyLimit, setHistoryLimit] = useState(60);
   const [browsing, setBrowsing] = useState(null);
   const [menuFor, setMenuFor] = useState(null);
   const [submenuFor, setSubmenuFor] = useState(null);
@@ -102,6 +103,16 @@ export function ConversationSidebar({
     [conversations, folders, query, browsing, today],
   );
   const current = openFolder(organised);
+  const visibleGroups = useMemo(() => {
+    let remaining = historyLimit;
+    return organised.groups.map(group => {
+      const items = group.items.filter(item => String(item.id) === String(selectedId) || remaining-- > 0);
+      return { ...group, items };
+    }).filter(group => group.items.length);
+  }, [organised.groups, historyLimit, selectedId]);
+  const hiddenHistoryCount = organised.groups.reduce((sum, group) => sum + group.items.length, 0)
+    - visibleGroups.reduce((sum, group) => sum + group.items.length, 0);
+  useEffect(() => setHistoryLimit(60), [query, browsing]);
 
   useEffect(() => {
     try {
@@ -555,7 +566,7 @@ export function ConversationSidebar({
             )
           : null}
 
-        {organised.groups.map((group) =>
+        {visibleGroups.map((group) =>
           renderSection(
             `recents:${group.label}`,
             group.label,
@@ -563,6 +574,7 @@ export function ConversationSidebar({
           ),
         )}
 
+        {hiddenHistoryCount > 0 ? <button type="button" className="history-load-more" onClick={() => setHistoryLimit(limit => limit + 60)}>Show older conversations</button> : null}
         {!organised.visibleCount ? (
           <p className="chat-sidebar__empty">
             {organised.total ? "No chats match that." : "No conversations yet."}

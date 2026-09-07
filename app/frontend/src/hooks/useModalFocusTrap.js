@@ -24,7 +24,9 @@ export function useModalFocusTrap({ active = true, onClose, canClose = true } = 
     const focusable = () => Array.from(root.querySelectorAll(FOCUSABLE)).filter(
       (node) => node.getClientRects().length > 0 && !node.closest("[inert]"),
     );
-    window.requestAnimationFrame(() => focusable()[0]?.focus());
+    // Keep the dialog focusable without drawing a selection box around its
+    // first unrelated control when opened with a pointer.
+    window.requestAnimationFrame(() => root.focus({ preventScroll: true }));
 
     function handleKeyDown(event) {
       if (event.key === "Escape" && canCloseRef.current) {

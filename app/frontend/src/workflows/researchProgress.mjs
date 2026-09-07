@@ -43,20 +43,21 @@ export function researchWaves(progress) {
     const verified = Number(wave.verified) || 0;
     const rejected = Number(wave.rejected) || 0;
     const done = String(wave.state || "") === "done";
+    const failed = String(wave.state || "") === "failed";
 
     return {
       id: `wave-${index}`,
 
-      label: done
+      label: failed ? "Web search unavailable" : done
         ? `Searched ${sites.length} ${sites.length === 1 ? "website" : "websites"}`
         : `Searching ${sites.length} ${sites.length === 1 ? "website" : "websites"}`,
       query: String(wave.query || ""),
-      running: !done,
+      running: !done && !failed,
       opened,
       verified,
       rejected,
       validation: Boolean(wave.validation),
-      detail: detailFor({ opened, verified, rejected, done }),
+      detail: failed ? String(wave.error || "Try again when the search service is available.") : detailFor({ opened, verified, rejected, done }),
       sites: sites.map((site) => ({
         host: niceHost(site.host),
         url: String(site.url || ""),

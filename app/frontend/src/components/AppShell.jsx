@@ -64,8 +64,41 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
   });
   const [settingsRequest, setSettingsRequest] = useState(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationAnchor, setNotificationAnchor] = useState({ left: 18, bottom: 52 });
+  const notificationTrigger = useRef(null);
+  const notificationPanel = useRef(null);
+  const closeNotifications = useCallback(() => setNotificationsOpen(false), []);
+  const openNotifications = useCallback(event => {
+    const trigger = event?.currentTarget;
+    const rect = trigger?.getBoundingClientRect();
+    notificationTrigger.current = trigger;
+    if (rect) setNotificationAnchor({ left: Math.max(12, Math.min(innerWidth - 292, rect.left)), bottom: Math.max(12, innerHeight - rect.top + 8) });
+    setSettingsRequest({ close: true, id: Date.now() });
+    setNotificationsOpen(open => !open);
+  }, []);
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    function dismiss(event) {
+      if (notificationPanel.current?.contains(event.target) || notificationTrigger.current?.contains(event.target)) return;
+      setNotificationsOpen(false);
+    }
+    function key(event) {
+      if (event.key !== "Escape") return;
+      setNotificationsOpen(false); notificationTrigger.current?.focus();
+    }
+    document.addEventListener("pointerdown", dismiss);document.addEventListener("keydown", key);
+    window.addEventListener("resize", closeNotifications);
+    return () => { document.removeEventListener("pointerdown", dismiss);document.removeEventListener("keydown", key);window.removeEventListener("resize", closeNotifications); };
+  }, [notificationsOpen, closeNotifications]);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const touchedPreferences = useRef({ mode: false, sidebar: false });
+  const changeSidebar = useCallback(action => {
+    touchedPreferences.current.sidebar = true;
+    dispatchSidebar(action);
+  }, []);
   const setWorkspaceMode = (mode) => {
+    touchedPreferences.current.mode = true;
+    closeNotifications();
     const next = normaliseWorkspaceMode(mode);
     if (next === workspaceMode) return;
     setSettingsRequest(null);
@@ -79,8 +112,8 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
       const appearance = { ...readAppearance(), ...saved };
       applyAppearance(appearance);
       try { localStorage.setItem("salty-steak:appearance-v1", JSON.stringify(appearance)); } catch {}
-      if (typeof saved.sidebarOpen === "boolean") dispatchSidebar({ type: saved.sidebarOpen ? "open" : "close" });
-      if (saved.workspaceMode) setWorkspaceModeState(normaliseWorkspaceMode(saved.workspaceMode));
+      if (!touchedPreferences.current.sidebar && typeof saved.sidebarOpen === "boolean") dispatchSidebar({ type: saved.sidebarOpen ? "open" : "close" });
+      if (!touchedPreferences.current.mode && saved.workspaceMode) setWorkspaceModeState(normaliseWorkspaceMode(saved.workspaceMode));
       setPreferencesLoaded(true);
     }).catch(() => { if (active) { applyAppearance(readAppearance()); setPreferencesLoaded(true); } });
     return () => { active = false; };
@@ -138,9 +171,9 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
 
   const shellValue = {
     sidebarOpen, workspaceMode, setWorkspaceMode, settingsRequest, requestSettings,
-    openNotifications: () => setNotificationsOpen((open) => !open),
-    toggleSidebar: () => dispatchSidebar({ type: "toggle" }),
-    closeSidebar: () => dispatchSidebar({ type: "close" }),
+    openNotifications, closeNotifications,
+    toggleSidebar: () => changeSidebar({ type: "toggle" }),
+    closeSidebar: () => changeSidebar({ type: "close" }),
   };
 
   return (
@@ -158,7 +191,7 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
           <div className="workspace-brand">
             <img src="/assets/salty-potato-symbol.svg" width="19" height="19" alt="" />
             <span>salty steak</span>
-            <button className="icon-button app-menu-button" type="button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} aria-controls="workspace-sidebar" onClick={() => dispatchSidebar({ type: "toggle" })}><SidebarGlyph aria-hidden="true" /></button>
+            <button className="icon-button app-menu-button" type="button" title={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} aria-controls="workspace-sidebar" onClick={() => changeSidebar({ type: "toggle" })}><SidebarGlyph aria-hidden="true" /></button>
           </div>
           <div className="workspace-heading">
             <span className="workspace-context">{trainingMode ? (TRAINING_DESTINATIONS.find((item) => item.id === page)?.label || "Models & training") : workspaceMode === "code" ? "Code workspace" : workspaceMode === "agent" ? "Agent workspace" : "Workspace"}</span>
@@ -186,7 +219,7 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
               className="workspace-sidebar-backdrop"
               type="button"
               aria-label="Close Models and training sidebar"
-              onClick={() => dispatchSidebar({ type: "close" })}
+              onClick={() => changeSidebar({ type: "close" })}
             />
           ) : null}
           <main
@@ -206,7 +239,7 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
           </main>
         </div>
 
-        {notificationsOpen ? <aside className="workspace-notifications" aria-label="Notification history"><header><h2>Notifications</h2><button className="icon-button" aria-label="Close notifications" onClick={() => setNotificationsOpen(false)}><X /></button></header>{notifications.length ? notifications.map((item) => <p key={item.id}>{item.message}</p>) : <p>You're all caught up.</p>}</aside> : null}
+        {notificationsOpen ? <aside ref={notificationPanel} style={notificationAnchor} className="workspace-notifications" aria-label="Notification history"><header><h2>Notifications</h2><button className="icon-button" aria-label="Close notifications" onClick={closeNotifications}><X /></button></header>{notifications.length ? notifications.map((item) => <p key={item.id}>{item.message}</p>) : <p>You're all caught up.</p>}</aside> : null}
         <NotificationCenter page={page} />
       </div>
     </ShellContext.Provider>

@@ -260,7 +260,7 @@ export function generationTurnSettingsForRequest(
     code_mode: Boolean(codeMode),
     ...(workspaceMode ? { workspace_mode: workspaceMode } : {}),
     research_available: researchEnabled,
-    research_command: Boolean(researchCommand),
+    research_command: researchEnabled,
     image_mode: Boolean(imageCommand),
     web_search_enabled: researchEnabled,
   };

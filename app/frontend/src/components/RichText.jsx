@@ -1,15 +1,15 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { parseRichTextBlocks, tokenizeInline } from "../workflows/richText.mjs";
 
-export function RichText({ children, className = "" }) {
-  const blocks = parseRichTextBlocks(children);
+export const RichText = memo(function RichText({ children, className = "" }) {
+  const blocks = useMemo(() => parseRichTextBlocks(children), [children]);
   return (
     <div className={`rich-text ${className}`.trim()}>
       {blocks.map((block, index) => <RichBlock key={`${block.type}-${index}`} block={block} />)}
     </div>
   );
-}
+});
 
 function RichBlock({ block }) {
   if (block.type === "code") return <CodeBlock block={block} />;
@@ -25,22 +25,29 @@ function RichBlock({ block }) {
   return <p>{renderInlineWithBreaks(block.content)}</p>;
 }
 
-function CodeBlock({ block }) {
+let highlighter;
+const loadHighlighter = () => import("../workflows/syntaxHighlight.mjs").then(module => {
+  highlighter = module.highlightCode;
+  return highlighter;
+});
+
+const CodeBlock = memo(function CodeBlock({ block }) {
   const [copied, setCopied] = useState(false);
-  const [highlighted, setHighlighted] = useState(null);
+  const [ready, setReady] = useState(() => Boolean(highlighter));
+  const copyTimer = useRef(null);
   useEffect(() => {
     let active = true;
-    setHighlighted(null);
-    import("../workflows/syntaxHighlight.mjs").then(({ highlightCode }) => {
-      if (active) setHighlighted({ content:block.content, language:block.language, html:highlightCode(block.content,block.language) });
-    }).catch(() => {});
-    return () => { active = false; };
-  }, [block.content,block.language]);
+    if (!highlighter) loadHighlighter().then(() => { if (active) setReady(true); }).catch(() => {});
+    return () => { active = false; window.clearTimeout(copyTimer.current); };
+  }, []);
+  const highlighted = useMemo(() => ready && highlighter
+    ? highlighter(block.content, block.language) : null, [ready, block.content, block.language]);
   async function copy() {
     try {
       await navigator.clipboard.writeText(block.content);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
       setCopied(false);
     }
@@ -54,12 +61,12 @@ function CodeBlock({ block }) {
           <span>{copied ? "Copied" : "Copy"}</span>
         </button>
       </div>
-      <pre>{highlighted?.content === block.content && highlighted.language === block.language
-        ? <code className="hljs" dangerouslySetInnerHTML={{__html:highlighted.html}} />
+      <pre>{highlighted !== null
+        ? <code className="hljs" dangerouslySetInnerHTML={{__html:highlighted}} />
         : <code>{block.content}</code>}</pre>
     </div>
   );
-}
+}, (previous, next) => previous.block.content === next.block.content && previous.block.language === next.block.language);
 
 function renderInlineWithBreaks(value) {
   return String(value).split("\n").flatMap((line, lineIndex) => [

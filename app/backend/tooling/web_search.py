@@ -32,7 +32,7 @@ BROWSER_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 MAX_QUERY_CHARS = 500
-MAX_RESULTS = 8
+MAX_RESULTS = 24
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _SEARCH_INTENT = re.compile(
     r"\b(?:search|browse|look\s*up|find\s+(?:online|on\s+the\s+web)|research|"

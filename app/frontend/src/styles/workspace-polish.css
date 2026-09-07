@@ -47,12 +47,6 @@
 .agent-activity__group-marker { background:transparent; border:0; }
 .agent-activity__groups>li::after { display:none; }
 .plugin-row__icon svg { width:20px; height:20px; }
-.plugin-row__icon--terminal { color:#b5aae9; }
-.plugin-row__icon--files { color:#d5b878; }
-.plugin-row__icon--browser_control,.plugin-row__icon--screen_capture { color:#87bad3; }
-.plugin-row__icon--ui_automation,.plugin-row__icon--input_control { color:#b9a8d9; }
-.plugin-row__icon--discord_inspect { color:#9198ec; }
-.plugin-row__icon--application_launch,.plugin-row__icon--window_control { color:#88b89e; }
 .workspace-settings .plugins-settings-sheet__chrome strong { font-size:20px; font-weight:500; }
 .composer-tool--research-on { color:#b7b1df; background:#bab5ea10; }
 .composer-control--authority { margin-left:2px; }

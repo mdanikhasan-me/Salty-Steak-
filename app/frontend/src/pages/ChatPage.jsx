@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AppWindow,
   Bot,
@@ -32,9 +32,11 @@ import {
   Trash2,
   Video,
   X,
+  Zap,
 } from "lucide-react";
 import { api, asList } from "../api/client.js";
 import { ChatMessage } from "../components/ChatMessage.jsx";
+import { LiveResponse } from "../components/LiveResponse.jsx";
 import { AgentActivityPanel } from "../components/AgentActivityPanel.jsx";
 import { ConversationSidebar } from "../components/ConversationSidebar.jsx";
 import { ResponseDetails } from "../components/ResponseDetails.jsx";
@@ -53,6 +55,7 @@ import { GmailBrand, CalendarBrand, CloudBrand } from "../components/ConnectorBr
 import { workspaceModeDetails } from "../workflows/workspaceModes.mjs";
 import { recoverConversationDraft } from "../workflows/draftRecovery.mjs";
 import { createLatestWriter } from "../workflows/latestWriter.mjs";
+import { createConversationCache } from "../workflows/conversationCache.mjs";
 import { AboutPage } from "./AboutPage.jsx";
 import { Dialog } from "../components/Dialog.jsx";
 import { Field, FormActions } from "../components/Forms.jsx";
@@ -243,15 +246,16 @@ export function connectedAppIcon(app) {
 }
 
 const workspaceSessions = new Map();
+const sharedPlugins = { value: null, readAt: 0 };
 function sessionFor(mode) {
-  if (!workspaceSessions.has(mode)) workspaceSessions.set(mode, { drafts: new Map(), instructions: new Map(), settings: null });
+  if (!workspaceSessions.has(mode)) workspaceSessions.set(mode, { drafts: new Map(), instructions: new Map(), settings: null, views: createConversationCache(), scroll: new Map() });
   return workspaceSessions.get(mode);
 }
 const pendingWorkspaceSaves = new Map();
 function persistWorkspace(mode, session) {
   const snapshot = {
     selectedId: session.selectedId || null, settings: session.settings,
-    drafts: [...session.drafts].slice(-32).map(([id, value]) => [id, { draft: value.draft, settings: value.settings }]),
+    drafts: [...session.drafts].slice(-32).map(([id, value]) => [id, { draft: value.draft, settings: value.settings, researchMode: Boolean(value.researchMode) }]),
     instructions: [...session.instructions].slice(-64),
   };
   if (!pendingWorkspaceSaves.has(mode)) pendingWorkspaceSaves.set(mode, createLatestWriter(value => api.saveWorkspaceState(mode, value)));
@@ -273,7 +277,7 @@ export function ChatPage(props) {
     }).catch(() => { if (!cancelled) setLoadError("This workspace could not be opened. Try again."); });
     return () => { cancelled = true; };
   }, [workspaceMode]);
-  if (loaded !== workspaceMode) return <div className="workspace-opening" role="status">{loadError || "Opening workspace…"}{loadError ? <button type="button" onClick={() => window.location.reload()}>Try again</button> : null}</div>;
+  if (!sessionFor(workspaceMode).loaded && loaded !== workspaceMode) return <div className="workspace-opening" role="status">{loadError || "Opening workspace…"}{loadError ? <button type="button" onClick={() => window.location.reload()}>Try again</button> : null}</div>;
   return <ChatWorkspace key={workspaceMode} {...props} workspaceMode={workspaceMode} />;
 }
 
@@ -302,7 +306,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       return null;
     }
   });
-  const [conversation, setConversation] = useState(null);
+  const [conversation, setConversation] = useState(() => session.views.get(session.selectedId));
   const [draft, setDraft] = useState(freshDraft.draft || "");
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [sending, setSending] = useState(false);
@@ -312,7 +316,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   const [copiedId, setCopiedId] = useState(null);
   const [managedConversation, setManagedConversation] = useState(null);
 
-  const [labels, setLabels] = useState([]);
+  const [labels, setLabels] = useState(session.labels || []);
 
 
   const [responseDetailsFor, setResponseDetails] = useState(null);
@@ -357,7 +361,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [settingsView, setSettingsView] = useState("response");
   const [attachments, setAttachments] = useState(freshDraft.attachments || []);
-  const [pluginState, setPluginState] = useState(null);
+  const [pluginState, setPluginState] = useState(sharedPlugins.value);
   const [pluginLoadError, setPluginLoadError] = useState("");
   const [pluginBusyId, setPluginBusyId] = useState("");
   const [pluginSetup, setPluginSetup] = useState(null);
@@ -375,14 +379,14 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   const locallyCreatedConversationIdsRef = useRef(new Set());
   const generationTaskRef = useRef(0);
   const activeGenerationRef = useRef(null);
-  const { settingsRequest, openNotifications, setWorkspaceMode } = useShell();
+  const { settingsRequest, openNotifications, closeNotifications, setWorkspaceMode } = useShell();
   const agentMode = workspaceMode === "agent";
   const modeDetails = workspaceModeDetails(workspaceMode);
   const workspaceModeRef = useRef(workspaceMode);
   workspaceModeRef.current = workspaceMode;
 
 
-  const [researchMode, setResearchMode] = useState(false);
+  const [researchMode, setResearchMode] = useState(Boolean(freshDraft.researchMode));
   const [dismissedAgentTask, setDismissedAgentTask] = useState("");
 
 
@@ -403,12 +407,13 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   if (!serialGenerationTransitionRef.current) {
     serialGenerationTransitionRef.current = createSerialGenerationExecutor();
   }
-  const followsTranscriptRef = useRef(true);
+  const followsTranscriptRef = useRef(session.scroll.get(session.selectedId)?.following ?? true);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const composerActionRef = useRef(null);
   const actionTriggerRefs = useRef(new Map());
   const actionMenuRefs = useRef(new Map());
   const composerMenuTriggerRefs = useRef(new Map());
+  const composerMenuKeyboardRef = useRef(false);
   const cookingActivityTriggerRef = useRef(null);
   const readinessRefreshStartedRef = useRef(false);
   const { sidebarOpen, closeSidebar } = useShell();
@@ -433,7 +438,17 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   }, []);
 
   const draftSnapshot = useRef(null);
-  draftSnapshot.current = { draft, attachments, settings: generationSettings, selectedId };
+  draftSnapshot.current = { draft, attachments, settings: generationSettings, selectedId, researchMode };
+  useLayoutEffect(() => { if (conversation?.id) session.views.set(conversation); }, [conversation, session]);
+  useLayoutEffect(() => {
+    const scroll = transcriptRef.current;
+    const saved = session.scroll.get(selectedId);
+    if (scroll) scroll.scrollTop = saved?.top ?? scroll.scrollHeight;
+    followsTranscriptRef.current = saved?.following ?? true;
+    return () => {
+      if (scroll && selectedId) session.scroll.set(selectedId, { top: scroll.scrollTop, following: followsTranscriptRef.current });
+    };
+  }, [selectedId, session]);
   const restoreFailedDraft = useCallback((ownerId, content, files = []) => {
     const restored = recoverConversationDraft({ drafts: session.drafts, ownerId,
       selectedId: selectedIdRef.current, current: draftSnapshot.current, content, attachments: files });
@@ -456,14 +471,18 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       void persistWorkspace(workspaceMode, session).catch(() => notify({ id: "workspace-save", message: "Workspace changes could not be saved. Keep the app open and try again.", kind: "error" }));
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [draft, generationSettings, selectedId, session, workspaceMode, notify]);
+  }, [draft, generationSettings, selectedId, session, workspaceMode, notify, researchMode]);
   const selectConversation = useCallback((conversationId) => {
     if (String(conversationId) === String(selectedIdRef.current)) return;
     session.drafts.set(selectedIdRef.current || "new", draftSnapshot.current);
+    const scroll = transcriptRef.current;
+    if (scroll && selectedIdRef.current) session.scroll.set(selectedIdRef.current, { top: scroll.scrollTop, following: followsTranscriptRef.current });
     const next = session.drafts.get(conversationId || "new") || {};
     setDraft(next.draft || ""); setAttachments(next.attachments || []);
+    setResearchMode(Boolean(next.researchMode));
     setCookingActivityMessageId(null); setResponseDetails(null); setComposerMenu(null);
     if (next.settings) setGenerationSettingsState(next.settings);
+    setConversation(session.views.get(conversationId));
     session.selectedId = conversationId;
     return synchronizeConversationSelection(selectedIdRef, setSelectedId, conversationId);
   }, [session]);
@@ -473,8 +492,8 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     if (!wanted) return;
     selectConversation(wanted);
 
-    setConversation(null);
-    setLoadingConversation(true);
+    setConversation(session.views.get(wanted));
+    setLoadingConversation(!session.views.get(wanted));
     try {
       const payload = await api.getConversation(wanted);
       if (String(selectedIdRef.current) !== wanted) return;
@@ -536,10 +555,13 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
 
   useEffect(() => {
     let cancelled = false;
+    if (session.labels && Date.now() - session.labelsReadAt < 30_000) return;
     api
       .listConversationLabels(workspaceMode)
       .then((payload) => {
-        if (!cancelled) setLabels(asList(payload, ["labels"]));
+        const labels = asList(payload, ["labels"]);
+        session.labels = labels; session.labelsReadAt = Date.now();
+        if (!cancelled) setLabels(labels);
       })
       .catch(() => {
 
@@ -637,6 +659,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   useEffect(() => {
     if (readinessRefreshStartedRef.current) return;
     readinessRefreshStartedRef.current = true;
+    if (chatStatus) return;
     void refreshDomain("chat", { quiet: true }).catch(() => {});
   }, [refreshDomain]);
 
@@ -693,7 +716,8 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   const refreshPlugins = useCallback(async () => {
     setPluginLoadError("");
     try {
-      setPluginState(await api.getPlugins());
+      sharedPlugins.value = await api.getPlugins(); sharedPlugins.readAt = Date.now();
+      setPluginState(sharedPlugins.value);
     } catch (error) {
       setPluginState(null);
       setPluginLoadError(errorMessage(error));
@@ -701,7 +725,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   }, []);
 
   useEffect(() => {
-    void refreshPlugins();
+    if (!sharedPlugins.value || Date.now() - sharedPlugins.readAt > 30_000) void refreshPlugins();
   }, [refreshPlugins]);
 
   useEffect(() => {
@@ -736,7 +760,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       setConversation(null);
       return undefined;
     }
-    setLoadingConversation(true);
+    setLoadingConversation(!session.views.get(selectedId));
     api
       .getConversation(selectedId)
       .then((payload) => {
@@ -803,6 +827,17 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     followsTranscriptRef.current = true;
     setShowJumpToLatest(false);
   }, []);
+
+  useEffect(() => {
+    const transcript = transcriptRef.current;
+    const list = transcript?.querySelector(".message-list");
+    if (!list) return;
+    const observer = new ResizeObserver(() => {
+      if (followsTranscriptRef.current) transcript.scrollTop = transcript.scrollHeight;
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [selectedId, loadingConversation, conversation?.messages?.length, sending]);
 
   useEffect(() => {
     if (!actionsFor) return undefined;
@@ -989,6 +1024,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       }
       const taskId = generationTaskRef.current + 1;
       generationTaskRef.current = taskId;
+      const turnResearchMode = researchModeRef.current;
       setSending(true);
       let conversationId = requestedConversationId;
       try {
@@ -1035,7 +1071,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
               agentMode: agentModeRef.current,
               codeMode: workspaceModeRef.current === "code",
               workspaceMode: workspaceModeRef.current,
-              researchMode: researchModeRef.current,
+              researchMode: turnResearchMode,
               researchCommand: commandModes.research_mode,
               imageCommand: commandModes.image_mode,
             },
@@ -1118,6 +1154,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       if (!typed?.trim() || !imageAttachments?.length) return;
       const { content, modes: commandModes } = readComposerCommand(typed);
       const originalAttachments = [...imageAttachments, ...fileAttachments];
+      const turnResearchMode = researchModeRef.current;
       const taskId = generationTaskRef.current + 1;
       generationTaskRef.current = taskId;
       setSending(true);
@@ -1147,7 +1184,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
               agentMode: agentModeRef.current,
               codeMode: workspaceModeRef.current === "code",
               workspaceMode: workspaceModeRef.current,
-              researchMode: researchModeRef.current,
+              researchMode: turnResearchMode,
               researchCommand: commandModes.research_mode,
               imageCommand: commandModes.image_mode,
             },
@@ -1755,6 +1792,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       );
       locallyCreatedConversationIdsRef.current.delete(String(deletedId));
       session.drafts.delete(String(deletedId));
+      session.views.delete(deletedId); session.scroll.delete(deletedId);
       session.instructions.delete(String(deletedId));
       if (String(activeGenerationRef.current?.target_id) === String(deletedId)) {
         generationTaskRef.current += 1;
@@ -1896,7 +1934,6 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     () => composerPickerSections(pluginState),
     [pluginState],
   );
-  const webSearchPlugin = (pluginState?.plugins || []).find((plugin) => plugin.id === "web_search");
   const cookingActivityMessage = messages.find(
     (message) => String(message.id) === String(cookingActivityMessageId),
   );
@@ -1945,18 +1982,22 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     if (agentRunning) setResponseDetails(null);
   }, [agentRunning]);
 
-  const openComposerMenu = (menuId) => {
+  const openComposerMenu = (menuId, event) => {
+    closeNotifications();
+    composerMenuKeyboardRef.current = event?.detail === 0;
     setComposerMenu((current) => toggleComposerMenu(current, menuId));
   };
   const closeComposerMenu = () => setComposerMenu(null);
   const openSettings = (view) => {
+    closeNotifications();
     setComposerMenu(null);
     setCookingActivityMessageId(null);
     setSettingsView(view);
     setInspectorOpen(true);
   };
   useEffect(() => {
-    if (settingsRequest) openSettings(settingsRequest.section);
+    if (settingsRequest?.close) { setInspectorOpen(false);setComposerMenu(null);setCookingActivityMessageId(null); }
+    else if (settingsRequest) openSettings(settingsRequest.section);
   }, [settingsRequest]);
   const reviewHostAction = (proposal) => {
     if (!proposal) return;
@@ -2217,6 +2258,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
 
 
 
+                    {!agentRunning ? <LiveResponse key={activeGeneration?.id} operation={activeGeneration} /> : null}
                     <ResearchProgress
                       details={
                         activeGeneration?.result || activeGeneration?.details
@@ -2346,28 +2388,12 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     ref={(element) => composerMenuTriggerRefs.current.set("attachments", element)}
                     type="button"
                     className="composer-tool composer-tool--icon"
-                    aria-label="Add to message"
-                    aria-haspopup="menu"
-                    aria-expanded={composerMenu === "attachments"}
-                    aria-controls="composer-attachments-menu"
-                    title="Add to message"
-                    onClick={() => openComposerMenu("attachments")}
+                    aria-label="Add files"
+                    title="Add images, documents or code"
+                    onClick={() => attachmentInputRef.current?.click()}
                   >
                     <Plus aria-hidden="true" />
                   </button>
-                  {composerMenu === "attachments" ? (
-                    <ComposerPopover id="composer-attachments-menu" label="Add to message" onClose={closeComposerMenu}>
-                      <ComposerMenuItem
-                        icon={Paperclip}
-                        label="Add files"
-                        description="Choose images, documents, code, archives, or other local files"
-                        onSelect={() => {
-                          closeComposerMenu();
-                          attachmentInputRef.current?.click();
-                        }}
-                      />
-                    </ComposerPopover>
-                  ) : null}
                 </div>
                 <div className="composer-control composer-control--research">
                   <button
@@ -2405,7 +2431,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     aria-haspopup="menu"
                     aria-expanded={composerMenu === "authority"}
                     aria-controls="composer-authority-menu"
-                    onClick={() => openComposerMenu("authority")}
+                    onClick={(event) => openComposerMenu("authority", event)}
                   >
                     {generationSettings.computer_authority_mode === "full_access"
                       ? <ShieldCheck aria-hidden="true" />
@@ -2415,8 +2441,8 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                   </button>
                   {composerMenu === "authority" ? (
                     <ComposerPopover
-                      id="composer-authority-menu"
-                      label="Computer authority"
+                      id="composer-authority-menu" autoFocus={composerMenuKeyboardRef.current}
+                      label="Permissions"
                       onClose={closeComposerMenu}
                     >
                       {COMPUTER_AUTHORITY_MODES.map((mode) => (
@@ -2426,7 +2452,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                             ? Check
                             : mode.id === "full_access" ? ShieldCheck : ShieldQuestion}
                           label={mode.label}
-                          description={mode.description}
+                          description={mode.id === "full_access" ? "Run actions without asking" : "Ask before each action"}
                           selected={mode.id === generationSettings.computer_authority_mode}
                           radio
                           onSelect={() => {
@@ -2447,14 +2473,14 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     aria-haspopup="menu"
                     aria-expanded={composerMenu === "plugins"}
                     aria-controls="composer-plugins-menu"
-                    onClick={() => openComposerMenu("plugins")}
+                    onClick={(event) => openComposerMenu("plugins", event)}
                   >
                     <Plug aria-hidden="true" />
                     <span>Tools</span>
                   </button>
                   {composerMenu === "plugins" ? (
                     <ComposerPopover
-                      id="composer-plugins-menu"
+                      id="composer-plugins-menu" autoFocus={composerMenuKeyboardRef.current}
                       label="Tools and connected apps"
                       onClose={closeComposerMenu}
                     >
@@ -2577,27 +2603,31 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     aria-controls="composer-cooking-menu"
                     aria-label={`Cooking mode: ${cookingModeLabel(cookingMode)}`}
                     title={chatStatus?.runtime_controls?.reasoning_control?.reason}
-                    onClick={() => openComposerMenu("cooking")}
+                    onClick={(event) => openComposerMenu("cooking", event)}
                   >
                     <ChefHat aria-hidden="true" />
                     <span>{cookingModeLabel(cookingMode)}</span>
                     <ChevronDown aria-hidden="true" />
                   </button>
                   {composerMenu === "cooking" ? (
-                    <ComposerPopover id="composer-cooking-menu" label="Cooking" onClose={closeComposerMenu} align="right">
+                    <ComposerPopover id="composer-cooking-menu" autoFocus={composerMenuKeyboardRef.current} label="Response mode" onClose={closeComposerMenu} align="right">
                       {COOKING_MODES.map((mode) => (
-                        <ComposerMenuItem
+                        <button
                           key={mode.id}
-                          icon={mode.id === cookingMode ? Check : ChefHat}
-                          label={mode.label}
-                          description={mode.description}
-                          selected={mode.id === cookingMode}
-                          radio
-                          onSelect={() => {
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={mode.id === cookingMode}
+                          className="response-mode-option"
+                          title={mode.description}
+                          onClick={() => {
                             setGenerationSettings((current) => ({ ...current, reasoning_mode: mode.id }));
                             closeComposerMenu();
                           }}
-                        />
+                        >
+                          {mode.id === "instant" ? <Zap aria-hidden="true" /> : <ChefHat aria-hidden="true" />}
+                          <span><strong>{mode.label}</strong><small>{mode.id === "instant" ? "Quick replies" : "More time to reason"}</small></span>
+                          {mode.id === cookingMode ? <Check className="response-mode-option__check" aria-hidden="true" /> : <span />}
+                        </button>
                       ))}
                     </ComposerPopover>
                   ) : null}
@@ -2717,10 +2747,6 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
           : settingsView === "plugins" ? (
             <PluginsSettingsSheet embedded active={false} title="Connections" onClose={() => setInspectorOpen(false)}>
               <PluginsPanel
-                automaticWebSearch={{
-                  available: webSearchPlugin?.availability === "available",
-                  enabled: generationSettings.web_search_enabled,
-                }}
                 connections={pluginConnections}
                 automationAdapter={AUTOMATION_ADAPTER}
                 proposedInvocation={selectedActionProposal}
@@ -2811,9 +2837,6 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                 error={pluginLoadError}
                 onRetry={refreshPlugins}
                 busyId={pluginBusyId}
-                onAutomaticWebSearchChange={(enabled) => {
-                  setGenerationSettings((current) => ({ ...current, web_search_enabled: enabled }));
-                }}
                 onConnect={(connectorId) => {
                   setPluginError("");
                   setPluginSetup({ connectorId, mode: "connect" });
@@ -2995,10 +3018,11 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   );
 }
 
-function ComposerPopover({ id, label, align = "left", children }) {
+function ComposerPopover({ id, label, align = "left", autoFocus = false, children }) {
   const menuRef = useRef(null);
 
   useEffect(() => {
+    if (!autoFocus) return;
     const firstItem = menuRef.current?.querySelector(
       '[role="menuitem"]:not(:disabled),[role="menuitemradio"]:not(:disabled)',
     );

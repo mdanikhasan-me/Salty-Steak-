@@ -188,7 +188,7 @@ export function AgentActivityPanel({
   const budget = task.mission_budget || {};
   const remaining = elapsedLabel(budget.remaining_seconds);
   const liveSummary = String(
-    current?.reason || preview.summary || STATE_COPY[state] || "Working on your request",
+    current?.reason || STATE_COPY[state] || "Working on your request",
   );
   const totalOutputTokens = Number(metrics.planning_output_tokens);
   const liveCounts = [
@@ -249,7 +249,7 @@ export function AgentActivityPanel({
           <section className="agent-activity__live" role="status" aria-live="polite">
             <span className="agent-activity__section-label">Now</span>
             <strong>{readableReason(liveSummary)}</strong>
-            {liveCounts.length ? (
+            {showDetail && liveCounts.length ? (
               <dl className="agent-activity__live-metrics" aria-label="Live task telemetry">
                 {liveCounts.map((item) => (
                   <div key={item.label}>
