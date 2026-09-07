@@ -3084,7 +3084,14 @@ class ChatService:
                     "Image analyses use the explicit vision retry action so the "
                     "same checksum-bound image can be re-approved."
                 )
-            if isinstance(details, dict) and details.get("host_action"):
+            host_action = details.get("host_action") if isinstance(details, dict) else None
+            no_action_requested = isinstance(host_action, dict) and (
+                host_action.get("state") == "not_requested"
+                and not host_action.get("intent")
+                and not host_action.get("execution_requested")
+                and not host_action.get("execution_performed")
+            )
+            if host_action and not no_action_requested:
                 raise ValueError(
                     "Computer actions cannot be retried as model responses. Use the "
                     "action's explicit confirmation control."

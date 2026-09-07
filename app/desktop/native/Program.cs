@@ -657,6 +657,7 @@ internal sealed class MainWindow : Form
         this.interfaceReady = interfaceReady;
         Text = "\u200B";
         Name = "SaltyPotatoMainWindow";
+        ShowIcon = false;
         AccessibleName = "Salty Steak";
         StartPosition = FormStartPosition.CenterScreen;
 
@@ -694,6 +695,7 @@ internal sealed class MainWindow : Form
         StartupTimeline.Mark("webview_control_object_created");
         Controls.Add(browser);
         Shown += OpenApplication;
+        Shown += (_, _) => { if (Icon is not null) NativeWindowIdentity.KeepTaskbarIcon(Handle, Icon.Handle); };
         FormClosed += (_, _) => { companion?.Close(); companion = null; };
         try {
             if (File.Exists(companionPreferencesPath)) companionPreferences = (JsonSerializer.Deserialize<CompanionPreferences>(File.ReadAllText(companionPreferencesPath)) ?? new()).Checked();
@@ -1426,6 +1428,12 @@ internal static class DesktopDiagnostics
 
 internal static class NativeWindowIdentity
 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+    // Hide the redundant caption icon, while retaining the large taskbar/Alt-Tab identity.
+    public static void KeepTaskbarIcon(IntPtr window, IntPtr icon) =>
+        SendMessage(window, 0x0080, new IntPtr(1), icon);
     private const string WindowMarker = "SaltyPotatoAI.NativeWindow.2";
     private const int RestoreWindow = 9;
     private const int DarkTitleBarAttribute = 20;

@@ -15,7 +15,22 @@ import rust from "highlight.js/lib/languages/rust";
 import go from "highlight.js/lib/languages/go";
 import yaml from "highlight.js/lib/languages/yaml";
 
-for (const [name, grammar] of Object.entries({cpp,python,javascript,typescript,json,css,xml,bash,powershell,sql,csharp,java,rust,go,yaml})) hljs.registerLanguage(name,grammar);
+function pythonScopes(engine) {
+  const grammar = python(engine);
+  // Preserve the upstream parser while exposing declaration/docstring scopes.
+  // These are lexical scopes, not substitutions in escaped HTML.
+  for (const mode of grammar.contains) {
+    if (mode.scope?.[1] === "keyword" && mode.scope?.[3]?.startsWith("title.")) mode.scope[1] = "type";
+    if (mode.className === "string") {
+      for (const variant of mode.variants || []) {
+        if (/'''|"""/.test(String(variant.begin))) variant.className = "doctag";
+      }
+    }
+  }
+  grammar.contains.push({ scope: "operator", match: /[-+*/%=<>!&|^~]+/, relevance: 0 });
+  return grammar;
+}
+for (const [name, grammar] of Object.entries({cpp,python:pythonScopes,javascript,typescript,json,css,xml,bash,powershell,sql,csharp,java,rust,go,yaml})) hljs.registerLanguage(name,grammar);
 const aliases = {"c++":"cpp",c:"cpp",h:"cpp",hpp:"cpp",js:"javascript",jsx:"javascript",ts:"typescript",tsx:"typescript",py:"python",sh:"bash",shell:"bash",ps1:"powershell",html:"xml",svg:"xml","c#":"csharp",cs:"csharp",rs:"rust",yml:"yaml"};
 const escape = text => text.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
 export function highlightCode(content, language) {

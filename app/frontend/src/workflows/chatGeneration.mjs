@@ -9,7 +9,9 @@ export function latestRetryableUserMessageId(messages) {
   }
   if (latestUserIndex < 0) return null;
   const latestUser = list[latestUserIndex];
-  if (latestUser?.technical_details?.host_action) return null;
+  const hostAction = latestUser?.technical_details?.host_action;
+  if (hostAction && !(hostAction.state === "not_requested" && !hostAction.intent
+      && !hostAction.execution_requested && !hostAction.execution_performed)) return null;
   const hasResponse = list
     .slice(latestUserIndex + 1)
     .some((message) => message?.role === "assistant" && !message?.pending);
