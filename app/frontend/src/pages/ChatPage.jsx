@@ -51,6 +51,8 @@ import { useShell } from "../components/AppShell.jsx";
 import { WorkspaceSettings, GeneralSettings, CompanionSettings } from "../components/WorkspaceSettings.jsx";
 import { GmailBrand, CalendarBrand, CloudBrand } from "../components/ConnectorBrand.jsx";
 import { workspaceModeDetails } from "../workflows/workspaceModes.mjs";
+import { recoverConversationDraft } from "../workflows/draftRecovery.mjs";
+import { createLatestWriter } from "../workflows/latestWriter.mjs";
 import { AboutPage } from "./AboutPage.jsx";
 import { Dialog } from "../components/Dialog.jsx";
 import { Field, FormActions } from "../components/Forms.jsx";
@@ -252,10 +254,8 @@ function persistWorkspace(mode, session) {
     drafts: [...session.drafts].slice(-32).map(([id, value]) => [id, { draft: value.draft, settings: value.settings }]),
     instructions: [...session.instructions].slice(-64),
   };
-  const previous = pendingWorkspaceSaves.get(mode) || Promise.resolve();
-  const next = previous.catch(() => {}).then(() => api.saveWorkspaceState(mode, snapshot));
-  pendingWorkspaceSaves.set(mode, next);
-  return next;
+  if (!pendingWorkspaceSaves.has(mode)) pendingWorkspaceSaves.set(mode, createLatestWriter(value => api.saveWorkspaceState(mode, value)));
+  return pendingWorkspaceSaves.get(mode)(snapshot);
 }
 export function ChatPage(props) {
   const { workspaceMode } = useShell();
@@ -297,7 +297,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   const conversations = useMemo(() => allConversations.filter((item) => (item.workspace_mode || "chat") === workspaceMode), [allConversations, workspaceMode]);
   const [selectedId, setSelectedId] = useState(() => {
     try {
-      return session.selectedId ?? window.sessionStorage.getItem(selectionKey);
+      return Object.hasOwn(session, "selectedId") ? session.selectedId : window.sessionStorage.getItem(selectionKey);
     } catch {
       return null;
     }
@@ -434,6 +434,12 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
 
   const draftSnapshot = useRef(null);
   draftSnapshot.current = { draft, attachments, settings: generationSettings, selectedId };
+  const restoreFailedDraft = useCallback((ownerId, content, files = []) => {
+    const restored = recoverConversationDraft({ drafts: session.drafts, ownerId,
+      selectedId: selectedIdRef.current, current: draftSnapshot.current, content, attachments: files });
+    if (restored) { setDraft(restored.draft); setAttachments(restored.attachments); }
+    void persistWorkspace(workspaceMode, session).catch(() => {});
+  }, [session, workspaceMode]);
   useEffect(() => () => {
     const latest = draftSnapshot.current;
     session.drafts.set(latest.selectedId || "new", latest);
@@ -974,7 +980,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
             kind: "success",
           });
         } catch (error) {
-          setDraft(typed);
+          restoreFailedDraft(requestedConversationId, typed);
           notify({ message: errorMessage(error), kind: "error" });
         } finally {
           setSending(false);
@@ -987,14 +993,15 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       let conversationId = requestedConversationId;
       try {
         let operation = await serialGenerationTransitionRef.current(async () => {
-          conversationId = conversationId || selectedIdRef.current;
           if (!conversationId) {
             const createdPayload = await api.createConversation(workspaceMode);
             const created = createdPayload?.conversation || createdPayload;
             conversationId = created.id;
             locallyCreatedConversationIdsRef.current.add(String(created.id));
-            selectConversation(created.id);
-            setConversation({ ...created, messages: created.messages || [] });
+            if (String(selectedIdRef.current || "") === String(requestedConversationId || "")) {
+              selectConversation(created.id);
+              setConversation({ ...created, messages: created.messages || [] });
+            }
             setResources((previous) => ({
               ...previous,
               conversations: [
@@ -1067,8 +1074,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
 
 
 
-          setDraft(content);
-          if (turnAttachments.length) setAttachments(turnAttachments);
+          restoreFailedDraft(conversationId, content, turnAttachments);
           notify({
             message: operation.error?.message || "Salty Steak could not complete this response.",
             kind: "error",
@@ -1080,12 +1086,11 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
         ]);
       } catch (error) {
         if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
-        setConversation((previous) => ({
+        if (String(selectedIdRef.current) === String(conversationId)) setConversation((previous) => ({
           ...previous,
           messages: (previous?.messages || []).filter((message) => !message.pending),
         }));
-        setDraft(content);
-        if (turnAttachments.length) setAttachments(turnAttachments);
+        restoreFailedDraft(conversationId, content, turnAttachments);
         if (error) notify({ message: errorMessage(error), kind: "error" });
       } finally {
         if (ownsGenerationTask(generationTaskRef.current, taskId)) {
@@ -1119,14 +1124,15 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       let conversationId = requestedConversationId;
       try {
         let operation = await serialGenerationTransitionRef.current(async () => {
-          conversationId = conversationId || selectedIdRef.current;
           if (!conversationId) {
             const createdPayload = await api.createConversation(workspaceMode);
             const created = createdPayload?.conversation || createdPayload;
             conversationId = created.id;
             locallyCreatedConversationIdsRef.current.add(String(created.id));
-            selectConversation(created.id);
-            setConversation({ ...created, messages: created.messages || [] });
+            if (String(selectedIdRef.current || "") === String(requestedConversationId || "")) {
+              selectConversation(created.id);
+              setConversation({ ...created, messages: created.messages || [] });
+            }
             setResources((previous) => ({
               ...previous,
               conversations: [created, ...previous.conversations.filter((item) => item.id !== created.id)],
@@ -1175,8 +1181,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
           setConversation(refreshed?.conversation || refreshed);
         }
         if (operation.state === "failed") {
-          setDraft(content);
-          setAttachments(originalAttachments);
+          restoreFailedDraft(conversationId, content, originalAttachments);
           notify({
             message: operation.error?.message || "Salty Steak could not analyze this image.",
             kind: "error",
@@ -1188,8 +1193,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
         ]);
       } catch (error) {
         if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
-        setDraft(content);
-        setAttachments(originalAttachments);
+        restoreFailedDraft(conversationId, content, originalAttachments);
         if (error) notify({ message: errorMessage(error), kind: "error" });
       } finally {
         if (ownsGenerationTask(generationTaskRef.current, taskId)) {
@@ -1243,6 +1247,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   }
 
   async function attachFiles(event) {
+    const ownerId = selectedIdRef.current;
     const selected = Array.from(event.target.files || []);
     event.target.value = "";
     if (!selected.length) return;
@@ -1295,7 +1300,12 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       }
     }
     if (accepted.length) {
-      setAttachments((current) => [...current, ...accepted]);
+      if (String(ownerId || "") === String(selectedIdRef.current || "")) {
+        setAttachments((current) => [...current, ...accepted]);
+      } else {
+        const saved = session.drafts.get(ownerId || "new") || {};
+        session.drafts.set(ownerId || "new", { ...saved, attachments: [...(saved.attachments || []), ...accepted] });
+      }
     }
     if (rejected.length) notify({ message: rejected.join(" "), kind: "error" });
   }
@@ -1309,12 +1319,13 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     setGenerationActionBusy(true);
     try {
       const terminal = await serialGenerationTransitionRef.current(async () => {
-        const current = activeGenerationRef.current || requested || activeGeneration;
+        const current = candidate;
         if (!current?.id || generationTerminal(current)) return current;
         let acknowledged = await api.stopOperation(
           current.id,
           api.makeRequestKey(),
         );
+        applyOperations([acknowledged]);
         activeGenerationRef.current = acknowledged;
         if (ownsGenerationTask(generationTaskRef.current, taskId)) {
           setActiveGeneration(acknowledged);
@@ -1331,6 +1342,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
         return acknowledged;
       });
       if (generationTerminal(terminal)) {
+        applyOperations([terminal]);
         setSending(false);
         setActiveGeneration(null);
         activeGenerationRef.current = null;
@@ -1340,7 +1352,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
           String(selectedIdRef.current) === String(owner)
         ) {
           const refreshed = await api.getConversation(owner);
-          setConversation(refreshed?.conversation || refreshed);
+          if (String(selectedIdRef.current) === String(owner)) setConversation(refreshed?.conversation || refreshed);
         }
       }
     } catch (error) {
@@ -1352,7 +1364,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   }
 
   async function retryUserMessage(userMessageId) {
-    if (!selectedId || generationActionBusy) return;
+    if (!selectedId || generationActionBusy || (globalActiveGeneration && !ownsConversationGeneration(globalActiveGeneration, selectedId))) return;
     const taskId = generationTaskRef.current + 1;
     generationTaskRef.current = taskId;
     const conversationId = selectedId;
@@ -1389,12 +1401,14 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
           conversationId,
           userMessageId,
           api.makeRequestKey(),
-          generationSettingsForRequest(
+          generationTurnSettingsForRequest(
             generationSettings,
             DEFAULT_GENERATION_SETTINGS,
+            { agentMode, codeMode: workspaceMode === "code", workspaceMode, researchMode },
           ),
         );
         activeGenerationRef.current = submitted;
+        applyOperations([submitted], { announceTransitions: false });
         return submitted;
       });
       if (ownsGenerationTask(generationTaskRef.current, taskId)) {
@@ -1406,8 +1420,9 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
           activeGenerationRef.current = current;
           setActiveGeneration(current);
         }
-      });
+      }, () => ownsGenerationTask(generationTaskRef.current, taskId));
       if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
+      applyOperations([operation]);
       const refreshed = await api.getConversation(conversationId);
       if (String(selectedIdRef.current) === String(conversationId)) {
         setConversation(refreshed?.conversation || refreshed);
@@ -1498,7 +1513,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
         if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
         activeGenerationRef.current = current;
         setActiveGeneration(current);
-      });
+      }, () => ownsGenerationTask(generationTaskRef.current, taskId));
       if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
       const refreshed = await api.getConversation(conversationId);
       if (String(selectedIdRef.current) === String(conversationId)) {
@@ -2140,7 +2155,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                   copied={copiedId === message.id}
                   onCopy={() => copyMessage(message)}
                   retryEligible={message.id === retryableUserMessageId}
-                  retryBusy={generationActionBusy}
+                  retryBusy={generationActionBusy || Boolean(globalActiveGeneration && !ownsConversationGeneration(globalActiveGeneration, selectedId))}
                   onRetry={() => retryUserMessage(message.id)}
                   cookingOpen={String(cookingActivityMessageId) === String(message.id)}
                   onOpenCooking={(event) => toggleCookingActivity(message.id, event)}
@@ -2535,7 +2550,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     <ChevronDown aria-hidden="true" />
                   </button>
                 </div>
-                {chatStatus?.image_generation?.available ? (
+                {workspaceMode === "chat" && chatStatus?.image_generation?.available ? (
                   <div className="composer-control composer-control--image">
                     <button
                       type="button"
@@ -2719,21 +2734,25 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     notify({ message: "Write what you want Base Steak 2.0 to analyze in this capture.", kind: "error" });
                     return;
                   }
+                  if (sending || globalActiveGeneration) return;
+                  const captureOwner = selectedIdRef.current;
+                  let conversationId = captureOwner;
+                  const taskId = ++generationTaskRef.current;
+                  setSending(true);
                   try {
                     const staged = await api.stageScreenCaptureForVision(captureResult.audit_record_id);
+                    if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
                     setInspectorOpen(false);
-                    setDraft("");
-                    const taskId = generationTaskRef.current + 1;
-                    generationTaskRef.current = taskId;
-                    setSending(true);
-                    let conversationId = selectedIdRef.current;
+                    if (String(selectedIdRef.current || "") === String(captureOwner || "") && draftSnapshot.current.draft === prompt) setDraft("");
                     if (!conversationId) {
                       const createdPayload = await api.createConversation(workspaceMode);
                       const created = createdPayload?.conversation || createdPayload;
                       conversationId = created.id;
                       locallyCreatedConversationIdsRef.current.add(String(created.id));
-                      selectConversation(created.id);
-                      setConversation({ ...created, messages: created.messages || [] });
+                      if (String(selectedIdRef.current || "") === String(captureOwner || "")) {
+                        selectConversation(created.id);
+                        setConversation({ ...created, messages: created.messages || [] });
+                      }
                       setResources((previous) => ({
                         ...previous,
                         conversations: [
@@ -2750,7 +2769,9 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                       staged.vision_input_token,
                       api.makeRequestKey(),
                       128,
+                      generationTurnSettingsForRequest(generationSettings, DEFAULT_GENERATION_SETTINGS, { agentMode, codeMode: workspaceMode === "code", workspaceMode, researchMode }),
                     );
+                    applyOperations([operation], { announceTransitions: false });
                     activeGenerationRef.current = operation;
                     setActiveGeneration(operation);
                     while (!generationTerminal(operation) && ownsGenerationTask(generationTaskRef.current, taskId)) {
@@ -2759,10 +2780,12 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                       activeGenerationRef.current = operation;
                       setActiveGeneration(operation);
                     }
+                    if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
+                    applyOperations([operation]);
                     const refreshed = await api.getConversation(conversationId);
-                    setConversation(refreshed?.conversation || refreshed);
+                    if (String(selectedIdRef.current) === String(conversationId)) setConversation(refreshed?.conversation || refreshed);
                     if (operation.state === "failed") {
-                      setDraft(prompt);
+                      restoreFailedDraft(conversationId, prompt);
                       notify({
                         message: operation.error?.message || "Salty Steak could not analyze this capture.",
                         kind: "error",
@@ -2773,12 +2796,15 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                       refreshDomain("chat", { quiet: true }),
                     ]);
                   } catch (error) {
-                    setDraft(prompt);
+                    if (!ownsGenerationTask(generationTaskRef.current, taskId)) return;
+                    restoreFailedDraft(conversationId, prompt);
                     notify({ message: errorMessage(error), kind: "error" });
                   } finally {
-                    activeGenerationRef.current = null;
-                    setActiveGeneration(null);
-                    setSending(false);
+                    if (ownsGenerationTask(generationTaskRef.current, taskId)) {
+                      activeGenerationRef.current = null;
+                      setActiveGeneration(null);
+                      setSending(false);
+                    }
                   }
                 }}
                 loading={!pluginState && !pluginLoadError}
@@ -3116,10 +3142,11 @@ function waitFor(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-async function awaitTerminalOperation(operation, onUpdate) {
+async function awaitTerminalOperation(operation, onUpdate, stillWatching = () => true) {
   let current = operation;
-  while (!generationTerminal(current)) {
+  while (!generationTerminal(current) && stillWatching()) {
     await waitFor(GENERATION_PREVIEW_POLL_MS);
+    if (!stillWatching()) break;
     current = await api.getOperation(current.id);
     onUpdate?.(current);
   }

@@ -257,7 +257,7 @@ export function ChatMessage({
               <AlertTriangle aria-hidden="true" />
               <p>
                 <strong>Response failed.</strong>{" "}
-                {generationFailure.message} Your message was kept and restored for retry.
+                {generationFailure.message} Your message was kept. You can retry this turn.
               </p>
             </div>
           ) : null}

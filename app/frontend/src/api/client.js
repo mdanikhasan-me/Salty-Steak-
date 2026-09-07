@@ -1,3 +1,6 @@
+import { createSharedRead } from "../workflows/sharedRead.mjs";
+import { createLatestWriter } from "../workflows/latestWriter.mjs";
+
 const API_ROOT = "/api";
 const REQUEST_TIMEOUT_MS = 15_000;
 const CHAT_TIMEOUT_MS = 960_000;
@@ -123,16 +126,9 @@ function operationRequest(path, body, requestKey) {
   });
 }
 
-const conversationReads = new Map();
-function readConversation(id) {
-  const key = String(id);
-  if (!conversationReads.has(key)) {
-    const promise = request(`/chat/conversations/${encodeURIComponent(key)}`)
-      .finally(() => conversationReads.delete(key));
-    conversationReads.set(key, promise);
-  }
-  return conversationReads.get(key);
-}
+const readConversation = createSharedRead(id => request(`/chat/conversations/${encodeURIComponent(id)}`));
+const readOperation = createSharedRead(id => request(`/operations/${encodeURIComponent(id)}`, { timeout: 5_000 }), { freshFor: 300 });
+const saveUiPreferences = createLatestWriter(preferences => request("/preferences/ui", { method: "POST", body: preferences }));
 
 export const api = {
   makeRequestKey,
@@ -251,14 +247,17 @@ export const api = {
   activateVersion: (id, requestKey) =>
     operationRequest(`/versions/${encodeURIComponent(id)}/activate`, {}, requestKey),
 
-  getOperation: (id) => request(`/operations/${encodeURIComponent(id)}`),
+  getOperation: readOperation,
   getOperationEvents: (id, filters = {}) =>
     request(withQuery(`/operations/${encodeURIComponent(id)}/events`, filters)),
   listOperations: (filters = {}) => request(withQuery("/operations", filters)),
   reconcileOperation: (requestKey) =>
     request(withQuery("/operations/reconcile", { request_key: requestKey })),
-  stopOperation: (id, requestKey) =>
-    operationRequest(`/operations/${encodeURIComponent(id)}/stop`, {}, requestKey),
+  stopOperation: async (id, requestKey) => {
+    const result = await operationRequest(`/operations/${encodeURIComponent(id)}/stop`, {}, requestKey);
+    readOperation.invalidate(id);
+    return result;
+  },
 
   getChatStatus: () => request("/chat/status"),
   inspectChatAttachment: (file) => {
@@ -338,7 +337,7 @@ export const api = {
   createConversation: (workspaceMode = "chat") => request("/chat/conversations", { method: "POST", body: { workspace_mode: workspaceMode } }),
   getWorkspaceState: (mode) => request(`/chat/workspaces/${encodeURIComponent(mode)}/state`),
   getUiPreferences: () => request("/preferences/ui"),
-  saveUiPreferences: (preferences) => request("/preferences/ui", { method: "POST", body: preferences }),
+  saveUiPreferences,
   saveWorkspaceState: (mode, state) => request(`/chat/workspaces/${encodeURIComponent(mode)}/state`, { method: "POST", body: state }),
   getConversation: readConversation,
   sendMessage: (

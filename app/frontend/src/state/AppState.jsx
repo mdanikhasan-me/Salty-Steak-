@@ -22,6 +22,7 @@ import {
   notificationReducer,
 } from "../workflows/notifications.mjs";
 import { companionIsWorking } from "../workflows/companionActivity.mjs";
+import { pollOperations } from "../workflows/operationPolling.mjs";
 
 const AppStateContext = createContext(null);
 
@@ -277,21 +278,8 @@ export function AppStateProvider({ children }) {
 
     async function poll() {
       const current = operationsRef.current;
-      const active = Object.values(current).filter(isActive);
       try {
-        let incoming;
-        if (active.length) {
-          const settled = await Promise.allSettled(
-            active.map((operation) => api.getOperation(operation.id)),
-          );
-          incoming = settled
-            .filter((result) => result.status === "fulfilled")
-            .map((result) => asOperation(result.value))
-            .filter(Boolean);
-        } else {
-          const payload = await api.listOperations({ active: true });
-          incoming = extractOperationList(payload);
-        }
+        const incoming = await pollOperations(current, api);
         if (!cancelled) {
           applyOperations(incoming);
           const completed = incoming.filter(

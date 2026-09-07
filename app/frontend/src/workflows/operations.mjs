@@ -121,6 +121,7 @@ export function mergeOperations(previous, incoming) {
   for (const operation of incoming || []) {
     if (!operation?.id) continue;
     const existing = next[operation.id];
+    if (existing && isTerminal(existing) && isActive(operation)) continue;
     const existingTime = Date.parse(existing?.updated_at || existing?.updatedAt || 0);
     const incomingTime = Date.parse(operation.updated_at || operation.updatedAt || 0);
     if (!existing || !Number.isFinite(existingTime) || !Number.isFinite(incomingTime) || incomingTime >= existingTime) {
@@ -146,6 +147,7 @@ export function notificationForTransition(previous, current) {
 
   const explicit = current?.result?.notification || current?.notification;
   if (to === "completed") {
+    if (["chat_generation", "chat_image_generation"].includes(normaliseToken(current.type)) && !explicit) return null;
     return {
       id: `${current.id}:completed`,
       kind: "success",
@@ -283,6 +285,7 @@ export function domainForOperation(type = "") {
     return "chat";
   }
   if (token === "chat_image_generation") return "chat";
+  if (token === "chat_generation" || token === "chat_host_action_execution") return "chat";
   if (["deletion", "version_deletion"].includes(token)) return "versions";
   if (["project_verification", "cache_clear"].includes(token)) return "project";
   return null;
