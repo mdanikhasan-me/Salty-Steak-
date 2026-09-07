@@ -637,6 +637,7 @@ internal sealed record PythonEnvironment(
 
 internal sealed class MainWindow : Form
 {
+    private readonly Icon captionIcon = NativeWindowIdentity.CreateEmptyCaptionIcon();
     private readonly string projectRoot;
     private readonly Uri applicationUri;
     private readonly WebView2 browser;
@@ -695,7 +696,8 @@ internal sealed class MainWindow : Form
         StartupTimeline.Mark("webview_control_object_created");
         Controls.Add(browser);
         Shown += OpenApplication;
-        Shown += (_, _) => { if (Icon is not null) NativeWindowIdentity.KeepTaskbarIcon(Handle, Icon.Handle); };
+        Shown += (_, _) => { if (Icon is not null) NativeWindowIdentity.SetWindowIcons(Handle, captionIcon.Handle, Icon.Handle); };
+        FormClosed += (_, _) => captionIcon.Dispose();
         FormClosed += (_, _) => { companion?.Close(); companion = null; };
         try {
             if (File.Exists(companionPreferencesPath)) companionPreferences = (JsonSerializer.Deserialize<CompanionPreferences>(File.ReadAllText(companionPreferencesPath)) ?? new()).Checked();
@@ -1431,9 +1433,24 @@ internal static class NativeWindowIdentity
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
 
-    // Hide the redundant caption icon, while retaining the large taskbar/Alt-Tab identity.
-    public static void KeepTaskbarIcon(IntPtr window, IntPtr icon) =>
-        SendMessage(window, 0x0080, new IntPtr(1), icon);
+    [DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr icon);
+
+    public static Icon CreateEmptyCaptionIcon()
+    {
+        using var bitmap = new Bitmap(16, 16, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        var handle = bitmap.GetHicon();
+        try { using var borrowed = Icon.FromHandle(handle); return (Icon)borrowed.Clone(); }
+        finally { DestroyIcon(handle); }
+    }
+
+    // Windows falls back to the large icon when the small icon is null. Supply
+    // an empty small icon so the taskbar identity cannot reappear in the caption.
+    public static void SetWindowIcons(IntPtr window, IntPtr caption, IntPtr taskbar)
+    {
+        SendMessage(window, 0x0080, IntPtr.Zero, caption);
+        SendMessage(window, 0x0080, new IntPtr(1), taskbar);
+    }
     private const string WindowMarker = "SaltyPotatoAI.NativeWindow.2";
     private const int RestoreWindow = 9;
     private const int DarkTitleBarAttribute = 20;
