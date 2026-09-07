@@ -25,6 +25,7 @@ export function CompanionSettings() {
   const [settings, setSettings] = useState(initialSettings);
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
+  const [workPreview, setWorkPreview] = useState(false);
   const native = Boolean(window.chrome?.webview);
   useEffect(() => {
     let cancelled = false;
@@ -53,12 +54,12 @@ export function CompanionSettings() {
     window.chrome?.webview?.postMessage({ type: "companion_settings", settings: next });
   };
   return <div className="preferences-page">
-    <h2>Companion</h2><p className="preferences-intro">Still at rest. One click, one short reaction.</p>
-    <div className="companion-preview-row"><div ref={host} className="companion-preview" aria-label="Otter preview" /><div className="companion-preview-actions">{["Curious", "Greeting", "Sleepy"].map((name) => <button type="button" key={name} disabled={!ready} onClick={() => host.current?.otter?.play(name)}>{name}</button>)}</div></div>
+    <h2>Companion</h2><p className="preferences-intro">Rests when idle. Uses the tablet while your AI works.</p>
+    <div className="companion-preview-row"><div ref={host} className="companion-preview" aria-label="Otter preview" /><div className="companion-preview-actions"><button type="button" disabled={!ready} aria-pressed={workPreview} onClick={() => { const next=!workPreview;setWorkPreview(next);host.current?.otter?.setWorking(next); }}>{workPreview ? "Stop preview" : "Preview working"}</button>{["Curious", "Greeting"].map((name) => <button type="button" key={name} disabled={!ready || workPreview} onClick={() => host.current?.otter?.play(name)}>{name}</button>)}</div></div>
     {error ? <p role="alert">{error}</p> : null}
     <label className="preference-row"><span>Desktop companion<small>{native ? "Sit above the Windows taskbar." : "Available in the Windows application."}</small></span><input type="checkbox" role="switch" aria-label="Desktop companion" checked={settings.enabled} disabled={!native} onChange={(event) => update({ enabled: event.target.checked })} /></label>
     <label className="preference-row"><span>Position<small>Adjust placement here.</small></span><select aria-label="Companion position" value={settings.position} onChange={(event) => update({ position: event.target.value })}><option value="right">Taskbar · right</option><option value="left">Taskbar · left</option></select></label>
     <label className="preference-row"><span>Size</span><select aria-label="Companion size" value={settings.size} onChange={(event) => update({ size: event.target.value })}><option value="small">Small</option><option value="medium">Medium</option></select></label>
-    <label className="preference-row"><span>Keep still<small>Disable click reactions on the desktop.</small></span><input type="checkbox" role="switch" aria-label="Keep companion still" checked={Boolean(settings.reducedMotion)} onChange={(event) => update({ reducedMotion: event.target.checked })} /></label>
+    <label className="preference-row"><span>Keep still<small>Disable working motion and click reactions.</small></span><input type="checkbox" role="switch" aria-label="Keep companion still" checked={Boolean(settings.reducedMotion)} onChange={(event) => update({ reducedMotion: event.target.checked })} /></label>
   </div>;
 }

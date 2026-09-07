@@ -67,3 +67,21 @@
   .app-toolbar--sidebar-open .workspace-brand { background:var(--canvas); }
 }
 @media(prefers-reduced-motion:reduce) { .conversation-workspace { animation:none; } }
+
+#composer-plugins-menu { width:286px; max-width:calc(100vw - 32px); padding:9px; border:0; border-radius:12px; background:#252729; box-shadow:0 10px 32px #0005; }
+#composer-plugins-menu>.composer-popover__title { display:none; }
+#composer-plugins-menu .plugin-picker { display:block; padding:0; gap:0; }
+#composer-plugins-menu .plugin-picker__section+.plugin-picker__section { margin-top:12px; padding-top:0; border:0; }
+#composer-plugins-menu .plugin-picker__section-title { display:block; margin:0; padding:7px 9px 5px; color:#8d939b; font-size:10px; font-weight:400; line-height:1.5; letter-spacing:0; text-transform:none; }
+#composer-plugins-menu .plugin-picker__row { display:grid; grid-template-areas:none; grid-template-columns:20px minmax(0,1fr) auto; grid-template-rows:auto; align-items:center; width:100%; min-height:36px; padding:7px 9px; gap:0 10px; border:0; border-radius:7px; background:transparent; text-align:left; }
+#composer-plugins-menu .plugin-picker__row:hover,#composer-plugins-menu .plugin-picker__row:focus-visible { background:#ffffff07; }
+#composer-plugins-menu .plugin-picker__icon { display:grid; place-items:center; grid-column:1; grid-row:1; width:20px; height:20px; color:#abb2bf; }
+#composer-plugins-menu .plugin-picker__icon svg { width:18px; height:18px; }
+#composer-plugins-menu .plugin-picker__text { display:block; grid-column:2; grid-row:1; min-width:0; }
+#composer-plugins-menu .plugin-picker__name { color:#d4d8de; font-size:12px; font-weight:400; line-height:1.5; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+#composer-plugins-menu .plugin-picker__state { grid-column:3; grid-row:1; font-size:10px; line-height:1.5; padding:0; color:#969daa; }
+#composer-plugins-menu .plugin-picker__state--connected { color:#9bbda6; }
+#composer-plugins-menu .plugin-picker__state--attention { color:#d3a383; }
+#composer-plugins-menu .plugin-picker__manage { display:flex; align-items:center; justify-content:space-between; width:100%; min-height:32px; margin-top:9px; padding:7px 9px; border:0; border-radius:7px; color:#afb6c1; font-size:11px; font-weight:400; background:#ffffff04; }
+#composer-plugins-menu .plugin-picker__manage:hover { background:#ffffff08; color:#e0e3e8; }
+#composer-plugins-menu .plugin-picker__manage svg { width:13px; height:13px; }

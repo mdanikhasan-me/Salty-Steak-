@@ -8,6 +8,7 @@ import {
   Check,
   ChefHat,
   ChevronDown,
+  ChevronRight,
   CircleAlert,
   FileText,
   Github,
@@ -48,6 +49,7 @@ import { ResponseSettingsSheet } from "../components/ResponseSettingsSheet.jsx";
 import { useModalFocusTrap } from "../hooks/useModalFocusTrap.js";
 import { useShell } from "../components/AppShell.jsx";
 import { WorkspaceSettings, GeneralSettings, CompanionSettings } from "../components/WorkspaceSettings.jsx";
+import { GmailBrand, CalendarBrand, CloudBrand } from "../components/ConnectorBrand.jsx";
 import { workspaceModeDetails } from "../workflows/workspaceModes.mjs";
 import { AboutPage } from "./AboutPage.jsx";
 import { Dialog } from "../components/Dialog.jsx";
@@ -205,10 +207,12 @@ export function pluginIcon(plugin) {
 
 
 const CONNECTED_APP_ICONS = {
-  gmail: Mail,
-  "mail.google": Mail,
-  google_calendar: CalendarDays,
-  icloud_calendar: CalendarDays,
+  gmail: GmailBrand,
+  "mail.google": GmailBrand,
+  google_calendar: CalendarBrand,
+  "google-calendar": CalendarBrand,
+  icloud_calendar: CloudBrand,
+  "icloud-calendar": CloudBrand,
   google_drive: HardDrive,
   discord: MessageCircle,
   github: Github,
@@ -2443,8 +2447,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                         {pickerSections.map((section) => (
                           <div className="plugin-picker__section" key={section.id}>
                             <p className="plugin-picker__section-title">
-                              {section.title}
-                              <span>{section.description}</span>
+                              {section.id === "connected_apps" ? "Connections" : section.title}
                             </p>
                             {section.rows.map((row) => {
                               const RowIcon =
@@ -2479,10 +2482,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                                     <RowIcon />
                                   </span>
                                   <span className="plugin-picker__text">
-                                    <span className="plugin-picker__name">{row.name}</span>
-                                    <span className="plugin-picker__description">
-                                      {row.detail}
-                                    </span>
+                                    <span className="plugin-picker__name">{row.id === "mcp" ? "MCP server" : row.name}</span>
                                   </span>
                                   <span
                                     className={`plugin-picker__state${
@@ -2515,7 +2515,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                           openSettings("plugins");
                         }}
                       >
-                        Manage connected apps
+                        <span>Connection settings</span><ChevronRight aria-hidden="true" />
                       </button>
                     </ComposerPopover>
                   ) : null}

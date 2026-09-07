@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { parseRichTextBlocks, tokenizeInline } from "../workflows/richText.mjs";
 
@@ -27,6 +27,15 @@ function RichBlock({ block }) {
 
 function CodeBlock({ block }) {
   const [copied, setCopied] = useState(false);
+  const [highlighted, setHighlighted] = useState(null);
+  useEffect(() => {
+    let active = true;
+    setHighlighted(null);
+    import("../workflows/syntaxHighlight.mjs").then(({ highlightCode }) => {
+      if (active) setHighlighted({ content:block.content, language:block.language, html:highlightCode(block.content,block.language) });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [block.content,block.language]);
   async function copy() {
     try {
       await navigator.clipboard.writeText(block.content);
@@ -45,7 +54,9 @@ function CodeBlock({ block }) {
           <span>{copied ? "Copied" : "Copy"}</span>
         </button>
       </div>
-      <pre><code>{block.content}</code></pre>
+      <pre>{highlighted?.content === block.content && highlighted.language === block.language
+        ? <code className="hljs" dangerouslySetInnerHTML={{__html:highlighted.html}} />
+        : <code>{block.content}</code>}</pre>
     </div>
   );
 }

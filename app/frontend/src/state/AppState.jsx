@@ -21,6 +21,7 @@ import {
 import {
   notificationReducer,
 } from "../workflows/notifications.mjs";
+import { companionIsWorking } from "../workflows/companionActivity.mjs";
 
 const AppStateContext = createContext(null);
 
@@ -53,6 +54,16 @@ export function AppStateProvider({ children }) {
   const [checkingRequests, setCheckingRequests] = useState({});
   const mountedRef = useRef(true);
   const pollDelayRef = useRef(750);
+  const companionWorking = companionIsWorking(operations, connection.online);
+  useEffect(() => {
+    const bridge=window.chrome?.webview;
+    if(!bridge)return undefined;
+    const notify=()=>bridge.postMessage({type:"companion_work",active:companionWorking});
+    notify();
+    if(!companionWorking)return undefined;
+    const heartbeat=window.setInterval(notify,1500);
+    return ()=>window.clearInterval(heartbeat);
+  },[companionWorking]);
 
   useEffect(() => {
     operationsRef.current = operations;

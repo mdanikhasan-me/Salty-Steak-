@@ -20,6 +20,9 @@ internal sealed class CompanionWindow : System.Windows.Window
     private CompanionPreferences preferences;
     private double baseline = .88;
     private bool disposed;
+    private bool working;
+    private DateTime lastWorkSignal;
+    private readonly System.Windows.Threading.DispatcherTimer watchdog = new() { Interval = TimeSpan.FromSeconds(2) };
 
     internal CompanionWindow(CoreWebView2Environment environment, Uri applicationUri, IntPtr mainHandle, CompanionPreferences preferences, Action<Exception> reportError)
     {
@@ -48,7 +51,8 @@ internal sealed class CompanionWindow : System.Windows.Window
             PlaceAtTaskbar();
         };
         Loaded += Initialize;
-        Closed += (_, _) => { disposed = true; webView.Dispose(); };
+        watchdog.Tick += (_, _) => { if (working && DateTime.UtcNow - lastWorkSignal > TimeSpan.FromSeconds(5)) ApplyWorkState(false); };
+        Closed += (_, _) => { disposed = true; watchdog.Stop(); webView.Dispose(); };
     }
 
     private async void Initialize(object sender, System.Windows.RoutedEventArgs args)
@@ -74,6 +78,7 @@ internal sealed class CompanionWindow : System.Windows.Window
                         baseline = Math.Clamp(number, .5, 1);
                         PlaceAtTaskbar();
                         ApplyPreferences(preferences);
+                        webView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new {type="companion_work", active=working}));
                     }
                 } catch (JsonException) { }
             };
@@ -89,6 +94,14 @@ internal sealed class CompanionWindow : System.Windows.Window
         preferences = next.Checked();
         PlaceAtTaskbar();
         webView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "companion_preferences", settings = preferences }));
+    }
+
+    internal void ApplyWorkState(bool active)
+    {
+        if(disposed)return;
+        working=active;lastWorkSignal=DateTime.UtcNow;
+        if(active)watchdog.Start();else watchdog.Stop();
+        webView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new {type="companion_work",active}));
     }
 
     private void PlaceAtTaskbar()

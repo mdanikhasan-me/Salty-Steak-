@@ -647,6 +647,7 @@ internal sealed class MainWindow : Form
     private CompanionWindow? companion;
     private CompanionPreferences companionPreferences = new();
     private bool reducedMotion;
+    private bool companionWorking;
     private readonly string companionPreferencesPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Salty Steak", "companion.json");
 
     public MainWindow(string projectRoot, string applicationUrl, Action interfaceReady)
@@ -782,14 +783,14 @@ internal sealed class MainWindow : Form
         if (!companionPreferences.enabled) { companion?.Close(); companion = null; return; }
         if (webViewEnvironment is null) return;
         var effective = companionPreferences with { reducedMotion = reducedMotion || companionPreferences.reducedMotion };
-        if (companion is not null) { companion.ApplyPreferences(effective); return; }
+        if (companion is not null) { companion.ApplyPreferences(effective); companion.ApplyWorkState(companionWorking); return; }
         var window = new CompanionWindow(webViewEnvironment, applicationUri, Handle, effective, error => {
             DesktopDiagnostics.Write(projectRoot, "companion_start_failed", error);
             browser.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "companion_error", message = "The desktop companion could not open. Re-enable it to retry." }));
         });
         companion = window;
         window.Closed += (_, _) => { if (ReferenceEquals(companion, window)) companion = null; };
-        try { window.Show(); } catch { companion = null; window.Close(); throw; }
+        try { window.Show(); window.ApplyWorkState(companionWorking); } catch { companion = null; window.Close(); throw; }
     }
 
     private void ConfigureBrowser(CoreWebView2 core)
@@ -856,6 +857,11 @@ internal sealed class MainWindow : Form
                 var messageType = root.TryGetProperty("type", out var type)
                     ? type.GetString()
                     : null;
+                if (messageType == "companion_work") {
+                    companionWorking = root.TryGetProperty("active", out var working) && working.ValueKind == JsonValueKind.True;
+                    companion?.ApplyWorkState(companionWorking);
+                    return;
+                }
                 if (messageType == "application_motion") {
                     reducedMotion = root.TryGetProperty("reducedMotion", out var motion) && motion.ValueKind == JsonValueKind.True;
                     ApplyCompanionPreferences();

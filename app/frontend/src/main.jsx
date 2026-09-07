@@ -6,6 +6,7 @@ import { AppStateProvider } from "./state/AppState.jsx";
 import "./styles/global.css";
 import "./styles/approved-workspace.css";
 import "./styles/workspace-polish.css";
+import "./styles/charming-palette.css";
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 

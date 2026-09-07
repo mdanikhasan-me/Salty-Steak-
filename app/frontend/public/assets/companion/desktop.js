@@ -2,6 +2,7 @@
 (async () => {
   const host=document.querySelector('#companion');
   const pet=await mountOtter(host);
+  let workRequested=false;
   const notifyBaseline=()=>{
     pet.draw();
     const source=pet.renderer.domElement, canvas=document.createElement('canvas');
@@ -15,8 +16,9 @@
   window.chrome?.webview?.addEventListener('message',event=>{
     if(event.data?.type==='companion_preferences'){
       document.documentElement.classList.toggle('reduce-motion',Boolean(event.data.settings.reducedMotion));
-      if(event.data.settings.reducedMotion)pet.reset();
+      pet.setWorking(workRequested);
     }
+    if(event.data?.type==='companion_work'){workRequested=Boolean(event.data.active);pet.setWorking(workRequested);}
   });
   notifyBaseline();
   window.addEventListener('contextmenu',event=>event.preventDefault());
