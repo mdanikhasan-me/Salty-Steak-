@@ -164,6 +164,7 @@ test("each composer turn sends explicit capability booleans without choosing the
 
 test("the Chat composer wires attachments, Plugins, model settings, and Cooking distinctly", async () => {
   const source = await readFile(new URL("../pages/ChatPage.jsx", import.meta.url), "utf8");
+  const responseControl = await readFile(new URL("../components/ResponseModeControl.jsx", import.meta.url), "utf8");
   const menuIds = [
     "composer-authority-menu",
     "composer-cooking-menu",
@@ -171,13 +172,13 @@ test("the Chat composer wires attachments, Plugins, model settings, and Cooking 
 
   for (const menuId of menuIds) {
     assert.match(source, new RegExp(`aria-controls=\\"${menuId}\\"`));
-    assert.match(source, new RegExp(`id=\\"${menuId}\\"`));
+    assert.match(source + responseControl, new RegExp(`id=\\"${menuId}\\"`));
   }
   assert.match(source, /aria-label="Add files"/);
   assert.match(source, /onClick=\{\(\) => attachmentInputRef\.current\?\.click\(\)\}/);
   assert.doesNotMatch(source, /id="composer-attachments-menu"/);
   assert.doesNotMatch(source, /label="Add photo"/);
-  assert.match(source, /reasoning_mode: mode\.id/);
+  assert.match(source, /reasoning_mode:mode/);
   assert.match(source, /context_window_tokens: 32_768/);
   assert.match(source, /maximum_output_mode: "automatic"/);
   assert.match(source, /maximum_output_tokens: 32_768/);

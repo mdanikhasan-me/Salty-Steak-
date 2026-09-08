@@ -72,7 +72,12 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
     const trigger = event?.currentTarget;
     const rect = trigger?.getBoundingClientRect();
     notificationTrigger.current = trigger;
-    if (rect) setNotificationAnchor({ left: Math.max(12, Math.min(innerWidth - 292, rect.left)), bottom: Math.max(12, innerHeight - rect.top + 8) });
+    if (rect) setNotificationAnchor({
+      left: Math.max(12, Math.min(innerWidth - 292, rect.left)),
+      ...(rect.top < innerHeight / 2
+        ? { top: rect.bottom + 8 }
+        : { bottom: Math.max(12, innerHeight - rect.top + 8) }),
+    });
     setSettingsRequest({ close: true, id: Date.now() });
     setNotificationsOpen(open => !open);
   }, []);

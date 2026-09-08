@@ -3,8 +3,8 @@ import {
   ChevronRight,
   Brain,
   Layers,
-  SlidersHorizontal,
-  Plug,
+  Settings,
+  CircleHelp,
   Bell,
   Folder,
   FolderOpen,
@@ -426,6 +426,7 @@ export function ConversationSidebar({
       inert={!open ? "" : undefined}
     >
       <div className="chat-sidebar__head">
+        <div className="chat-sidebar__quick-actions">
         <button
           type="button"
           className="chat-sidebar__new"
@@ -435,6 +436,8 @@ export function ConversationSidebar({
           <Plus aria-hidden="true" />
           <span>{creating ? "Creating" : mode === "code" ? "New coding task" : mode === "agent" ? "New task" : "New chat"}</span>
         </button>
+        <button type="button" className="sidebar-notifications-trigger" aria-label="Notifications" title="Notifications" onClick={onNotifications}><Bell aria-hidden="true" /></button>
+        </div>
         <label className="chat-sidebar__search">
           <Search aria-hidden="true" />
           <span className="sr-only">Search chats</span>
@@ -584,9 +587,8 @@ export function ConversationSidebar({
       <footer className="chat-sidebar__footer">
         <button type="button" className="training-destination" onClick={onTraining}><Layers aria-hidden="true" /><span>Models & training</span><ChevronRight aria-hidden="true" /></button>
         <div className="sidebar-utilities">
-          <button type="button" aria-label="Settings" title="Settings" onClick={() => onSettings?.("general")}><SlidersHorizontal aria-hidden="true" /></button>
-          <button type="button" aria-label="Connections" title="Connections" onClick={() => onSettings?.("plugins")}><Plug aria-hidden="true" /></button>
-          <button type="button" aria-label="Notifications" title="Notifications" onClick={onNotifications}><Bell aria-hidden="true" /></button>
+          <button type="button" className="sidebar-settings-trigger" aria-label="Settings" onClick={() => onSettings?.("general")}><Settings aria-hidden="true" /><span>Settings</span></button>
+          <button type="button" aria-label="About Salty Steak" title="About Salty Steak" onClick={() => onSettings?.("about")}><CircleHelp aria-hidden="true" /></button>
         </div>
       </footer>
     </aside>

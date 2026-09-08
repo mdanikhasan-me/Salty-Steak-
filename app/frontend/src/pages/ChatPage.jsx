@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AppWindow,
-  Bot,
   Brain,
   CalendarDays,
   Camera,
@@ -32,7 +31,6 @@ import {
   Trash2,
   Video,
   X,
-  Zap,
 } from "lucide-react";
 import { api, asList } from "../api/client.js";
 import { ChatMessage } from "../components/ChatMessage.jsx";
@@ -48,6 +46,7 @@ import { PluginConnectionDialog } from "../components/PluginConnectionDialog.jsx
 import { PluginsPanel } from "../components/PluginsPanel.jsx";
 import { MemoryPanel } from "../components/MemoryPanel.jsx";
 import { ResponseSettingsSheet } from "../components/ResponseSettingsSheet.jsx";
+import { ResponseModeControl } from "../components/ResponseModeControl.jsx";
 import { useModalFocusTrap } from "../hooks/useModalFocusTrap.js";
 import { useShell } from "../components/AppShell.jsx";
 import { WorkspaceSettings, GeneralSettings, CompanionSettings } from "../components/WorkspaceSettings.jsx";
@@ -96,7 +95,6 @@ import {
   shouldFollowTranscript,
 } from "../workflows/transcriptScroll.mjs";
 import {
-  COOKING_MODES,
   COMPUTER_AUTHORITY_MODES,
   computerAuthorityLabel,
   cookingModeLabel,
@@ -867,6 +865,8 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     function closeOnEscape(event) {
       const trigger = composerMenuTriggerRefs.current.get(composerMenu);
       if (["ArrowDown", "ArrowUp"].includes(event.key) && document.activeElement === trigger) {
+        const slider = document.querySelector(`#composer-${composerMenu}-menu input[type="range"]`);
+        if (slider) { event.preventDefault(); slider.focus(); return; }
         const items = document.querySelectorAll(`#composer-${composerMenu}-menu [role="menuitem"],#composer-${composerMenu}-menu [role="menuitemradio"]`);
         const enabled = [...items].filter(item=>!item.disabled);
         event.preventDefault();
@@ -2468,7 +2468,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     </ComposerPopover>
                   ) : null}
                 </div>
-                <div className="composer-control">
+                <div className="composer-control composer-control--plugins">
                   <button
                     ref={(element) => composerMenuTriggerRefs.current.set("plugins", element)}
                     type="button"
@@ -2575,7 +2575,6 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     aria-label={`Model: ${activeModelLabel}`}
                     onClick={() => openSettings("response")}
                   >
-                    <Bot aria-hidden="true" />
                     <span>{activeModelLabel}</span>
                     <ChevronDown aria-hidden="true" />
                   </button>
@@ -2602,7 +2601,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     ref={(element) => composerMenuTriggerRefs.current.set("cooking", element)}
                     type="button"
                     className="composer-selector composer-selector--cooking"
-                    aria-haspopup="menu"
+                    aria-haspopup="dialog"
                     aria-expanded={composerMenu === "cooking"}
                     aria-controls="composer-cooking-menu"
                     aria-label={`Cooking mode: ${cookingModeLabel(cookingMode)}`}
@@ -2614,26 +2613,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     <ChevronDown aria-hidden="true" />
                   </button>
                   {composerMenu === "cooking" ? (
-                    <ComposerPopover id="composer-cooking-menu" autoFocus={composerMenuKeyboardRef.current} label="Response mode" onClose={closeComposerMenu} align="right">
-                      {COOKING_MODES.map((mode) => (
-                        <button
-                          key={mode.id}
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={mode.id === cookingMode}
-                          className="response-mode-option"
-                          title={mode.description}
-                          onClick={() => {
-                            setGenerationSettings((current) => ({ ...current, reasoning_mode: mode.id }));
-                            closeComposerMenu();
-                          }}
-                        >
-                          {mode.id === "instant" ? <Zap aria-hidden="true" /> : <ChefHat aria-hidden="true" />}
-                          <span><strong>{mode.label}</strong><small>{mode.id === "instant" ? "Quick replies" : "More time to reason"}</small></span>
-                          {mode.id === cookingMode ? <Check className="response-mode-option__check" aria-hidden="true" /> : <span />}
-                        </button>
-                      ))}
-                    </ComposerPopover>
+                    <ResponseModeControl value={cookingMode} modelLabel={activeModelLabel} autoFocus={composerMenuKeyboardRef.current} onChange={mode=>setGenerationSettings(current=>({...current,reasoning_mode:mode}))}/>
                   ) : null}
                 </div>
               </div>
