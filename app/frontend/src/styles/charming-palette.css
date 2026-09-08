@@ -1,16 +1,16 @@
 /* Neutral surfaces carry reading hierarchy; ember marks primary actions. */
 :root {
-  --chrome:#151515; --rail:#171717; --canvas:#202020;
-  --surface-muted:#2a2a2a; --surface:#303030; --surface-raised:#3a3a3a;
-  --surface-soft:#444444; --popover:#2c2c2c;
+  --chrome:#111111; --rail:#131313; --canvas:#1b1b1b;
+  --surface-muted:#242424; --surface:#292929; --surface-raised:#323232;
+  --surface-soft:#3a3a3a; --popover:#252525;
   --ink:#f1f0ed; --ink-soft:#deddd9; --muted:#bbb9b4; --muted-light:#aaa8a3;
   --accent:#dea17b; --accent-dark:#efb28c; --accent-soft:#dea17b12; --focus:#ddd6ce;
   --success:#a5c4a5; --info:#a6bfd0; --warning:#dbc080; --danger:#e1a09a;
 }
 :root[data-theme="warm"] {
-  --chrome:#1d1a17; --rail:#211e1a; --canvas:#29251f;
-  --surface-muted:#322d26; --surface:#3a342b; --surface-raised:#433c32;
-  --surface-soft:#4c4439; --popover:#373127;
+  --chrome:#181512; --rail:#1b1815; --canvas:#221f1a;
+  --surface-muted:#2b2621; --surface:#322c24; --surface-raised:#3a332b;
+  --surface-soft:#423b31; --popover:#2e2922;
   --ink:#f3ece1; --ink-soft:#dfd4c3; --muted:#c0b29e; --muted-light:#b7a994;
 }
 .workspace-modes { background:transparent; }
@@ -46,7 +46,7 @@
 .message__content h1,.message__content h2,.message__content h3 { color:var(--ink); }
 .message__content code:not(pre code) { background:#e3a5780c; color:#edc2a1; }
 .conversation-workspace .rich-code { background:#000; }
-.conversation-workspace .rich-code__bar { background:#101010; color:#aaa; font-size:12px; }
+.conversation-workspace .rich-code__bar { background:#0c0c0c; color:#aaa; font-size:12px; }
 .conversation-workspace .rich-code pre { background:#000; color:#d4d4d4; font:400 13px/1.75 "Cascadia Code",Consolas,monospace; padding:17px 19px 20px; }
 .conversation-workspace .rich-code pre code { font:inherit; color:inherit; }
 .conversation-workspace .rich-code pre code span { font-weight:400; }
@@ -103,7 +103,7 @@
 .message-scroll { padding-top:34px; padding-bottom:38px; }
 .conversation-workspace:not(.conversation-workspace--empty)>.composer { margin-top:18px; }
 .conversation-workspace .rich-code { overflow:clip; }
-.conversation-workspace .rich-code__bar { position:sticky; top:0; z-index:2; padding:10px 17px; }
+.conversation-workspace .rich-code__bar { position:static; padding:10px 17px; }
 .conversation-workspace .rich-code pre { font-size:14px; line-height:1.7; }
 .conversation-workspace .rich-code__bar button { color:#c7c7c7; }
 .workspace-settings__navigation { background:var(--rail); padding:24px 14px; }
