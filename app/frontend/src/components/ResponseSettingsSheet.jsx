@@ -25,6 +25,7 @@ export function ResponseSettingsSheet({
   modelDetail = "Choose a local language model",
   modelReady = false,
   modelStatusLabel,
+  modelBusy = false,
   settings,
   onSettingsChange,
   onModelChange,
@@ -53,7 +54,6 @@ export function ResponseSettingsSheet({
     if (initialSection !== "image") return undefined;
     const frame = window.requestAnimationFrame(() => {
       imageSectionRef.current?.scrollIntoView({ block: "start" });
-      imageSectionRef.current?.querySelector("select")?.focus();
     });
     return () => window.cancelAnimationFrame(frame);
   }, [initialSection]);
@@ -121,7 +121,7 @@ export function ResponseSettingsSheet({
             <span>Use model</span>
             <select
               value={String(selectedModelId || availableModels[0]?.id || "")}
-              disabled={!onModelChange || !availableModels.length}
+              disabled={modelBusy || !onModelChange || !availableModels.length}
               onChange={(event) => onModelChange?.(event.currentTarget.value)}
             >
               {availableModels.map((model) => (

@@ -865,9 +865,16 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
       if (!event.target.closest(".composer-control")) setComposerMenu(null);
     }
     function closeOnEscape(event) {
+      const trigger = composerMenuTriggerRefs.current.get(composerMenu);
+      if (["ArrowDown", "ArrowUp"].includes(event.key) && document.activeElement === trigger) {
+        const items = document.querySelectorAll(`#composer-${composerMenu}-menu [role="menuitem"],#composer-${composerMenu}-menu [role="menuitemradio"]`);
+        const enabled = [...items].filter(item=>!item.disabled);
+        event.preventDefault();
+        (event.key === "ArrowUp" ? enabled.at(-1) : enabled[0])?.focus();
+        return;
+      }
       if (event.key !== "Escape") return;
       event.preventDefault();
-      const trigger = composerMenuTriggerRefs.current.get(composerMenu);
       setComposerMenu(null);
       window.requestAnimationFrame(() => trigger?.focus());
     }
@@ -2872,7 +2879,8 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
               modelLabel={activeModelLabel}
               modelDetail={readiness.key === "ready" ? "Loaded for this conversation" : readiness.label}
               modelReady={readiness.key === "ready"}
-              modelStatusLabel={modelActivationBusy ? "Loading" : undefined}
+              modelBusy={modelActivationBusy}
+              modelStatusLabel={modelActivationBusy ? "Loading" : readiness.key === "preparing" ? "Preparing" : readiness.key === "ready" ? "Ready" : readiness.label}
               settings={generationSettings}
               onSettingsChange={setGenerationSettings}
               onModelChange={selectConversationModel}

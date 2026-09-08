@@ -207,6 +207,10 @@
 .research-source-list strong { display:block; font-size:12px; font-weight:450; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .research-source-list small { display:block; margin-top:3px; color:var(--muted); font-size:11px; }
 .research-source-list svg { width:13px; height:13px; color:var(--success); }
+.research-source-summary .research-source-toggle { width:13px; height:13px; color:var(--muted); transition:transform 120ms ease; }
+.research-source-summary .research-source-toggle[data-open] { transform:rotate(180deg); }
+.research-source-error-icon { width:14px; height:14px; color:var(--warning); }
+.research-source-error { margin:5px 0 0; color:var(--muted); font-size:12px; line-height:1.5; }
 
 /* Mode-specific reading density, without three competing color systems. */
 .app-shell[data-workspace-mode="chat"] .workspace-modes::before { background:#ffffff0e; }

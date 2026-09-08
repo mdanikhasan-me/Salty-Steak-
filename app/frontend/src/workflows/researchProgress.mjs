@@ -57,6 +57,7 @@ export function researchWaves(progress) {
       verified,
       rejected,
       validation: Boolean(wave.validation),
+      failed,
       detail: failed ? String(wave.error || "Try again when the search service is available.") : detailFor({ opened, verified, rejected, done }),
       sites: sites.map((site) => ({
         host: niceHost(site.host),
@@ -93,13 +94,25 @@ export function researchProgress(details) {
   for (const wave of waves) {
     for (const site of wave.sites) sites.add(site.host);
   }
+  const latestWave = waves.at(-1);
+  const failure = latestWave?.failed ? latestWave.detail : "";
   const running = waves.some((wave) => wave.running);
+  const sourceStates = new Map();
+  const rank = { found: 0, skipped: 0, rejected: 1, reading: 2, read: 3, validated: 4, verified: 4 };
+  for (const wave of waves) for (const site of wave.sites) {
+    if (!/^https?:\/\//i.test(site.url)) continue;
+    const prior = sourceStates.get(site.host);
+    if (!prior || (rank[site.state] || 0) > (rank[prior.state] || 0)) sourceStates.set(site.host, site);
+  }
 
   return {
     phase: String(progress?.phase || ""),
     running,
+    failure,
+    sources: [...sourceStates.values()],
     waves,
     siteCount: sites.size,
+    opened: waves.reduce((total, wave) => total + wave.opened, 0),
     verified: waves.reduce((total, wave) => total + wave.verified, 0),
     rejected: waves.reduce((total, wave) => total + wave.rejected, 0),
 
