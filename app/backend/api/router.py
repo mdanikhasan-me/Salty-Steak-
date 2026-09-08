@@ -67,6 +67,10 @@ class ApiRouter:
         parts = tuple(part for part in raw_path.split("/") if part)[1:]
         method = self.method
 
+        if method == "GET" and parts == ("web", "favicon"):
+            from ..tooling.favicon import site_favicon
+            return site_favicon((query.get("url") or [""])[0])
+
         if method == "GET" and parts == ("health",):
             return {
                 "status": "ok",

@@ -1,8 +1,8 @@
+import { SiteIcon } from "./SiteIcon.jsx";
 import { useEffect, useRef } from "react";
 import { Check, ExternalLink, Search, Sparkles, Wrench, X } from "lucide-react";
 
 import {
-  faviconAddress,
   formatElapsed,
   responseDetails,
   supportFor,
@@ -160,16 +160,7 @@ export function ResponseDetails({ details, onClose, onOpenExternal }) {
                         {
                                                                                }
                         <span className="response-source__icon" aria-hidden="true">
-                          {faviconAddress(source.url) ? (
-                            <img
-                              src={faviconAddress(source.url)}
-                              alt=""
-                              loading="lazy"
-                              onError={(event) => {
-                                event.currentTarget.style.visibility = "hidden";
-                              }}
-                            />
-                          ) : null}
+                          <SiteIcon url={source.url} host={source.host}/>
                         </span>
                         {source.host}
                       </span>

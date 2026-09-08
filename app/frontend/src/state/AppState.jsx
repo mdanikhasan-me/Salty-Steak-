@@ -72,8 +72,13 @@ export function AppStateProvider({ children }) {
 
   const addNotification = useCallback((notification) => {
     if (!notification?.message) return;
-    dispatchNotification({ type: "add", notification: { ...notification, id: notification.id || api.makeRequestKey() } });
+    const id = notification.message === "Salty Steak could not reach its local service." ? "service-connection" : notification.id || api.makeRequestKey();
+    dispatchNotification({ type: "add", notification: { ...notification, id } });
   }, []);
+  const hasConnectionNotice = notifications.some(notification => notification.id === "service-connection");
+  useEffect(() => {
+    if (connection.online && hasConnectionNotice) dispatchNotification({ type: "remove", id: "service-connection" });
+  }, [connection.online, hasConnectionNotice]);
 
   const dismissNotification = useCallback((id) => {
     dispatchNotification({ type: "remove", id });

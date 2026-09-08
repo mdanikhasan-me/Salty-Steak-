@@ -27,6 +27,7 @@ import { AgentTimeline } from "./AgentTimeline.jsx";
 import { executionEvents, timelineFor } from "../workflows/agentTimeline.mjs";
 import { HostActionProposal } from "./HostActionProposal.jsx";
 import { RichText } from "./RichText.jsx";
+import { SiteIcon } from "./SiteIcon.jsx";
 import { generationFailureForMessage } from "../workflows/generationFailure.mjs";
 import { codeArtifactsFromText, normaliseNamedCodeFences } from "../workflows/codeArtifacts.mjs";
 
@@ -391,16 +392,7 @@ function SourceMarks({ details }) {
           title={`${mark.host} — ${mark.title}`}
         >
           <span className="source-marks__icon" aria-hidden="true">
-            {mark.icon ? (
-              <img
-                src={mark.icon}
-                alt=""
-                loading="lazy"
-                onError={(event) => {
-                  event.currentTarget.style.visibility = "hidden";
-                }}
-              />
-            ) : null}
+            <SiteIcon url={mark.url || `https://${mark.host}`} host={mark.host}/>
           </span>
           <span className="source-marks__host">{mark.host}</span>
         </span>
@@ -483,12 +475,12 @@ function ResponseProvenance({ details, onOpenDetails }) {
 }
 
 function ResponseMetadata({ details, duration }) {
+  const tokens = visibleOutputTokens(details);
   const entries = [
-    duration ? `Generated in ${duration}` : null,
 
 
 
-    finiteCount(visibleOutputTokens(details), "output tokens"),
+    Number(tokens) > 0 ? finiteCount(tokens, "output tokens") : null,
     finiteRate(details?.decode_tokens_per_second || details?.tokens_per_second),
     details?.execution_device || details?.device || null,
   ].filter(Boolean);

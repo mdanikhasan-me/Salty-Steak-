@@ -5,6 +5,8 @@ import { CompanionSettings } from "./CompanionSettings.jsx";
 import { api } from "../api/client.js";
 
 const APPEARANCE_KEY = "salty-steak:appearance-v1";
+let appearanceRevision = 0;
+export const getAppearanceRevision = () => appearanceRevision;
 export function readAppearance() {
   try { return { theme: "dark", reducedMotion: false, ...JSON.parse(localStorage.getItem(APPEARANCE_KEY) || "{}") }; }
   catch { return { theme: "dark", reducedMotion: false }; }
@@ -38,6 +40,7 @@ export function WorkspaceSettings({ section, onSectionChange, onClose, active = 
 
 export function GeneralSettings({ onSectionChange, onNavigate }) {
   const [appearance, setAppearance] = useState(readAppearance);
+  const updateAppearance = patch => { appearanceRevision += 1; setAppearance(current => ({ ...current, ...patch })); };
   const [saveError, setSaveError] = useState("");
   useEffect(() => {
     let active = true;
@@ -51,8 +54,8 @@ export function GeneralSettings({ onSectionChange, onNavigate }) {
   return <div className="preferences-page">
     <h2>General</h2><p className="preferences-intro">Make the workspace feel like yours.</p>
     {saveError ? <p role="alert">{saveError}</p> : null}
-    <label className="preference-row"><span>Appearance<small>A calm background for your work.</small></span><select aria-label="Appearance" value={appearance.theme} onChange={(event) => setAppearance({ ...appearance, theme: event.target.value })}><option value="dark">Dark</option><option value="warm">Warm</option></select></label>
-    <label className="preference-row"><span>Reduced motion<small>Keep state changes clear with less movement.</small></span><input type="checkbox" role="switch" aria-label="Reduced motion" checked={appearance.reducedMotion} onChange={(event) => setAppearance({ ...appearance, reducedMotion: event.target.checked })} /></label>
+    <label className="preference-row"><span>Appearance<small>A calm background for your work.</small></span><select aria-label="Appearance" value={appearance.theme} onChange={(event) => updateAppearance({ theme: event.target.value })}><option value="dark">Dark</option><option value="warm">Warm</option></select></label>
+    <label className="preference-row"><span>Reduced motion<small>Keep state changes clear with less movement.</small></span><input type="checkbox" role="switch" aria-label="Reduced motion" checked={appearance.reducedMotion} onChange={(event) => updateAppearance({ reducedMotion: event.target.checked })} /></label>
     <button type="button" className="preference-row preference-link" onClick={() => onSectionChange("companion")}><span>Desktop companion<small>Size, placement and short reactions.</small></span><ChevronRight aria-hidden="true" /></button>
     <button type="button" className="preference-row preference-link" onClick={() => onSectionChange("plugins")}><span>Connections<small>Connected tools and computer permissions.</small></span><ChevronRight aria-hidden="true" /></button>
     <button type="button" className="preference-row preference-link" onClick={() => onNavigate("system")}><span>System<small>Runtime, hardware and diagnostics.</small></span><ChevronRight aria-hidden="true" /></button>

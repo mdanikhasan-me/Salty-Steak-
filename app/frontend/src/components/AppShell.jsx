@@ -25,7 +25,7 @@ import { NotificationCenter } from "./NotificationCenter.jsx";
 import { api } from "../api/client.js";
 
 import { WORKSPACE_MODES, normaliseWorkspaceMode } from "../workflows/workspaceModes.mjs";
-import { applyAppearance, readAppearance } from "./WorkspaceSettings.jsx";
+import { applyAppearance, readAppearance, getAppearanceRevision } from "./WorkspaceSettings.jsx";
 
 const SIDEBAR_STORAGE_KEY = "salty-potato:sidebar-open";
 const ShellContext = createContext(null);
@@ -91,6 +91,7 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
     return () => { document.removeEventListener("pointerdown", dismiss);document.removeEventListener("keydown", key);window.removeEventListener("resize", closeNotifications); };
   }, [notificationsOpen, closeNotifications]);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const initialAppearanceRevision = useRef(getAppearanceRevision());
   const touchedPreferences = useRef({ mode: false, sidebar: false });
   const changeSidebar = useCallback(action => {
     touchedPreferences.current.sidebar = true;
@@ -109,9 +110,11 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
     let active = true;
     api.getUiPreferences().then((saved) => {
       if (!active) return;
-      const appearance = { ...readAppearance(), ...saved };
-      applyAppearance(appearance);
-      try { localStorage.setItem("salty-steak:appearance-v1", JSON.stringify(appearance)); } catch {}
+      if (initialAppearanceRevision.current === getAppearanceRevision()) {
+        const appearance = { ...readAppearance(), ...saved };
+        applyAppearance(appearance);
+        try { localStorage.setItem("salty-steak:appearance-v1", JSON.stringify(appearance)); } catch {}
+      }
       if (!touchedPreferences.current.sidebar && typeof saved.sidebarOpen === "boolean") dispatchSidebar({ type: saved.sidebarOpen ? "open" : "close" });
       if (!touchedPreferences.current.mode && saved.workspaceMode) setWorkspaceModeState(normaliseWorkspaceMode(saved.workspaceMode));
       setPreferencesLoaded(true);
@@ -179,6 +182,7 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
   return (
     <ShellContext.Provider value={shellValue}>
       <div
+        data-workspace-mode={workspaceMode}
         className={`app-shell ${
           trainingMode && sidebarOpen ? "app-shell--sidebar-open" : ""
         }`}

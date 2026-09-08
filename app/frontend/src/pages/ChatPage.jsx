@@ -446,7 +446,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     if (scroll) scroll.scrollTop = saved?.top ?? scroll.scrollHeight;
     followsTranscriptRef.current = saved?.following ?? true;
     return () => {
-      if (scroll && selectedId) session.scroll.set(selectedId, { top: scroll.scrollTop, following: followsTranscriptRef.current });
+      if (scroll && selectedId && String(selectedIdRef.current) === String(selectedId)) session.scroll.set(selectedId, { top: scroll.scrollTop, following: followsTranscriptRef.current });
     };
   }, [selectedId, session]);
   const restoreFailedDraft = useCallback((ownerId, content, files = []) => {
@@ -517,7 +517,6 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
         selectConversation(fallback?.id || null);
         return;
       }
-      notify({ message: errorMessage(error), kind: "error" });
       reportError(error, `conversation:${wanted}`);
     } finally {
       if (String(selectedIdRef.current) === wanted) {
@@ -792,7 +791,6 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
             setConversation(null);
             return;
           }
-          if (error) notify({ message: errorMessage(error), kind: "error" });
           reportError(error, `conversation:${selectedId}`);
         }
       })
@@ -1036,6 +1034,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
             locallyCreatedConversationIdsRef.current.add(String(created.id));
             if (String(selectedIdRef.current || "") === String(requestedConversationId || "")) {
               selectConversation(created.id);
+              setResearchMode(turnResearchMode);
               setConversation({ ...created, messages: created.messages || [] });
             }
             setResources((previous) => ({
@@ -1086,6 +1085,9 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
               .filter(Boolean),
           );
           activeGenerationRef.current = submitted;
+          if (String(selectedIdRef.current) === String(conversationId)) setConversation(previous => ({ ...previous,
+            messages: (previous?.messages || []).map(message => message.id === `pending-user-${taskId}` ? { ...message, pending: false } : message),
+          }));
           applyOperations([submitted], { announceTransitions: false });
           return submitted;
         });
@@ -1168,6 +1170,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
             locallyCreatedConversationIdsRef.current.add(String(created.id));
             if (String(selectedIdRef.current || "") === String(requestedConversationId || "")) {
               selectConversation(created.id);
+              setResearchMode(turnResearchMode);
               setConversation({ ...created, messages: created.messages || [] });
             }
             setResources((previous) => ({
