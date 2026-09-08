@@ -906,12 +906,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
         ...current,
         computer_authority_mode: "full_access",
       }));
-      notify({
-        message: capabilities.length
-          ? `Full access is on. ${capabilities.length} capabilities are already enabled.`
-          : "Full access is on, but this build has no computer capabilities available.",
-        kind: capabilities.length ? "success" : "warning",
-      });
+      if (!capabilities.length) notify({ id: "authority-unavailable", message: "No computer capabilities are available in this build.", kind: "warning" });
       return;
     }
     setFullAccessRequest({ capabilities, missing, status });
@@ -940,10 +935,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
         computer_authority_mode: "full_access",
       }));
       setFullAccessRequest(null);
-      notify({
-        message: `Full access is on. ${enabled.length} of ${request.capabilities.length} capabilities are enabled.`,
-        kind: enabled.length === request.capabilities.length ? "success" : "warning",
-      });
+      if (enabled.length !== request.capabilities.length) notify({ id: "authority-partial", message: `Only ${enabled.length} of ${request.capabilities.length} permissions were enabled. Review Computer access.`, kind: "warning" });
     } catch (error) {
       notify({ message: errorMessage(error), kind: "error" });
     } finally {
@@ -2434,6 +2426,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     aria-haspopup="menu"
                     aria-expanded={composerMenu === "authority"}
                     aria-controls="composer-authority-menu"
+                    aria-describedby="permissions-tooltip"
                     onClick={(event) => openComposerMenu("authority", event)}
                   >
                     {generationSettings.computer_authority_mode === "full_access"
@@ -2442,6 +2435,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     <span>{computerAuthorityLabel(generationSettings.computer_authority_mode)}</span>
                     <ChevronDown aria-hidden="true" />
                   </button>
+                  <span id="permissions-tooltip" role="tooltip" className="composer-control-tooltip">Change permissions</span>
                   {composerMenu === "authority" ? (
                     <ComposerPopover
                       id="composer-authority-menu" autoFocus={composerMenuKeyboardRef.current}

@@ -2,7 +2,10 @@ const DEFAULT_TTL = 10_000;
 
 export function addNotification(items, notification, now = Date.now(), ttl = DEFAULT_TTL) {
   if (!notification?.id || !notification?.message) return items;
-  if (items.some((item) => item.id === notification.id)) return items;
+  if (items.some((item) => item.id === notification.id || (
+    item.message === notification.message && item.kind === notification.kind
+    && item.page === notification.page && item.operationId === notification.operationId
+  ))) return items;
   return [
     ...items,
     {

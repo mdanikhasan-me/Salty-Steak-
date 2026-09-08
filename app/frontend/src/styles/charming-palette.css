@@ -1,7 +1,7 @@
 /* Neutral surfaces carry reading hierarchy; ember marks primary actions. */
 :root {
-  --chrome:#111111; --rail:#131313; --canvas:#1b1b1b;
-  --surface-muted:#242424; --surface:#292929; --surface-raised:#323232;
+  --chrome:#20211f; --rail:#20211f; --canvas:#181818;
+  --surface-muted:#282828; --surface:#292929; --surface-raised:#323232;
   --surface-soft:#3a3a3a; --popover:#252525;
   --ink:#f1f0ed; --ink-soft:#deddd9; --muted:#bbb9b4; --muted-light:#aaa8a3;
   --accent:#dea17b; --accent-dark:#efb28c; --accent-soft:#dea17b12; --focus:#ddd6ce;
@@ -38,7 +38,8 @@
 .composer .composer-tool--research-on { color:var(--ink-soft); background:#ffffff07; }
 .composer .composer-tool--authority-full,
 .composer .composer-tool--authority-full:hover,
-.composer .composer-tool--authority-full[aria-expanded="true"] { color:var(--ink-soft); }
+.composer .composer-tool--authority-full[aria-expanded="true"] { color:#e6c34a; background:transparent; }
+.composer .composer-tool--authority-full:hover,.composer .composer-tool--authority-full[aria-expanded="true"] { background:#ffffff07; }
 .composer .composer-tool:focus-visible,.composer .composer-selector:focus-visible { outline:1px solid var(--muted-light); outline-offset:-1px; }
 .send-button { background:var(--accent); color:#282017; }
 .send-button:hover:not(:disabled) { background:var(--accent-dark); }
@@ -222,6 +223,14 @@
 .chat-page[data-workspace-mode="agent"] .message__content code:not(pre code) { background:#ffffff06; color:var(--ink-soft); font-weight:400; }
 .chat-page[data-workspace-mode="agent"] .message__content a { color:var(--ink-soft); }
 .notification-region { top:72px; bottom:auto; right:18px; width:min(300px,calc(100vw - 36px)); }
-.notification { min-height:44px; padding:10px 12px; border:0; border-radius:9px; backdrop-filter:none; -webkit-backdrop-filter:none; }
+.notification { min-height:40px; padding:10px 12px; border:0; border-radius:9px; background:var(--popover); box-shadow:0 5px 18px #0004; backdrop-filter:none; -webkit-backdrop-filter:none; grid-template-columns:14px minmax(0,1fr) 20px; gap:9px; align-items:center; color:var(--muted); }
+.notification>svg { width:14px; height:14px; margin:0; }
+.notification-close { width:20px; height:20px; }
+.notification--error>svg { color:var(--danger); }
+.notification--warning>svg { color:var(--warning); }
+.notification-timeout { display:none; }
+.composer-control-tooltip { position:absolute; bottom:calc(100% + 7px); left:50%; transform:translateX(-50%); z-index:30; padding:6px 9px; white-space:nowrap; background:#303030; color:#e2e2e2; font-size:11px; line-height:1.4; border-radius:6px; box-shadow:0 3px 10px #0003; pointer-events:none; visibility:hidden; opacity:0; transition:opacity 100ms ease; }
+.composer-control--authority:hover .composer-control-tooltip,.composer-control--authority:focus-within .composer-control-tooltip { visibility:visible; opacity:1; transition-delay:450ms; }
+.composer-control--authority:has([aria-expanded="true"]) .composer-control-tooltip { visibility:hidden; opacity:0; transition-delay:0ms; }
 .notification p { font-size:12px; line-height:1.5; }
 .source-marks__icon { width:18px; height:18px; }

@@ -12,7 +12,7 @@ export function NotificationCenter({ page }) {
   const { notifications, dismissNotification, pauseNotification, resumeNotification } = useAppState();
   const visibleNotifications = notifications.filter((notification) =>
     notificationVisibleOnPage(notification, page),
-  );
+  ).slice(-1);
   return (
     <div className="notification-region" aria-live="polite" aria-label="Notifications">
       {visibleNotifications.map((notification) => {
@@ -38,7 +38,6 @@ export function NotificationCenter({ page }) {
             >
               <X aria-hidden="true" />
             </button>
-            {!notification.persistent ? <span className="notification-timeout" aria-hidden="true" /> : null}
           </div>
         );
       })}
