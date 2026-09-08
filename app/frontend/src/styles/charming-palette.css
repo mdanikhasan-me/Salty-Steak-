@@ -35,7 +35,11 @@
 .composer textarea::placeholder { color:var(--muted-light); }
 .composer-tool,.composer-selector { color:var(--muted); font-size:12px; }
 .composer-tool:hover,.composer-selector:hover { color:var(--ink); background:#ffffff07; }
-.composer-tool--research-on { color:var(--info); background:#a6bfd012; }
+.composer .composer-tool--research-on { color:var(--ink-soft); background:#ffffff07; }
+.composer .composer-tool--authority-full,
+.composer .composer-tool--authority-full:hover,
+.composer .composer-tool--authority-full[aria-expanded="true"] { color:var(--ink-soft); }
+.composer .composer-tool:focus-visible,.composer .composer-selector:focus-visible { outline:1px solid var(--muted-light); outline-offset:-1px; }
 .send-button { background:var(--accent); color:#282017; }
 .send-button:hover:not(:disabled) { background:var(--accent-dark); }
 .send-button:disabled { background:var(--surface-soft); color:var(--muted); opacity:1; }
@@ -140,13 +144,14 @@
 #composer-cooking-menu .response-mode-option>svg { width:15px; height:15px; stroke-width:1.6; color:var(--muted); }
 #composer-cooking-menu .response-mode-option strong { display:block; font-size:13px; font-weight:500; line-height:1.35; }
 #composer-cooking-menu .response-mode-option small { display:block; margin-top:2px; font-size:11px; font-weight:400; line-height:1.4; color:var(--muted); }
-#composer-cooking-menu .response-mode-option .response-mode-option__check { color:var(--accent); width:13px; }
+#composer-cooking-menu .response-mode-option .response-mode-option__check { color:var(--ink-soft); width:13px; }
 @keyframes response-menu-in { from { opacity:0; transform:translateY(3px) scale(.985); } to { opacity:1; transform:none; } }
 @media(prefers-reduced-motion:reduce) { #composer-cooking-menu { animation:none; } }
 
 .composer-popover { padding:7px; box-shadow:0 8px 28px #0005; }
 .composer-popover .composer-menu-item { min-height:48px; grid-template-columns:18px 1fr auto; gap:9px; padding:8px 9px; background:transparent; }
 .composer-popover .composer-menu-item.is-selected { background:transparent; }
+.composer-popover .composer-menu-item.is-selected .composer-menu-item__icon { color:var(--ink-soft); }
 .composer-popover .composer-menu-item:hover { background:#ffffff07; }
 .composer-popover .composer-menu-item__icon { width:18px; height:18px; }
 .composer-popover .composer-menu-item__copy>span,.composer-popover .composer-menu-item__copy strong { font-size:13px; font-weight:500; }
