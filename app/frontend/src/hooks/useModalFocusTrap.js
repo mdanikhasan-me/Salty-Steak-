@@ -6,6 +6,7 @@ const FOCUSABLE = [
   "input:not([disabled])",
   "select:not([disabled])",
   "textarea:not([disabled])",
+  "summary",
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
@@ -22,11 +23,17 @@ export function useModalFocusTrap({ active = true, onClose, canClose = true } = 
     const root = containerRef.current;
     const previous = document.activeElement;
     const focusable = () => Array.from(root.querySelectorAll(FOCUSABLE)).filter(
-      (node) => node.getClientRects().length > 0 && !node.closest("[inert]"),
+      (node) => {
+        if (!node.getClientRects().length || node.closest("[inert]") || getComputedStyle(node).visibility === "hidden") return false;
+        for (let parent = node.parentElement; parent && parent !== root; parent = parent.parentElement) {
+          if (parent.tagName === "DETAILS" && !parent.open && !parent.querySelector(":scope > summary")?.contains(node)) return false;
+        }
+        return true;
+      },
     );
     // Keep the dialog focusable without drawing a selection box around its
     // first unrelated control when opened with a pointer.
-    window.requestAnimationFrame(() => root.focus({ preventScroll: true }));
+    const initialFocus = window.requestAnimationFrame(() => root.focus({ preventScroll: true }));
 
     function handleKeyDown(event) {
       if (event.key === "Escape" && canCloseRef.current) {
@@ -43,7 +50,10 @@ export function useModalFocusTrap({ active = true, onClose, canClose = true } = 
       }
       const first = items[0];
       const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      if (document.activeElement === root || !root.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -54,6 +64,7 @@ export function useModalFocusTrap({ active = true, onClose, canClose = true } = 
 
     document.addEventListener("keydown", handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(initialFocus);
       document.removeEventListener("keydown", handleKeyDown);
       if (previous instanceof HTMLElement && previous.isConnected) {
         window.requestAnimationFrame(() => previous.focus());
