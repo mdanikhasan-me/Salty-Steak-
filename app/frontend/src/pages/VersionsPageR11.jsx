@@ -13,6 +13,7 @@ import {
   DefinitionList,
   Disclosure,
   EmptyState,
+  InlineNotice,
   PageHeader,
   Status,
 } from "../components/Primitives.jsx";
@@ -33,18 +34,37 @@ export function VersionsPageR11({ onNavigate }) {
   const [technical, setTechnical] = useState(null);
   const [busy, setBusy] = useState("");
   const [roleCatalog, setRoleCatalog] = useState(null);
+  const [catalogLoad, setCatalogLoad] = useState("loading");
+  const [catalogError, setCatalogError] = useState("");
+  const [loadRevision, setLoadRevision] = useState(0);
   const [selectedRoleId, setSelectedRoleId] = useState(() => {
     const requested = new URLSearchParams(String(window.location.hash).split("?")[1] || "").get("role");
     return requested || "text_generation";
   });
 
   useEffect(() => {
-    Promise.all([
+    let cancelled = false;
+    Promise.allSettled([
       refreshDomain("versions", { quiet: true }),
-      refreshDomain("chat", { quiet: true }),
-      api.getModelRoles().then(setRoleCatalog),
-    ]).catch((error) => reportError(error, "open-versions-r11"));
-  }, [refreshDomain, reportError]);
+      api.getModelRoles(),
+    ]).then(([versionResult, roleResult]) => {
+      if (cancelled) return;
+      if (roleResult.status === "fulfilled") setRoleCatalog(roleResult.value);
+      const failure = [versionResult, roleResult].find((result) => result.status === "rejected");
+      setCatalogLoad(failure ? "error" : "ready");
+      setCatalogError(failure ? String(failure.reason?.message || "The model library could not be loaded.") : "");
+    });
+    void refreshDomain("chat", { quiet: true }).catch((error) => {
+      if (!cancelled) reportError(error, "open-versions-chat");
+    });
+    return () => { cancelled = true; };
+  }, [refreshDomain, reportError, loadRevision]);
+
+  function reloadCatalog() {
+    setCatalogLoad("loading");
+    setCatalogError("");
+    setLoadRevision((value) => value + 1);
+  }
 
   const roles = roleCatalog?.roles || [{
     id: "text_generation",
@@ -135,11 +155,15 @@ export function VersionsPageR11({ onNavigate }) {
             }}
           >
             <span>{role.label}</span>
-            <small>{formatNumber(role.registered_models || 0)}</small>
+            {roleCatalog || versions.length > 0 || catalogLoad === "ready" ? <small>{formatNumber(role.registered_models || 0)}</small> : null}
           </button>
         ))}
       </nav>
-      {!roleVersions.length ? (
+      {catalogLoad === "error" ? <InlineNotice kind="error" title="Model library unavailable"
+        actions={<Button onClick={reloadCatalog}>Retry</Button>}>{catalogError}</InlineNotice> : null}
+      {!roleVersions.length && catalogLoad === "loading" ? <p role="status">Loading models…</p>
+      : !roleVersions.length && catalogLoad === "error" ? null
+      : !roleVersions.length ? (
         <EmptyState
           title={`No ${String(selectedRole?.label || "local").toLowerCase()} model registered`}
           description={`${selectedRole?.description || "This local model role is empty."} This role has an independent runtime and cannot be confused with a Chat checkpoint.`}

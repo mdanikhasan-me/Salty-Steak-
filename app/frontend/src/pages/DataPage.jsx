@@ -4,6 +4,7 @@ import { api } from "../api/client.js";
 import {
   Button,
   EmptyState,
+  InlineNotice,
   PageHeader,
 } from "../components/Primitives.jsx";
 import { useAppState } from "../state/AppState.jsx";
@@ -22,7 +23,6 @@ export function DataPage() {
     refreshDomain,
     reportError,
     startOperation,
-    connection,
   } = useAppState();
   const [selectedId, setSelectedId] = useState(null);
   const [query, setQuery] = useState("");
@@ -34,12 +34,28 @@ export function DataPage() {
   const [learningPreview, setLearningPreview] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [starting, setStarting] = useState(null);
+  const [libraryLoad, setLibraryLoad] = useState("loading");
+  const [libraryError, setLibraryError] = useState("");
+  const [loadRevision, setLoadRevision] = useState(0);
+
+  function reloadLibrary() {
+    setLibraryLoad("loading");
+    setLibraryError("");
+    setLoadRevision((value) => value + 1);
+  }
 
   useEffect(() => {
-    void refreshDomain("datasets", { quiet: true }).catch((error) =>
-      reportError(error, "open-data"),
-    );
-  }, [refreshDomain, reportError]);
+    let cancelled = false;
+    void refreshDomain("datasets", { quiet: true }).then(() => {
+      if (!cancelled) setLibraryLoad("ready");
+    }).catch((error) => {
+      if (!cancelled) {
+        setLibraryLoad("error");
+        setLibraryError(String(error?.message || "The dataset library could not be loaded."));
+      }
+    });
+    return () => { cancelled = true; };
+  }, [refreshDomain, loadRevision]);
 
   useEffect(() => {
     if (!selectedId && datasets[0]) setSelectedId(datasets[0].id);
@@ -174,14 +190,18 @@ export function DataPage() {
           </Button>
         ) : null}
       >
-        <div className="page-context-summary" aria-label="Dataset summary">
+        {datasets.length > 0 || libraryLoad === "ready" ? <div className="page-context-summary" aria-label="Dataset summary">
           <span><strong>{datasets.length}</strong> local sources</span>
           <span><strong>{readyCount}</strong> training ready</span>
           {readyCount > 0 ? <span><strong>{new Intl.NumberFormat().format(totalPreparedTokens)}</strong> prepared tokens</span> : null}
-        </div>
+        </div> : null}
       </PageHeader>
 
-      {!datasets.length && !connection.loading ? (
+      {libraryLoad === "error" ? <InlineNotice kind="error" title="Dataset library unavailable"
+        actions={<Button onClick={reloadLibrary}>Retry</Button>}>{libraryError}</InlineNotice> : null}
+      {!datasets.length && libraryLoad === "loading" ? <p role="status">Loading datasets…</p>
+      : !datasets.length && libraryLoad === "error" ? null
+      : !datasets.length ? (
         <EmptyState
           icon={Database}
           title="Add your first dataset"
@@ -205,7 +225,7 @@ export function DataPage() {
             query={query}
             onQueryChange={setQuery}
             onSelect={setSelectedId}
-            onRefresh={() => refreshDomain("datasets").catch(reportError)}
+            onRefresh={reloadLibrary}
           />
 
           <div className="library-detail">
