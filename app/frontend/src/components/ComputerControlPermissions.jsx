@@ -495,7 +495,9 @@ export function ComputerControlPermissions({
           title={`Confirm ${capabilityName(invocationReview.capability)} action`}
           summary={invocationReview.summary}
           note="Only the exact arguments shown above will be sent to the local broker."
-          confirmLabel={capabilityInvokeLabel(invocationReview.capability)}
+          confirmLabel={invocationReview.capability === "window.control"
+            ? ({ list: "List windows", focus: "Focus window", close: "Close window" }[invocationReview.arguments?.action] || "Confirm action")
+            : capabilityInvokeLabel(invocationReview.capability)}
           busy={busyId === invocationReview.capability}
           onCancel={() => setInvocationReview(null)}
           onConfirm={confirmInvocation}

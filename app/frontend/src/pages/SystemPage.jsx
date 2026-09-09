@@ -40,24 +40,30 @@ export function SystemPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [copied, setCopied] = useState(false);
+  const [loadRevision, setLoadRevision] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.getAbout(), api.listVersions(), api.getChatStatus()])
-      .then(([aboutPayload, versionPayload, chatStatus]) => {
+    setLoading(true);
+    setLoadError("");
+    Promise.allSettled([api.getAbout(), api.listVersions(), api.getChatStatus()])
+      .then(([aboutResult, versionResult, chatResult]) => {
         if (cancelled) return;
-        setAbout(aboutPayload);
-
-
-
-
-        setSelectedModelName(String(chatStatus?.active_version_label || ""));
+        const aboutPayload = aboutResult.status === "fulfilled" ? aboutResult.value : null;
+        const chatStatus = chatResult.status === "fulfilled" ? chatResult.value : null;
+        if (aboutPayload) setAbout(aboutPayload);
+        const failures = [aboutResult, versionResult, chatResult].filter((result) => result.status === "rejected");
+        setLoadError(failures.map((result) => errorMessage(result.reason)).filter((value, index, values) => values.indexOf(value) === index).join(" "));
+        setLoading(false);
+        if (chatStatus) setSelectedModelName(String(chatStatus.active_version_label || ""));
         const activeId =
           chatStatus?.active_saved_version_id ||
           chatStatus?.saved_version_id ||
           aboutPayload?.model?.saved_version_id;
-        setCurrentVersion(
-          asList(versionPayload, ["versions"]).find(
+        if (versionResult.status === "fulfilled" && (chatStatus || aboutPayload)) setCurrentVersion(
+          asList(versionResult.value, ["versions"]).find(
             (version) => String(version.id) === String(activeId),
           ) || null,
         );
@@ -71,7 +77,7 @@ export function SystemPage() {
     return () => {
       cancelled = true;
     };
-  }, [refreshDomain]);
+  }, [refreshDomain, loadRevision]);
 
   const application = about?.application || {};
   const packageInfo = about?.package || {};
@@ -81,6 +87,8 @@ export function SystemPage() {
   const paths = about?.paths || {};
   const manifestPresent = Boolean(packageInfo.manifest_sha256);
   const runtimeState = runtimePresentation(runtime, model);
+  const missingState = loading ? "Loading" : "Unavailable";
+  const freeSpace = formatBytes(storage?.free_disk_bytes ?? system.drive_free_bytes);
   const verificationOperation = useMemo(
     () =>
       Object.values(operations || {})
@@ -145,10 +153,13 @@ export function SystemPage() {
       </PageHeader>
 
       {error ? <InlineNotice kind="error" title="Some system details are unavailable">{error}</InlineNotice> : null}
+      {loadError ? <InlineNotice kind="error" title="System information unavailable"
+        actions={<Button disabled={loading} onClick={() => setLoadRevision((value) => value + 1)}>Retry</Button>}
+      >{loadError}</InlineNotice> : null}
 
       <section className="system-r18__summary">
         <div>
-          <p>{about ? "Connected to the local service" : "Connecting to the local service"}</p>
+          <p>{loading ? "Connecting to the local service" : loadError ? "Some system information is unavailable" : "Connected to the local service"}</p>
         </div>
         <Button icon={ShieldCheck} busy={busy === "verify" || Boolean(verificationOperation && isActive(verificationOperation))} onClick={verify}>
           {verification.label === "Passed" ? "Verify again" : "Verify installation"}
@@ -160,7 +171,7 @@ export function SystemPage() {
           icon={AppWindow}
           title="Application"
           description="Salty Steak"
-          value={application.app_version ? `Version ${application.app_version}` : "2.0.0"}
+          value={application.app_version ? `Version ${application.app_version}` : missingState}
         />
         <SystemOverviewRow
           icon={Database}
@@ -169,21 +180,21 @@ export function SystemPage() {
             currentVersion?.friendly_name ||
             selectedModelName ||
             model.display_name ||
-            "No local model selected"
+            (about ? "No local model selected" : missingState)
           }
-          value={runtimeState.loaded ? `${runtime.device || "Loaded"}${runtime.precision ? ` · ${runtime.precision}` : ""}` : "Idle"}
+          value={!about ? missingState : runtimeState.loaded ? `${runtime.device || "Loaded"}${runtime.precision ? ` · ${runtime.precision}` : ""}` : "Idle"}
         />
         <SystemOverviewRow
           icon={Cpu}
           title="Hardware"
-          description={cpuSummary(system.cpu_model, system.logical_processor_count)}
-          value={formatBytes(system.available_ram_bytes) ? `${formatBytes(system.available_ram_bytes)} available` : "Detecting"}
+          description={about ? cpuSummary(system.cpu_model, system.logical_processor_count) : missingState}
+          value={formatBytes(system.available_ram_bytes) ? `${formatBytes(system.available_ram_bytes)} available` : missingState}
         />
         <SystemOverviewRow
           icon={HardDrive}
           title="Storage"
           description={`${system.current_drive || "Local drive"} workspace`}
-          value={`${formatBytes(storage?.free_disk_bytes ?? system.drive_free_bytes) || "Not measured"} free`}
+          value={freeSpace ? `${freeSpace} free` : missingState}
           action={<button type="button" disabled={busy === "storage"} onClick={refreshStorage}>{busy === "storage" ? "Measuring" : "Measure"}</button>}
         />
         <SystemOverviewRow
@@ -712,6 +723,7 @@ function tokenValue(value) {
 }
 
 function formatBytes(value) {
+  if (value === null || value === undefined || value === "") return null;
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes < 0) return null;
   const units = ["B", "KB", "MB", "GB", "TB"];

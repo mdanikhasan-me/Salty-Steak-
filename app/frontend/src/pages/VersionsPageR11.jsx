@@ -287,11 +287,56 @@ function statusValue(version) {
   return isBlocked(version) ? "blocked" : version.production_policy?.recommended ? "recommended" : version.integrity;
 }
 
+function modelRoleLabel(version) {
+  return version.model_role_label || ({
+    text_generation: "Language",
+    vision: "Vision",
+    vision_language: "Vision",
+    image_generation: "Image generation",
+    speech_recognition: "Speech recognition",
+    speech_generation: "Speech generation",
+    embeddings: "Embeddings",
+    embedding: "Embeddings",
+    reranking: "Reranking",
+  }[version.model_role || "text_generation"]) || "Local";
+}
+
+function modelModalities(version) {
+  const inputs = Array.isArray(version.input_modalities) ? version.input_modalities : [];
+  const outputs = Array.isArray(version.output_modalities) ? version.output_modalities : [];
+  return inputs.length && outputs.length ? `${inputs.join(", ")} → ${outputs.join(", ")}` : "Not reported";
+}
+
+function publicRuntimeLabel(family) {
+  const key = String(family || "").trim().toLowerCase();
+  // Internal engine identities stay in technical diagnostics, not model copy.
+  if (key.startsWith("salty_native")) return "Private Salty native engine";
+  return ({
+    salty_vision: "Vision runtime",
+    vision_language: "Vision runtime",
+    vision: "Vision runtime",
+    diffusion: "Image generation runtime",
+    image_generator: "Image generation runtime",
+    image_generation: "Image generation runtime",
+    speech_recognition: "Speech recognition runtime",
+    speech_generation: "Speech generation runtime",
+    embedding: "Embedding runtime",
+    embeddings: "Embedding runtime",
+    reranking: "Reranking runtime",
+  }[key]) || "Not reported";
+}
+
+function positiveTokenCount(value) {
+  return value !== null && value !== undefined && Number.isFinite(Number(value)) && Number(value) > 0
+    ? `${formatNumber(value)} tokens`
+    : undefined;
+}
+
 function versionSummary(version) {
   if (version.library_kind === "model_bundle") {
     return version.runtime_loaded
-      ? `${version.friendly_name || "The selected model"} is loaded by the private Salty native engine.`
-      : "Local Chat model. Activation remains fail-closed until its registered native engine passes.";
+      ? `${modelRoleLabel(version)} model loaded and available locally.`
+      : `${modelRoleLabel(version)} model registered locally. It is not loaded.`;
   }
   if (isBlocked(version)) return "Malformed training artifact · activation and continuation blocked.";
   if (version.production_policy?.classification === "recovered_candidate") {
@@ -307,10 +352,10 @@ function VersionMetricStrip({ version, activeId }) {
   if (version.library_kind === "model_bundle") {
     return (
       <div className="version-metric-strip" aria-label="Selected model summary">
-        <VersionMetric label="Role" value="Chat base" />
-        <VersionMetric label="Architecture" value={version.public_architecture_name || "Salty Steak"} />
+        <VersionMetric label="Role" value={modelRoleLabel(version)} />
+        <VersionMetric label="Architecture" value={version.public_architecture_name || "Not reported"} />
         <VersionMetric label="Quantization" value={version.quantization || "Not reported"} />
-        <VersionMetric label="Context" value={formatNumber(version.architectural_context_tokens || 0)} />
+        {positiveTokenCount(version.architectural_context_tokens) ? <VersionMetric label="Context" value={positiveTokenCount(version.architectural_context_tokens)} /> : null}
         <VersionMetric label="Model size" value={version.artifact_size_bytes ? formatBytes(version.artifact_size_bytes) : "Not reported"} />
       </div>
     );
@@ -348,16 +393,16 @@ function evidence(version, family) {
 function normalFacts(version, activeId) {
   if (version.library_kind === "model_bundle") {
     return [
-      { label: "Model role", value: version.model_role_label || "Language" },
-      { label: "Public architecture", value: version.public_architecture_name || "Salty Steak" },
-      { label: "Inputs and outputs", value: `${(version.input_modalities || ["text"]).join(", ")} → ${(version.output_modalities || ["text"]).join(", ")}` },
-      { label: "Runtime", value: "Private Salty native engine" },
-      { label: "Chat status", value: version.runtime_loaded ? "Current Chat" : version.selected_as_base ? "Selected · not loaded" : "Not selected" },
-      { label: "Format", value: `${version.model_format || "Salty Native"} · ${version.quantization || "unknown"}` },
-      { label: "Context capacity", value: `${formatNumber(version.architectural_context_tokens || 0)} tokens` },
-      { label: "Configured limit", value: `${formatNumber(version.configured_context_tokens || 0)} tokens` },
+      { label: "Model role", value: modelRoleLabel(version) },
+      { label: "Public architecture", value: version.public_architecture_name },
+      { label: "Inputs and outputs", value: modelModalities(version) },
+      { label: "Runtime", value: publicRuntimeLabel(version.runtime_family) },
+      { label: "Runtime status", value: version.runtime_loaded ? "Loaded" : version.selected_as_base ? "Selected · not loaded" : "Not loaded" },
+      { label: "Format", value: [version.model_format, version.quantization].filter(Boolean).join(" · ") || "Not reported" },
+      { label: "Context capacity", value: positiveTokenCount(version.architectural_context_tokens) },
+      { label: "Configured limit", value: positiveTokenCount(version.configured_context_tokens) },
       { label: "Integrity", value: version.integrity === "verified" ? "SHA-256 verified at import; size still matches" : "Needs attention" },
-      { label: "External service", value: version.external_service_required ? "Required" : "Not required" },
+      { label: "External service", value: typeof version.external_service_required === "boolean" ? (version.external_service_required ? "Required" : "Not required") : "Not reported" },
     ];
   }
   const anchor = evidence(version, "english_retention_anchor_v1");
@@ -365,7 +410,7 @@ function normalFacts(version, activeId) {
   return [
     { label: "Model role", value: version.model_role_label || "Language" },
     { label: "Inputs and outputs", value: `${(version.input_modalities || ["text"]).join(", ")} → ${(version.output_modalities || ["text"]).join(", ")}` },
-    { label: "Runtime", value: version.runtime_family === "salty_native_decoder" ? "Salty native decoder" : version.runtime_family || "Not reported" },
+    { label: "Runtime", value: publicRuntimeLabel(version.runtime_family) },
     { label: "Chat status", value: String(activeId) === String(version.id) ? "Current Chat" : "Not active" },
     { label: "Integrity", value: version.integrity === "verified" ? "Verified" : version.integrity },
     { label: "Training stage", value: friendlyStatus(version) },
@@ -382,7 +427,7 @@ function qualityFacts(version) {
     return [
       { label: "Artifact import", value: version.integrity === "verified" ? "Passed" : "Failed" },
       { label: "Native load", value: version.runtime_loaded ? "Passed" : "Not yet passed" },
-      { label: "Configured context", value: version.context_activation_state === "active" || version.runtime_loaded ? "Active" : "Not loaded" },
+      ...(positiveTokenCount(version.configured_context_tokens) ? [{ label: "Configured context", value: version.context_activation_state === "active" ? "Active" : "Not active" }] : []),
     ];
   }
   const rows = (version.quality_evidence || []).map((item) => ({
