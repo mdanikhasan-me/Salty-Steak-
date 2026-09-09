@@ -1,9 +1,9 @@
 import { formatNumber } from "../../workflows/formatters.js";
+import { validationPresentation } from "../../workflows/validationPresentation.mjs";
 import { Disclosure, InlineNotice } from "../../components/Primitives.jsx";
 
 export function ValidationReport({ result }) {
-  const blocking = result.blocking_errors || result.errors || [];
-  const warnings = result.warnings || [];
+  const { blocking, warnings, blockingCount, warningCount, clean } = validationPresentation(result);
 
   return (
     <div className="validation-report">
@@ -13,25 +13,27 @@ export function ValidationReport({ result }) {
           <strong>{formatNumber(result.records_checked ?? result.record_count)}</strong>
           records checked
         </span>
-        <span className={blocking.length ? "text-error" : ""}>
+        <span className={blockingCount ? "text-error" : ""}>
           <strong>
             {formatNumber(
-              result.blocking_error_count ?? result.blocking_count ?? blocking.length,
+              blockingCount,
             )}
           </strong>
           blocking errors
         </span>
-        <span className={warnings.length ? "text-warning" : ""}>
-          <strong>{formatNumber(result.warning_count ?? warnings.length)}</strong>
+        <span className={warningCount ? "text-warning" : ""}>
+          <strong>{formatNumber(warningCount)}</strong>
           warnings
         </span>
       </div>
-      {!blocking.length && !warnings.length ? (
+      {clean ? (
         <InlineNotice kind="success" title="No validation issues found">
           This dataset can be prepared for training.
         </InlineNotice>
       ) : (
         <>
+          {blockingCount > blocking.length ? <InlineNotice kind="error" title="Validation has blocking errors">Some error details are unavailable. Validate the source again before preparing it.</InlineNotice> : null}
+          {warningCount > warnings.length ? <InlineNotice kind="warning" title="Validation reported warnings">Some warning details are unavailable. Review a fresh validation before continuing.</InlineNotice> : null}
           {blocking.length ? (
             <IssueList title="Blocking errors" issues={blocking} kind="error" />
           ) : null}

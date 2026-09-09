@@ -147,10 +147,8 @@ export function SystemPage() {
       {error ? <InlineNotice kind="error" title="Some system details are unavailable">{error}</InlineNotice> : null}
 
       <section className="system-r18__summary">
-        <div className="system-r18__summary-icon"><ShieldCheck aria-hidden="true" /></div>
         <div>
-          <h2>{about ? "Salty Steak is running locally" : "Connecting to the local service"}</h2>
-          <p>{runtimeState.detail}</p>
+          <p>{about ? "Connected to the local service" : "Connecting to the local service"}</p>
         </div>
         <Button icon={ShieldCheck} busy={busy === "verify" || Boolean(verificationOperation && isActive(verificationOperation))} onClick={verify}>
           {verification.label === "Passed" ? "Verify again" : "Verify installation"}
@@ -161,8 +159,8 @@ export function SystemPage() {
         <SystemOverviewRow
           icon={AppWindow}
           title="Application"
-          description={`Salty Steak ${application.app_version || "2.0.0"}`}
-          value={about ? "Local service connected" : "Connecting"}
+          description="Salty Steak"
+          value={application.app_version ? `Version ${application.app_version}` : "2.0.0"}
         />
         <SystemOverviewRow
           icon={Database}
@@ -540,8 +538,7 @@ function SystemOverviewRow({ icon: Icon, title, description, value, action }) {
     <article className="system-r18__row">
       <span className="system-r18__row-icon"><Icon aria-hidden="true" /></span>
       <div><h3>{title}</h3><p>{description}</p></div>
-      <strong>{value}</strong>
-      {action || <span aria-hidden="true" />}
+      <div className="system-r18__row-value"><strong>{value}</strong>{action}</div>
     </article>
   );
 }

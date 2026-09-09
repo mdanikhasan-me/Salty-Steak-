@@ -3,9 +3,9 @@ import { useId } from "react";
 import { createPortal } from "react-dom";
 import { useModalFocusTrap } from "../hooks/useModalFocusTrap.js";
 
-export function Dialog({ open, title, description, onClose, children, wide = false }) {
+export function Dialog({ open, title, description, onClose, children, wide = false, compact = false, className = "" }) {
   const titleId = useId();
-  const dialogRef = useModalFocusTrap({ active: open, onClose });
+  const dialogRef = useModalFocusTrap({ active: open, onClose, initialFocusSelector: compact ? "[data-dialog-cancel]" : undefined });
 
   if (!open) return null;
 
@@ -18,7 +18,7 @@ export function Dialog({ open, title, description, onClose, children, wide = fal
     >
       <section
         ref={dialogRef}
-        className={`dialog ${wide ? "dialog--wide" : ""}`}
+        className={`dialog ${wide ? "dialog--wide" : ""} ${compact ? "dialog--confirmation" : ""} ${className}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

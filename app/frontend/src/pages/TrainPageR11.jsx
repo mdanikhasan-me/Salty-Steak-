@@ -311,7 +311,7 @@ export function TrainPageR11({ onNavigate }) {
     <div className="page page--train-r11">
       <PageHeader title="Train">
         <div className="page-status-line">
-          <Status value={header.value} label={header.label} />
+          <Status value={!readyDatasets.length ? "needs_preparation" : header.value} label={!readyDatasets.length ? "Prepared dataset needed" : header.label} />
         </div>
       </PageHeader>
 

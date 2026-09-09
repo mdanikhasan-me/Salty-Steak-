@@ -27,6 +27,7 @@ const ICONS = {
   application_launch: AppWindow,
   window_control: Layers,
 };
+const MANUAL_CONTROLS = new Set(["terminal.execute", "screen.capture", "input.control", "application.launch", "window.control"]);
 
 export function ComputerControlPermissions({
   adapter = null,
@@ -128,6 +129,10 @@ export function ComputerControlPermissions({
     }
     setError(item.detail || "Terminal access is not currently available.");
   }, [loading, proposedInvocation, status]);
+
+  function updateDraft(field, value) {
+    setTerminalDraft(current => ({ ...current, [field]: value }));
+  }
 
   function beginGrant(item) {
     if (!item.available || item.granted) return;
@@ -279,6 +284,226 @@ export function ComputerControlPermissions({
     setAuditRecords(normaliseAutomationAudit(nextAudit));
   }
 
+  const activeReviewCapability = grantReview?.capability.id || terminalDraft?.capability.id || invocationReview?.capability;
+  const activeReview = <>
+      {grantReview ? (
+        <PermissionReview
+          title={`Grant ${grantReview.capability.name} access?`}
+          summary={grantScopeSummary(grantReview)}
+          note="The grant persists locally until you revoke it. It never authorizes an action without another confirmation."
+          confirmLabel="Grant access"
+          busy={busyId === grantReview.capability.id}
+          onCancel={() => setGrantReview(null)}
+          onConfirm={confirmGrant}
+        >
+          {grantReview.capability.id === "terminal.execute" ? (
+            <label className="automation-permission-field">
+              <span>Working-directory root</span>
+              <input
+                type="text"
+                value={grantReview.workingDirectoryRoot}
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
+                  setGrantReview(current => ({ ...current, workingDirectoryRoot: value }));
+                }}
+              />
+              <small>Must be an existing folder inside the project. This does not sandbox the executable.</small>
+            </label>
+          ) : null}
+        </PermissionReview>
+      ) : null}
+
+      {terminalDraft ? (
+        <section className="automation-permission-review automation-invocation-form" aria-label={draftTitle(terminalDraft)}>
+          <div>
+            <strong>{draftTitle(terminalDraft)}</strong>
+            {terminalDraft.kind === "input" ? (
+              <>
+                <p>The action is sent to whichever window currently has focus.</p>
+                <label className="automation-permission-field automation-permission-field--compact">
+                  <span>Action</span>
+                  <select
+                    value={terminalDraft.action}
+                    onChange={(event) => updateDraft("action", event.currentTarget.value)}
+                  >
+                    <option value="mouse_move">Move pointer</option>
+                    <option value="mouse_click">Click</option>
+                    <option value="mouse_scroll">Scroll</option>
+                    <option value="key_press">Press a key</option>
+                    <option value="type_text">Type text</option>
+                    <option value="key_combo">Key combination</option>
+                  </select>
+                </label>
+                {["mouse_move", "mouse_click", "mouse_scroll"].includes(terminalDraft.action) ? (
+                  <>
+                    <label className="automation-permission-field automation-permission-field--compact">
+                      <span>Screen x</span>
+                      <input
+                        type="number"
+                        value={terminalDraft.x}
+                        onChange={(event) => updateDraft("x", event.currentTarget.value)}
+                      />
+                    </label>
+                    <label className="automation-permission-field automation-permission-field--compact">
+                      <span>Screen y</span>
+                      <input
+                        type="number"
+                        value={terminalDraft.y}
+                        onChange={(event) => updateDraft("y", event.currentTarget.value)}
+                      />
+                    </label>
+                  </>
+                ) : null}
+                {terminalDraft.action === "mouse_click" ? (
+                  <label className="automation-permission-field automation-permission-field--compact">
+                    <span>Button</span>
+                    <select
+                      value={terminalDraft.button}
+                      onChange={(event) => updateDraft("button", event.currentTarget.value)}
+                    >
+                      <option value="left">Left</option>
+                      <option value="right">Right</option>
+                      <option value="middle">Middle</option>
+                    </select>
+                  </label>
+                ) : null}
+                {terminalDraft.action === "mouse_scroll" ? (
+                  <label className="automation-permission-field automation-permission-field--compact">
+                    <span>Scroll clicks (negative scrolls down)</span>
+                    <input
+                      type="number"
+                      value={terminalDraft.clicks}
+                      onChange={(event) => updateDraft("clicks", event.currentTarget.value)}
+                    />
+                  </label>
+                ) : null}
+                {terminalDraft.action === "key_press" ? (
+                  <label className="automation-permission-field">
+                    <span>Key name</span>
+                    <input
+                      type="text"
+                      value={terminalDraft.key}
+                      placeholder="Enter, Tab, Escape, F5, Left"
+                      onChange={(event) => updateDraft("key", event.currentTarget.value)}
+                    />
+                  </label>
+                ) : null}
+                {terminalDraft.action === "type_text" ? (
+                  <label className="automation-permission-field">
+                    <span>Text to type</span>
+                    <textarea
+                      rows="3"
+                      value={terminalDraft.text}
+                      onChange={(event) => updateDraft("text", event.currentTarget.value)}
+                    />
+                  </label>
+                ) : null}
+                {terminalDraft.action === "key_combo" ? (
+                  <label className="automation-permission-field">
+                    <span>Combination</span>
+                    <input
+                      type="text"
+                      value={terminalDraft.combo}
+                      placeholder="Ctrl+C, Alt+F4, Win+D"
+                      onChange={(event) => updateDraft("combo", event.currentTarget.value)}
+                    />
+                  </label>
+                ) : null}
+              </>
+            ) : terminalDraft.kind === "window" ? (
+              <>
+                <p>Windows reports its own open window titles, so nothing is read from the screen.</p>
+                <label className="automation-permission-field automation-permission-field--compact">
+                  <span>Action</span>
+                  <select
+                    value={terminalDraft.action}
+                    onChange={(event) => updateDraft("action", event.currentTarget.value)}
+                  >
+                    <option value="list">List open windows</option>
+                    <option value="focus">Bring a window to the front</option>
+                    <option value="close">Close a window</option>
+                  </select>
+                </label>
+                {terminalDraft.action === "list" ? null : (
+                  <label className="automation-permission-field">
+                    <span>Window title</span>
+                    <input
+                      type="text"
+                      value={terminalDraft.title}
+                      placeholder="part of the window title"
+                      onChange={(event) => updateDraft("title", event.currentTarget.value)}
+                    />
+                  </label>
+                )}
+              </>
+            ) : terminalDraft.kind === "launch" ? (
+              <>
+                <p>Enter an installed application name, an https link, or an absolute file path.</p>
+                <label className="automation-permission-field">
+                  <span>Application, link, or file</span>
+                  <input
+                    type="text"
+                    value={terminalDraft.target}
+                    placeholder="msedge, https://example.com, C:\\Users\\me\\notes.txt"
+                    onChange={(event) => updateDraft("target", event.currentTarget.value)}
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <p>Enter argv as a JSON array. No shell command string is accepted.</p>
+                <label className="automation-permission-field">
+                  <span>Command argv</span>
+                  <textarea
+                    rows="3"
+                    value={terminalDraft.argvText}
+                    placeholder={'["git", "status", "--short"]'}
+                    onChange={(event) => updateDraft("argvText", event.currentTarget.value)}
+                  />
+                </label>
+                <label className="automation-permission-field">
+                  <span>Working directory</span>
+                  <input
+                    type="text"
+                    value={terminalDraft.workingDirectory}
+                    onChange={(event) => updateDraft("workingDirectory", event.currentTarget.value)}
+                  />
+                </label>
+                <label className="automation-permission-field automation-permission-field--compact">
+                  <span>Timeout in seconds</span>
+                  <input
+                    type="number"
+                    min="0.05"
+                    max={status.limits.maxTimeoutSeconds}
+                    step="0.05"
+                    value={terminalDraft.timeoutSeconds}
+                    onChange={(event) => updateDraft("timeoutSeconds", event.currentTarget.value)}
+                  />
+                </label>
+              </>
+            )}
+          </div>
+          <div className="automation-permission-review__actions">
+            <button type="button" className="plugin-action plugin-action--quiet" onClick={() => setTerminalDraft(null)}>Cancel</button>
+            <button type="button" className="plugin-action" onClick={reviewTerminalInvocation}>Review action</button>
+          </div>
+        </section>
+      ) : null}
+
+      {invocationReview ? (
+        <PermissionReview
+          title={`Confirm ${capabilityName(invocationReview.capability)} action`}
+          summary={invocationReview.summary}
+          note="Only the exact arguments shown above will be sent to the local broker."
+          confirmLabel={capabilityInvokeLabel(invocationReview.capability)}
+          busy={busyId === invocationReview.capability}
+          onCancel={() => setInvocationReview(null)}
+          onConfirm={confirmInvocation}
+        />
+      ) : null}
+
+  </>;
+
   return (
     <section ref={sectionRef} className="computer-control-permissions" aria-labelledby="computer-control-title">
       <header className="plugin-section-label">
@@ -318,7 +543,7 @@ export function ComputerControlPermissions({
                     Revoke
                   </button>
                 ) : null}
-                <button
+                {item.granted && item.effectiveEnabled && !MANUAL_CONTROLS.has(item.id) ? <span className="automation-agent-availability">Available in Agent</span> : <button
                   type="button"
                   className="plugin-action"
                   disabled={actionDisabled}
@@ -330,228 +555,13 @@ export function ComputerControlPermissions({
                       Working…
                     </span>
                   ) : item.actionLabel}
-                </button>
+                </button>}
               </div>
+              {activeReviewCapability === item.id ? <div className="automation-inline-review">{activeReview}</div> : null}
             </div>
           );
         })}
       </div>
-
-      {grantReview ? (
-        <PermissionReview
-          title={`Grant ${grantReview.capability.name} access?`}
-          summary={grantScopeSummary(grantReview)}
-          note="The grant persists locally until you revoke it. It never authorizes an action without another confirmation."
-          confirmLabel="Grant access"
-          busy={busyId === grantReview.capability.id}
-          onCancel={() => setGrantReview(null)}
-          onConfirm={confirmGrant}
-        >
-          {grantReview.capability.id === "terminal.execute" ? (
-            <label className="automation-permission-field">
-              <span>Working-directory root</span>
-              <input
-                type="text"
-                value={grantReview.workingDirectoryRoot}
-                onChange={(event) => setGrantReview((current) => ({
-                  ...current,
-                  workingDirectoryRoot: event.currentTarget.value,
-                }))}
-              />
-              <small>Must be an existing folder inside the project. This does not sandbox the executable.</small>
-            </label>
-          ) : null}
-        </PermissionReview>
-      ) : null}
-
-      {terminalDraft ? (
-        <section className="automation-permission-review automation-invocation-form" aria-label={draftTitle(terminalDraft)}>
-          <div>
-            <strong>{draftTitle(terminalDraft)}</strong>
-            {terminalDraft.kind === "input" ? (
-              <>
-                <p>The action is sent to whichever window currently has focus.</p>
-                <label className="automation-permission-field automation-permission-field--compact">
-                  <span>Action</span>
-                  <select
-                    value={terminalDraft.action}
-                    onChange={(event) => setTerminalDraft((current) => ({ ...current, action: event.currentTarget.value }))}
-                  >
-                    <option value="mouse_move">Move pointer</option>
-                    <option value="mouse_click">Click</option>
-                    <option value="mouse_scroll">Scroll</option>
-                    <option value="key_press">Press a key</option>
-                    <option value="type_text">Type text</option>
-                    <option value="key_combo">Key combination</option>
-                  </select>
-                </label>
-                {["mouse_move", "mouse_click", "mouse_scroll"].includes(terminalDraft.action) ? (
-                  <>
-                    <label className="automation-permission-field automation-permission-field--compact">
-                      <span>Screen x</span>
-                      <input
-                        type="number"
-                        value={terminalDraft.x}
-                        onChange={(event) => setTerminalDraft((current) => ({ ...current, x: event.currentTarget.value }))}
-                      />
-                    </label>
-                    <label className="automation-permission-field automation-permission-field--compact">
-                      <span>Screen y</span>
-                      <input
-                        type="number"
-                        value={terminalDraft.y}
-                        onChange={(event) => setTerminalDraft((current) => ({ ...current, y: event.currentTarget.value }))}
-                      />
-                    </label>
-                  </>
-                ) : null}
-                {terminalDraft.action === "mouse_click" ? (
-                  <label className="automation-permission-field automation-permission-field--compact">
-                    <span>Button</span>
-                    <select
-                      value={terminalDraft.button}
-                      onChange={(event) => setTerminalDraft((current) => ({ ...current, button: event.currentTarget.value }))}
-                    >
-                      <option value="left">Left</option>
-                      <option value="right">Right</option>
-                      <option value="middle">Middle</option>
-                    </select>
-                  </label>
-                ) : null}
-                {terminalDraft.action === "mouse_scroll" ? (
-                  <label className="automation-permission-field automation-permission-field--compact">
-                    <span>Scroll clicks (negative scrolls down)</span>
-                    <input
-                      type="number"
-                      value={terminalDraft.clicks}
-                      onChange={(event) => setTerminalDraft((current) => ({ ...current, clicks: event.currentTarget.value }))}
-                    />
-                  </label>
-                ) : null}
-                {terminalDraft.action === "key_press" ? (
-                  <label className="automation-permission-field">
-                    <span>Key name</span>
-                    <input
-                      type="text"
-                      value={terminalDraft.key}
-                      placeholder="Enter, Tab, Escape, F5, Left"
-                      onChange={(event) => setTerminalDraft((current) => ({ ...current, key: event.currentTarget.value }))}
-                    />
-                  </label>
-                ) : null}
-                {terminalDraft.action === "type_text" ? (
-                  <label className="automation-permission-field">
-                    <span>Text to type</span>
-                    <textarea
-                      rows="3"
-                      value={terminalDraft.text}
-                      onChange={(event) => setTerminalDraft((current) => ({ ...current, text: event.currentTarget.value }))}
-                    />
-                  </label>
-                ) : null}
-                {terminalDraft.action === "key_combo" ? (
-                  <label className="automation-permission-field">
-                    <span>Combination</span>
-                    <input
-                      type="text"
-                      value={terminalDraft.combo}
-                      placeholder="Ctrl+C, Alt+F4, Win+D"
-                      onChange={(event) => setTerminalDraft((current) => ({ ...current, combo: event.currentTarget.value }))}
-                    />
-                  </label>
-                ) : null}
-              </>
-            ) : terminalDraft.kind === "window" ? (
-              <>
-                <p>Windows reports its own open window titles, so nothing is read from the screen.</p>
-                <label className="automation-permission-field automation-permission-field--compact">
-                  <span>Action</span>
-                  <select
-                    value={terminalDraft.action}
-                    onChange={(event) => setTerminalDraft((current) => ({ ...current, action: event.currentTarget.value }))}
-                  >
-                    <option value="list">List open windows</option>
-                    <option value="focus">Bring a window to the front</option>
-                    <option value="close">Close a window</option>
-                  </select>
-                </label>
-                {terminalDraft.action === "list" ? null : (
-                  <label className="automation-permission-field">
-                    <span>Window title</span>
-                    <input
-                      type="text"
-                      value={terminalDraft.title}
-                      placeholder="part of the window title"
-                      onChange={(event) => setTerminalDraft((current) => ({ ...current, title: event.currentTarget.value }))}
-                    />
-                  </label>
-                )}
-              </>
-            ) : terminalDraft.kind === "launch" ? (
-              <>
-                <p>Enter an installed application name, an https link, or an absolute file path.</p>
-                <label className="automation-permission-field">
-                  <span>Application, link, or file</span>
-                  <input
-                    type="text"
-                    value={terminalDraft.target}
-                    placeholder="msedge, https://example.com, C:\\Users\\me\\notes.txt"
-                    onChange={(event) => setTerminalDraft((current) => ({ ...current, target: event.currentTarget.value }))}
-                  />
-                </label>
-              </>
-            ) : (
-              <>
-                <p>Enter argv as a JSON array. No shell command string is accepted.</p>
-                <label className="automation-permission-field">
-                  <span>Command argv</span>
-                  <textarea
-                    rows="3"
-                    value={terminalDraft.argvText}
-                    placeholder={'["git", "status", "--short"]'}
-                    onChange={(event) => setTerminalDraft((current) => ({ ...current, argvText: event.currentTarget.value }))}
-                  />
-                </label>
-                <label className="automation-permission-field">
-                  <span>Working directory</span>
-                  <input
-                    type="text"
-                    value={terminalDraft.workingDirectory}
-                    onChange={(event) => setTerminalDraft((current) => ({ ...current, workingDirectory: event.currentTarget.value }))}
-                  />
-                </label>
-                <label className="automation-permission-field automation-permission-field--compact">
-                  <span>Timeout in seconds</span>
-                  <input
-                    type="number"
-                    min="0.05"
-                    max={status.limits.maxTimeoutSeconds}
-                    step="0.05"
-                    value={terminalDraft.timeoutSeconds}
-                    onChange={(event) => setTerminalDraft((current) => ({ ...current, timeoutSeconds: event.currentTarget.value }))}
-                  />
-                </label>
-              </>
-            )}
-          </div>
-          <div className="automation-permission-review__actions">
-            <button type="button" className="plugin-action plugin-action--quiet" onClick={() => setTerminalDraft(null)}>Cancel</button>
-            <button type="button" className="plugin-action" onClick={reviewTerminalInvocation}>Review action</button>
-          </div>
-        </section>
-      ) : null}
-
-      {invocationReview ? (
-        <PermissionReview
-          title={`Confirm ${capabilityName(invocationReview.capability)} action`}
-          summary={invocationReview.summary}
-          note="Only the exact arguments shown above will be sent to the local broker."
-          confirmLabel={capabilityInvokeLabel(invocationReview.capability)}
-          busy={busyId === invocationReview.capability}
-          onCancel={() => setInvocationReview(null)}
-          onConfirm={confirmInvocation}
-        />
-      ) : null}
 
       {lastResult ? (
         <div>
@@ -593,8 +603,13 @@ export function ComputerControlPermissions({
 }
 
 function PermissionReview({ title, summary, note, confirmLabel, busy, onCancel, onConfirm, children }) {
+  const reviewRef = useRef(null);
+  useEffect(() => {
+    reviewRef.current?.scrollIntoView({ block: "nearest" });
+    reviewRef.current?.querySelector("button")?.focus({ preventScroll: true });
+  }, [title]);
   return (
-    <section className="automation-permission-review" aria-label={title} aria-busy={busy || undefined}>
+    <section ref={reviewRef} className="automation-permission-review" aria-label={title} aria-busy={busy || undefined}>
       <div>
         <strong>{title}</strong>
         <p>{summary}</p>

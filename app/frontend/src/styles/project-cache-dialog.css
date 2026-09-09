@@ -1,0 +1,63 @@
+.dialog-layer:has(> .project-cache-dialog) {
+  background: rgb(0 0 0 / 48%);
+}
+
+.dialog.workbench-dialog.project-cache-dialog {
+  width: min(480px, calc(100vw - 32px));
+  background: #242424;
+  border: 1px solid #ffffff12;
+  box-shadow: none;
+}
+
+.dialog.project-cache-dialog .project-cache-dialog__consequence {
+  margin: 0 0 16px;
+  color: #b5b5b5;
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.dialog.project-cache-dialog .definition-list > div {
+  grid-template-columns: 140px minmax(0, 1fr);
+  padding: 7px 0;
+  gap: 12px;
+}
+
+.dialog.project-cache-dialog .definition-list dd {
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.dialog.project-cache-dialog .definition-list dd:not(.mono) {
+  white-space: nowrap;
+}
+
+.dialog.project-cache-dialog .form-actions {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog.project-cache-dialog .form-actions > .button {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.dialog.project-cache-dialog .button--danger {
+  background: #ae4545;
+  color: #fff;
+  border-color: transparent;
+}
+
+.dialog.project-cache-dialog .button--danger:hover:not(:disabled) {
+  background: #bf5050;
+}
+
+@media (max-width: 440px) {
+  .dialog.project-cache-dialog .definition-list > div {
+    grid-template-columns: 112px minmax(0, 1fr);
+  }
+}

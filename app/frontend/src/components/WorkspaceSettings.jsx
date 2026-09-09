@@ -21,19 +21,20 @@ export function applyAppearance(value) {
 
 const SECTIONS = [
   ["general", "General"], ["memory", "Memory"], ["plugins", "Connections"],
-  ["companion", "Companion"], ["about", "About"],
+  ["companion", "Companion"],
 ];
 
 export function WorkspaceSettings({ section, onSectionChange, onClose, active = true, children }) {
   const ref = useModalFocusTrap({ active, onClose });
-  const contextual = ["response", "image", "advanced"].includes(section);
-  const label = contextual ? section === "image" ? "Image generation settings" : "Text model settings" : "Settings";
-  return <section className={`workspace-settings${contextual ? " conversation-settings" : ""}`} ref={ref} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}>
+  const about = section === "about";
+  const contextual = about || ["response", "image", "advanced"].includes(section);
+  const label = about ? "About Salty Steak" : contextual ? section === "image" ? "Image generation settings" : "Text model settings" : "Settings";
+  return <section className={`workspace-settings${contextual ? " conversation-settings" : ""}${about ? " about-dialog" : ""}`} ref={ref} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}>
     {!contextual ? <nav className="workspace-settings__navigation" aria-label="Settings sections">
       <h2>Settings</h2>
       {SECTIONS.map(([id, label]) => <button key={id} type="button" aria-current={section === id ? "page" : undefined} onClick={() => onSectionChange(id)}>{label}</button>)}
     </nav> : null}
-    <button type="button" className="workspace-settings__close" aria-label="Close settings" onClick={onClose}><X aria-hidden="true" /></button>
+    <button type="button" className="workspace-settings__close" aria-label={about ? "Close About" : "Close settings"} onClick={onClose}><X aria-hidden="true" /></button>
     <div className="workspace-settings__content" key={section}>{children}</div>
   </section>;
 }

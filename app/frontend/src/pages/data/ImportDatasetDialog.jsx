@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Check } from "lucide-react";
 import { api } from "../../api/client.js";
 import { Dialog } from "../../components/Dialog.jsx";
 import { InlineNotice } from "../../components/Primitives.jsx";
@@ -15,6 +16,7 @@ import {
   mappingIsValid,
   stripExtension,
 } from "./importDatasetUtils.js";
+import "./import-dataset-dialog.css";
 
 const EMPTY_MAPPING = { type: "plain_text", plain_text: "" };
 const EMPTY_METADATA = {
@@ -143,10 +145,11 @@ export function ImportDatasetDialog({ open, onClose, onAdded }) {
 
   return (
     <Dialog
+      className="workbench-dialog import-dataset-dialog"
       open={open}
       wide
       title="Add dataset"
-      description="Add training material in five deliberate steps. Nothing starts automatically."
+      description="Choose your source and review how its examples will be used."
       onClose={onClose}
     >
       <ol className="wizard-steps" aria-label="Import progress">
@@ -154,6 +157,7 @@ export function ImportDatasetDialog({ open, onClose, onAdded }) {
           (label, index) => (
             <li
               key={label}
+              aria-current={step === index + 1 ? "step" : undefined}
               className={
                 step === index + 1
                   ? "wizard-step--active"
@@ -162,7 +166,7 @@ export function ImportDatasetDialog({ open, onClose, onAdded }) {
                     : ""
               }
             >
-              <span>{step > index + 1 ? "✓" : index + 1}</span>
+              <span aria-hidden="true">{step > index + 1 ? <Check /> : index + 1}</span>
               <span>{label}</span>
             </li>
           ),

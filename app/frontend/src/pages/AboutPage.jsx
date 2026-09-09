@@ -54,10 +54,10 @@ export function AboutPage({ onBack }) {
 
   return (
     <article className="about-page about-page--compact" aria-labelledby="about-title">
-      <button className="about-compact__back" type="button" onClick={onBack}>
+      {onBack ? <button className="about-compact__back" type="button" onClick={onBack}>
         <ArrowLeft aria-hidden="true" />
         Back to chat
-      </button>
+      </button> : null}
 
       <header className="about-compact__hero">
         <img src="/assets/salty-potato-symbol.svg" alt="" width="56" height="56" />
@@ -80,8 +80,8 @@ export function AboutPage({ onBack }) {
 
       <dl className="about-compact__facts">
         <div><dt>Local service</dt><dd>{about ? "Connected" : "Connecting"}</dd></div>
-        <div><dt>Active model</dt><dd>{model?.display_name || "No model selected"}</dd></div>
-        <div><dt>Workspace</dt><dd>{system.current_drive || "Local drive"}</dd></div>
+        <div><dt>Loaded model</dt><dd>{model?.display_name || "Not loaded"}</dd></div>
+        <div><dt>Workspace drive</dt><dd>{system.current_drive || "Local drive"}</dd></div>
         <div><dt>Runtime</dt><dd>{runtime.device ? `${runtime.device}${runtime.precision ? ` · ${runtime.precision}` : ""}` : "Idle"}</dd></div>
       </dl>
 

@@ -193,7 +193,7 @@ export function VersionsPageR11({ onNavigate }) {
               <>
                 <header className="version-detail__header">
                   <div>
-                    <span className="eyebrow">{selected.model_role_label || "Language"} model · {friendlyStatus(selected)}</span>
+                    <span className="eyebrow">{selected.model_role_label || "Language"} model</span>
                     <h2>{friendlyName(selected)}</h2>
                     <p>{versionSummary(selected)}</p>
                   </div>
@@ -202,7 +202,6 @@ export function VersionsPageR11({ onNavigate }) {
                     label={String(activeId) === String(selected.id) ? "Current Chat" : friendlyStatus(selected)}
                   />
                 </header>
-                <VersionMetricStrip version={selected} activeId={activeId} />
                 <DefinitionList items={normalFacts(selected, activeId)} />
                 <div className="version-actions">
                   {selected.available_actions?.use_in_chat?.enabled && String(activeId) !== String(selected.id) ? (

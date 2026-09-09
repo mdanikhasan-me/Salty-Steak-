@@ -1,0 +1,221 @@
+/* Import owns its layout so generic workbench rules cannot spread values
+   across the panel or restore colored milestone badges. */
+.dialog-layer:has(> .import-dataset-dialog) {
+  background: rgb(0 0 0 / 48%);
+  backdrop-filter: none;
+}
+
+.dialog.workbench-dialog.import-dataset-dialog {
+  width: min(560px, calc(100vw - 32px));
+  background: #242424;
+  border: 1px solid #ffffff12;
+  border-radius: 12px;
+  box-shadow: none;
+  color: #ececec;
+}
+
+.dialog.import-dataset-dialog .dialog__header {
+  padding: 22px 24px 16px;
+  border: 0;
+}
+
+.dialog.import-dataset-dialog .dialog__header h2 {
+  margin: 0 0 5px;
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+}
+
+.dialog.import-dataset-dialog .dialog__header p {
+  color: #aaa;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.dialog.import-dataset-dialog .dialog__header .icon-button {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 6px;
+  color: #b8b8b8;
+}
+
+.dialog.import-dataset-dialog .dialog__body {
+  padding: 0 24px 24px;
+}
+
+.dialog.import-dataset-dialog .wizard-steps {
+  gap: 8px;
+  margin: 0 0 24px;
+}
+
+.dialog.import-dataset-dialog .wizard-steps li {
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 0 10px;
+  border-bottom: 2px solid #ffffff0d;
+  color: #929292;
+  font-size: 11px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.dialog.import-dataset-dialog .wizard-steps li::before {
+  content: none;
+}
+
+.dialog.import-dataset-dialog .wizard-steps li > span:first-child {
+  width: 14px;
+  height: 16px;
+  flex: 0 0 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.dialog.import-dataset-dialog .wizard-steps svg {
+  width: 12px;
+  height: 12px;
+}
+
+.dialog.import-dataset-dialog .wizard-steps li > span:last-child {
+  display: block;
+}
+
+.dialog.import-dataset-dialog .wizard-steps li.wizard-step--done {
+  color: #b8b8b8;
+  border-bottom-color: #ffffff28;
+}
+
+.dialog.import-dataset-dialog .wizard-steps li.wizard-step--active {
+  color: #f1f1f1;
+  border-bottom-color: #d7d7d7;
+  font-weight: 550;
+}
+
+.dialog.import-dataset-dialog .wizard-panel {
+  gap: 16px;
+}
+
+.dialog.import-dataset-dialog .wizard-panel h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 21px;
+  font-weight: 550;
+}
+
+.dialog.import-dataset-dialog .wizard-panel h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.dialog.import-dataset-dialog .field > .field__label {
+  font-size: 12px;
+  font-weight: 450;
+  color: #cecece;
+}
+
+.dialog.import-dataset-dialog .wizard-heading > .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.dialog.import-dataset-dialog .wizard-panel p {
+  margin: 0;
+  color: #b1b1b1;
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.dialog.import-dataset-dialog .wizard-panel > h3 + p {
+  margin-top: -10px;
+}
+
+.dialog.import-dataset-dialog .definition-list {
+  margin: 0;
+  padding: 0;
+  gap: 0;
+}
+
+.dialog.import-dataset-dialog .definition-list > div {
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 16px;
+  padding: 7px 0;
+  border: 0;
+}
+
+.dialog.import-dataset-dialog .definition-list dt {
+  color: #aaa;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.dialog.import-dataset-dialog .definition-list dd {
+  color: #e4e4e4;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.dialog.import-dataset-dialog .definition-list dd.mono {
+  font-size: 11px;
+}
+
+.dialog.import-dataset-dialog .form-actions {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid #ffffff0a;
+  gap: 8px;
+}
+
+.dialog.import-dataset-dialog .form-actions > .button {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.dialog.import-dataset-dialog .button {
+  min-height: 32px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+.dialog.import-dataset-dialog .sample-records pre,
+.dialog.import-dataset-dialog .formatted-example pre {
+  border: 1px solid #ffffff0c;
+  background: #1b1b1b;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.dialog.import-dataset-dialog .inline-notice--information {
+  padding: 0;
+  background: transparent;
+  color: #aaa;
+}
+
+@media (max-width: 520px) {
+  .dialog.import-dataset-dialog .dialog__header { padding: 18px 16px 12px; }
+  .dialog.import-dataset-dialog .dialog__body { padding: 0 16px 18px; }
+  .dialog.import-dataset-dialog .wizard-steps { gap: 5px; }
+  .dialog.import-dataset-dialog .wizard-steps li {
+    flex-direction: column;
+    align-items: flex-start;
+    font-size: 10px;
+  }
+  .dialog.import-dataset-dialog .wizard-steps li > span:last-child { display: block; }
+  .dialog.import-dataset-dialog .definition-list > div {
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 12px;
+  }
+}

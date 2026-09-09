@@ -150,10 +150,10 @@ export function MapFieldsStep({
       <section className="formatted-example">
         <div className="wizard-heading">
           <div>
-            <h4>Exact backend training preview</h4>
+            <h4>Training preview</h4>
             <p>
-              This runs the same parser, template, tokenizer, target mask, and
-              sequence construction used by preparation.
+              Check a real example using the same formatting and token limits
+              as dataset preparation.
             </p>
           </div>
           <Button
@@ -346,12 +346,10 @@ export function ReviewDatasetStep({
   return (
     <div className="wizard-panel">
       <h3>Review and add</h3>
-      <InlineNotice
-        kind="information"
-        title="Only the dataset record will be added"
-      >
-        Validation, preparation, evaluation, and training will not start.
-      </InlineNotice>
+      <p className="import-review-note">
+        Add this source to your library. You can validate and prepare it there
+        before starting any training.
+      </p>
       <DefinitionList
         items={[
           { label: "Dataset name", value: metadata.name },

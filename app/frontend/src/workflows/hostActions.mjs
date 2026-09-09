@@ -16,8 +16,10 @@ export function hostActionProposalForMessage(message) {
   return legacyImageProposal(message);
 }
 
-export function hostSafeAssistantContent(message, proposal = null) {
+export function hostSafeAssistantContent(message, proposal = null, operation = null) {
   const content = String(message?.content || "");
+  // Cleanup has one live status surface; stale planning text must not contradict it.
+  if (proposal?.kind === "system.clean_temp") return "";
   if (proposal?.legacy === true) return "";
   if (looksLikeHistoricalUnixDeletionAdvice(content)) {
     return (
@@ -49,10 +51,41 @@ function normaliseProposal(value, legacy) {
     risk: String(value.risk || "standard"),
     arguments: argumentsValue ? structuredCloneSafe(argumentsValue) : null,
     runtimeReason: value.runtime_reason ? String(value.runtime_reason) : "",
+    result: value.result && typeof value.result === "object" ? structuredCloneSafe(value.result) : null,
+    generation_settings: value.generation_settings && typeof value.generation_settings === "object" ? structuredCloneSafe(value.generation_settings) : undefined,
+    image_settings: value.image_settings && typeof value.image_settings === "object" ? structuredCloneSafe(value.image_settings) : undefined,
     requiresConfirmation: value.requires_confirmation !== false,
     executionAllowed: value.execution_allowed === true,
     legacy,
   });
+}
+
+export function cleanupPresentation(proposal, operation = null) {
+  const state = String(operation?.state || proposal?.state || "pending_review").toLowerCase();
+  const result = operation?.result?.result || proposal?.result || null;
+  if (["queued", "running", "stop_requested"].includes(state)) return {
+    label: state === "stop_requested" ? "Stopping cleanup" : "Cleaning temporary files",
+    summary: state === "stop_requested" ? "Stop requested. Waiting for the cleanup worker to finish." : "Working through the reviewed folders. Files in use and inaccessible entries are skipped.",
+    roots: [],
+  };
+  if (state === "completed" && result && Number.isFinite(result.deleted_files)) {
+    const skipped = Number(result.skipped_entries) || 0;
+    const count = new Intl.NumberFormat();
+    const bytes = Number(result.reclaimed_bytes) || 0;
+    const size = bytes >= 1073741824 ? `${(bytes / 1073741824).toFixed(1)} GiB` : `${(bytes / 1048576).toFixed(1)} MiB`;
+    return {
+      label: skipped ? "Cleanup finished with skipped items" : "Cleanup finished",
+      summary: `${count.format(result.deleted_files)} files removed · ${size} reclaimed${skipped ? ` · ${count.format(skipped)} entries skipped` : ""}.`,
+      roots: Array.isArray(result.roots) ? result.roots : [],
+    };
+  }
+  if (state === "completed") return {label:"Cleanup result unavailable",summary:"The operation ended, but its removal counts could not be verified.",roots:[]};
+  if (["failed", "interrupted", "cancelled"].includes(state)) {
+    const count = Number.isFinite(result?.deleted_files) ? `${new Intl.NumberFormat().format(result.deleted_files)} files were recorded as removed before the operation ended.` : "Removal counts were not recorded. Some files may have been removed.";
+    const error = typeof operation?.error === "string" ? operation.error : operation?.error?.message;
+    return { label: state === "failed" ? "Cleanup failed" : "Cleanup stopped", summary: [error, count].filter(Boolean).join(" "), roots: Array.isArray(result?.roots) ? result.roots : [] };
+  }
+  return {label:"Temporary file cleanup",summary:"Review the folders before permanently removing their contents.",roots:[]};
 }
 
 function legacyImageProposal(message) {

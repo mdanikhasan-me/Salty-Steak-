@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import "../styles/companion-settings-recovery.css";
 
 const KEY = "salty-steak:companion-v1";
 let loading;
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = src; script.onload = resolve; script.onerror = reject;
+    script.src = src; script.onload = resolve;
+    script.onerror = (error) => { script.remove(); reject(error); };
     document.head.appendChild(script);
   });
 }
@@ -26,17 +28,28 @@ export function CompanionSettings() {
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
   const [workPreview, setWorkPreview] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [loadFailed, setLoadFailed] = useState(false);
   const native = Boolean(window.chrome?.webview);
   useEffect(() => {
     let cancelled = false;
     let instance;
+    setReady(false);
+    setLoadFailed(false);
+    setWorkPreview(false);
+    setError("");
     loadCompanion().then(async () => {
       if (cancelled || !host.current) return;
       instance = await window.mountOtter(host.current);
       if (cancelled) instance?.dispose?.(); else setReady(true);
-    }).catch(() => { if (!cancelled) setError("The companion could not load. Reopen Settings to retry."); });
+    }).catch(() => {
+      if (!cancelled) {
+        setLoadFailed(true);
+        setError("The companion preview could not load.");
+      }
+    });
     return () => { cancelled = true; instance?.dispose?.(); };
-  }, []);
+  }, [loadAttempt]);
   useEffect(() => {
     const bridge = window.chrome?.webview;
     const receive = (event) => {
@@ -53,10 +66,10 @@ export function CompanionSettings() {
     try { localStorage.setItem(KEY, JSON.stringify(next)); } catch {}
     window.chrome?.webview?.postMessage({ type: "companion_settings", settings: next });
   };
-  return <div className="preferences-page">
+  return <div className={`preferences-page companion-settings${loadFailed ? " companion-settings--load-failed" : ""}`}>
     <h2>Companion</h2><p className="preferences-intro">Rests when idle. Uses the tablet while your AI works.</p>
     <div className="companion-preview-row"><div ref={host} className="companion-preview" aria-label="Otter preview" /><div className="companion-preview-actions"><button type="button" disabled={!ready} aria-pressed={workPreview} onClick={() => { const next=!workPreview;setWorkPreview(next);host.current?.otter?.setWorking(next); }}>{workPreview ? "Stop preview" : "Preview working"}</button>{["Curious", "Greeting"].map((name) => <button type="button" key={name} disabled={!ready || workPreview} onClick={() => host.current?.otter?.play(name)}>{name}</button>)}</div></div>
-    {error ? <p role="alert">{error}</p> : null}
+    {error ? <div className="companion-settings__error"><p role="alert">{error}</p>{loadFailed ? <button type="button" onClick={() => setLoadAttempt((value) => value + 1)}>Retry preview</button> : null}</div> : null}
     <label className="preference-row"><span>Desktop companion<small>{native ? "Sit above the Windows taskbar." : "Available in the Windows application."}</small></span><input type="checkbox" role="switch" aria-label="Desktop companion" checked={settings.enabled} disabled={!native} onChange={(event) => update({ enabled: event.target.checked })} /></label>
     <label className="preference-row"><span>Position<small>Adjust placement here.</small></span><select aria-label="Companion position" value={settings.position} onChange={(event) => update({ position: event.target.value })}><option value="right">Taskbar · right</option><option value="left">Taskbar · left</option></select></label>
     <label className="preference-row"><span>Size</span><select aria-label="Companion size" value={settings.size} onChange={(event) => update({ size: event.target.value })}><option value="small">Small</option><option value="medium">Medium</option></select></label>

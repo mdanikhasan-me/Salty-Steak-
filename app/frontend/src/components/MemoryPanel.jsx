@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Brain, Search, Trash2 } from "lucide-react";
 
 import { api } from "../api/client.js";
@@ -19,13 +19,27 @@ export function MemoryPanel() {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [clearRequested, setClearRequested] = useState(false);
+  const clearButton = useRef(null);
+  const cancelClearButton = useRef(null);
+  useEffect(() => {
+    if (!clearRequested) return;
+    const frame = requestAnimationFrame(() => cancelClearButton.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [clearRequested]);
 
   const refresh = useCallback(async () => {
     setError("");
+    setLoading(true);
     try {
       setPayload(await api.listChatMemories());
+      setLoaded(true);
     } catch (cause) {
       setError(errorMessage(cause));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -78,12 +92,13 @@ export function MemoryPanel() {
 
   async function clearAll() {
     if (busy || !hasAnyMemory) return;
-    if (!window.confirm("Delete every saved memory? Conversation history will not be deleted.")) return;
     setBusy("clear");
     setError("");
     try {
       await api.clearChatMemories();
+      setClearRequested(false);
       await refresh();
+      clearButton.current?.focus();
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -133,18 +148,30 @@ export function MemoryPanel() {
         <button
           type="button"
           className="memory-panel__clear"
+          ref={clearButton}
           disabled={Boolean(busy) || !hasAnyMemory}
-          onClick={clearAll}
+          onClick={() => setClearRequested(true)}
         >
           Clear all
         </button>
       </div>
 
-      {error ? <p className="memory-panel__error" role="alert">{error}</p> : null}
-      <p className="memory-panel__count">
+      {clearRequested ? <div className="memory-clear-confirmation" role="group" aria-label="Confirm clearing saved memories" onKeyDown={event => {
+        if (event.key === "Escape" && !busy) {
+          event.preventDefault(); event.stopPropagation(); setClearRequested(false); clearButton.current?.focus();
+        }
+      }}>
+        <strong>Delete all saved memories?</strong>
+        <p>These notes will be removed permanently. Conversation history stays in place.</p>
+        <div><button ref={cancelClearButton} type="button" disabled={Boolean(busy)} onClick={() => { setClearRequested(false); clearButton.current?.focus(); }}>Cancel</button><button type="button" className="memory-clear-confirmation__delete" disabled={Boolean(busy)} onClick={() => void clearAll()}>{busy === "clear" ? "Deleting…" : "Delete memories"}</button></div>
+      </div> : null}
+
+      {error ? <div className="memory-panel__error" role="alert"><p>{error}</p>{!loaded ? <button type="button" disabled={loading} onClick={() => void refresh()}>Try again</button> : null}</div> : null}
+      {loading && !loaded ? <p role="status">Loading saved memories…</p> : null}
+      {loaded ? <p className="memory-panel__count">
         {Number(payload.statistics?.active || 0).toLocaleString()} saved
         <span>Automatic saving is off</span>
-      </p>
+      </p> : null}
       {Number(payload.excluded_non_explicit || 0) > 0 ? (
         <p className="memory-panel__legacy" role="status">
           {Number(payload.excluded_non_explicit).toLocaleString()} older non-explicit
@@ -170,7 +197,7 @@ export function MemoryPanel() {
             </button>
           </article>
         ))}
-        {!memories.length ? (
+        {loaded && !memories.length ? (
           <p className="memory-panel__empty">
             {(payload.memories || []).length ? "No saved memory matches." : "Nothing is saved yet."}
           </p>

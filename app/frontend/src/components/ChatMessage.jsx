@@ -30,6 +30,7 @@ import { RichText } from "./RichText.jsx";
 import { SiteIcon } from "./SiteIcon.jsx";
 import { generationFailureForMessage } from "../workflows/generationFailure.mjs";
 import { codeArtifactsFromText, normaliseNamedCodeFences } from "../workflows/codeArtifacts.mjs";
+import "../styles/generated-image-recovery.css";
 
 export function ChatMessage({
   message,
@@ -73,7 +74,7 @@ export function ChatMessage({
 
   const visibleContent = assistant
     ? presentAssistantContent(
-      hostSafeAssistantContent(message, actionProposal),
+      hostSafeAssistantContent(message, actionProposal, actionOperation),
       reasoningMode,
     )
     : { answer: String(message.content || "").trim(), reasoning: "", cookingTurn: false };
@@ -100,6 +101,7 @@ export function ChatMessage({
 
   const degradedOutput = assistant
     && !actionProposal
+    && !generatedImage
     && looksDegradedOutput(visibleContent.answer);
   const generationFailure = generationFailureForMessage(message);
   const codeArtifacts = assistant && details?.code_file_artifacts_allowed === true
@@ -189,25 +191,7 @@ export function ChatMessage({
             />
           ) : null}
           {generatedImage ? (
-            <figure className="message-generated-image">
-              <img
-                src={generatedImage.url}
-                alt={generatedImage.prompt || "Generated image"}
-                width={generatedImage.width}
-                height={generatedImage.height}
-                loading="lazy"
-                decoding="async"
-              />
-              <figcaption>
-                <span>{generatedImage.modelName}</span>
-                <button
-                  type="button"
-                  onClick={() => saveGeneratedImage(generatedImage)}
-                >
-                  Save image
-                </button>
-              </figcaption>
-            </figure>
+            <GeneratedImage key={generatedImage.url} image={generatedImage} />
           ) : null}
           {visibleContent.answer && !generatedImage ? (
             <RichText className="message__content">{codeArtifacts.length ? normaliseNamedCodeFences(visibleContent.answer) : visibleContent.answer}</RichText>
@@ -336,6 +320,45 @@ export function downloadCodeArtifact(artifact) {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function GeneratedImage({ image }) {
+  const [status, setStatus] = useState("loading");
+  const [attempt, setAttempt] = useState(0);
+  const source = attempt
+    ? `${image.url}${image.url.includes("?") ? "&" : "?"}retry=${attempt}`
+    : image.url;
+  return (
+    <figure className={`message-generated-image message-generated-image--${status}`}>
+      {status === "failed" ? (
+        <div className="message-generated-image__recovery">
+          <p role="alert">The saved image could not be loaded.</p>
+          <button type="button" onClick={() => {
+            setStatus("loading");
+            setAttempt((value) => value + 1);
+          }}>Retry image</button>
+        </div>
+      ) : (
+        <img
+          key={source}
+          src={source}
+          alt={image.prompt || "Generated image"}
+          width={image.width}
+          height={image.height}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setStatus("loaded")}
+          onError={() => setStatus("failed")}
+        />
+      )}
+      <figcaption>
+        <span>{image.modelName}</span>
+        <button type="button" disabled={status !== "loaded"} onClick={() => saveGeneratedImage(image)}>
+          Save image
+        </button>
+      </figcaption>
+    </figure>
+  );
 }
 
 function saveGeneratedImage(image) {

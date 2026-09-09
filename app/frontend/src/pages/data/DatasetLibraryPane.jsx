@@ -70,17 +70,17 @@ function DatasetRow({ dataset, selected, onSelect }) {
           <button
             type="button"
             className={`library-item ${selected ? "library-item--active" : ""}`}
+            aria-current={selected ? "true" : undefined}
             onClick={() => onSelect(dataset.id)}
           >
             <span className="library-item__name">{dataset.display_name || dataset.name}</span>
-            <span className="library-item__file">{dataset.source_filename}</span>
-            <span className="library-item__facts">
+            <span className="library-item__file" title={dataset.source_filename}>
               {[
-                dataset.purpose,
+                dataset.source_filename,
                 String(dataset.format || "").toUpperCase(),
-                formatTokenCount(dataset.prepared_token_count || dataset.token_count),
-              ].filter(Boolean).join(" - ")}
+              ].filter(Boolean).join(" · ")}
             </span>
+            {dataset.training_ready && formatTokenCount(dataset.prepared_token_count ?? dataset.token_count) ? <span className="library-item__facts">{formatTokenCount(dataset.prepared_token_count ?? dataset.token_count)}</span> : null}
             <Status
               size="small"
               value={state.value}
@@ -91,6 +91,7 @@ function DatasetRow({ dataset, selected, onSelect }) {
 }
 
 function formatTokenCount(value) {
+  if (value === null || value === undefined || value === "") return null;
   const count = Number(value);
   return Number.isFinite(count)
     ? `${new Intl.NumberFormat().format(count)} tokens`

@@ -15,7 +15,7 @@ import {
   phaseLabel,
 } from "../workflows/operations.mjs";
 import { createFreshImageSeed } from "../workflows/generatedImages.mjs";
-import { TEMP_CLEANUP_CONFIRMATION } from "../workflows/hostActions.mjs";
+import { TEMP_CLEANUP_CONFIRMATION, cleanupPresentation } from "../workflows/hostActions.mjs";
 
 const DEFAULT_IMAGE_SETTINGS = Object.freeze({
   model_id: "steak-gen-1-scaledfp8",
@@ -87,7 +87,7 @@ export function HostActionProposal({
   const currentState = operation ? operationState(operation) : proposalState;
   const running = isActive(operation);
   const failed = ["failed", "interrupted", "cancelled"].includes(currentState);
-  const completed = currentState === "completed" || proposalState === "completed";
+  const completed = currentState === "completed";
   const reviewable = proposalState === "pending_review";
   const blocked = proposalState.startsWith("blocked_");
   const progress = running ? measurableProgress(operation) : null;
@@ -95,6 +95,7 @@ export function HostActionProposal({
     ? proposal.image_settings.models
     : [];
   const imageCanvasSize = imageCanvas(imageResolution, imageAspect);
+  const cleanup = tempCleanup ? cleanupPresentation(proposal, operation) : null;
 
   useEffect(() => {
     if (running || completed) setConfirmationOpen(false);
@@ -133,22 +134,21 @@ export function HostActionProposal({
   return (
     <>
       <section
-        className={`host-action host-action--${blocked ? "blocked" : currentState || "pending"}`}
+        className={`host-action ${tempCleanup ? "host-action--cleanup" : ""} host-action--${blocked ? "blocked" : currentState || "pending"}`}
         aria-label={proposal.title}
         aria-busy={running || undefined}
       >
         <span className="host-action__icon" aria-hidden="true"><Icon /></span>
           <div className="host-action__copy">
             <div className="host-action__heading">
-              <strong>{proposal.title}</strong>
-              {!running ? <span>{hostActionOperationLabel(proposal, operation)}</span> : null}
+              <strong>{cleanup?.label || proposal.title}</strong>
+              {!running && !tempCleanup ? <span>{hostActionOperationLabel(proposal, operation)}</span> : null}
             </div>
-            <p>{proposal.summary}</p>
-            {running ? (
+            <p>{cleanup?.summary || proposal.summary}</p>
+            {cleanup?.roots.length ? <details className="cleanup-results"><summary>Folder results</summary>{cleanup.roots.map(root=><div key={root.path}><strong>{root.name}</strong><span>{root.status === "inaccessible" ? "Skipped: access denied" : `${new Intl.NumberFormat().format(root.deleted_files || 0)} files removed${root.skipped_entries ? `, ${new Intl.NumberFormat().format(root.skipped_entries)} skipped` : ""}`}</span></div>)}</details> : null}
+            {running && (!tempCleanup || progress) ? (
               <div className="host-action__progress" role="status" aria-live="polite">
-                <span className="activity-phrase activity-phrase--compact">
-                  {phaseLabel(operation)}
-                </span>
+                {!tempCleanup ? <span className="activity-phrase activity-phrase--compact">{phaseLabel(operation)}</span> : null}
                 {progress ? (
                   <progress
                   max={progress.total}
@@ -177,10 +177,10 @@ export function HostActionProposal({
             <button
               type="button"
               className="host-action__dismiss"
-              disabled={busy}
+              disabled={busy || currentState === "stop_requested"}
               onClick={() => onStop(operation)}
             >
-              <Square aria-hidden="true" /> Stop
+              <Square aria-hidden="true" /> {currentState === "stop_requested" ? "Stopping…" : "Stop"}
             </button>
           ) : null}
           {directAction && !blocked && !running && !completed && (reviewable || failed) ? (
@@ -212,15 +212,17 @@ export function HostActionProposal({
       {directAction ? (
         <Dialog
           open={confirmationOpen}
+          className={image ? "image-action-dialog" : ""}
+          compact={tempCleanup || fileTrash}
           title={fileTrash
             ? "Move this exact file to Recycle Bin?"
             : tempCleanup
-              ? "Clean Windows temporary files?"
+              ? "Clean temporary files?"
               : failed ? "Try this image again?" : "Create this image?"}
           description={fileTrash
             ? "Salty Steak will recheck the exact file before using the Windows Recycle Bin."
             : tempCleanup
-              ? "Only the reviewed temporary-folder contents are cleaned. In-use and inaccessible entries are skipped."
+              ? "Permanently remove contents of these folders. Files in use and inaccessible entries are skipped."
             : "Steak Gen will run locally and temporarily take over the GPU."}
           onClose={() => {
             if (!busy) {
@@ -230,28 +232,22 @@ export function HostActionProposal({
           }}
         >
           <form
-            className="image-confirmation"
+            className={`image-confirmation ${tempCleanup ? "cleanup-confirmation" : ""}`}
             onSubmit={tempCleanup ? (event) => event.preventDefault() : confirmAction}
           >
-            <div className="image-confirmation__prompt">
+            {tempCleanup ? <dl className="cleanup-confirmation__roots">{(proposal.arguments?.roots || []).map(root=><div key={root.path}><dt>{root.name}</dt><dd>{root.path}</dd></div>)}</dl> : <div className="image-confirmation__prompt">
               <span>{fileTrash ? "Exact file" : tempCleanup ? "Scope" : "Prompt"}</span>
               <p>{tempCleanup
                 ? (proposal.arguments?.roots || []).map((root) => `${root.name}: ${root.path}`).join("\n")
                 : proposal.summary}</p>
-            </div>
+            </div>}
             {fileTrash ? (
               <dl className="image-confirmation__profile">
                 <div><dt>Action</dt><dd>Move one file</dd></div>
                 <div><dt>Recovery</dt><dd>Windows Recycle Bin</dd></div>
                 <div><dt>Shell command</dt><dd>Not used</dd></div>
               </dl>
-            ) : tempCleanup ? (
-              <dl className="image-confirmation__profile">
-                <div><dt>Root folders</dt><dd>Preserved</dd></div>
-                <div><dt>Files in use</dt><dd>Skipped</dd></div>
-                <div><dt>Recovery</dt><dd>Not available</dd></div>
-              </dl>
-            ) : (
+            ) : tempCleanup ? <p className="cleanup-confirmation__note">The folders themselves stay in place. Deleted files cannot be recovered.</p> : (
               <div className="image-confirmation__settings">
                 <label>
                   <span>Image model</span>
@@ -340,7 +336,7 @@ export function HostActionProposal({
               </button>
             </label> : null}
             <div className="image-confirmation__actions">
-              <button type="button" disabled={busy} onClick={() => setConfirmationOpen(false)}>
+              <button type="button" data-dialog-cancel disabled={busy} onClick={() => setConfirmationOpen(false)}>
                 Cancel
               </button>
               <button

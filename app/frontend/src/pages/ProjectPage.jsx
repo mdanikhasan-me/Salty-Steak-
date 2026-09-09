@@ -16,13 +16,13 @@ import {
   Button,
   DefinitionList,
   EmptyState,
-  InlineNotice,
   PageHeader,
   Status,
 } from "../components/Primitives.jsx";
 import { useAppState } from "../state/AppState.jsx";
 import { formatBytes, formatDate, formatNumber } from "../workflows/formatters.js";
 import { isActive, operationMatches } from "../workflows/operations.mjs";
+import "../styles/project-cache-dialog.css";
 
 const PATHS = [
   { key: "model_architecture", label: "Model architecture" },
@@ -289,15 +289,18 @@ export function ProjectPage() {
       )}
 
       <Dialog
+        compact
+        className="workbench-dialog project-cache-dialog"
         open={clearOpen}
         title="Clear disposable cache?"
-        description="Only files the rebuilt application can safely regenerate will be removed."
+        description="Remove disposable files that the application can regenerate."
         onClose={() => setClearOpen(false)}
       >
-        <InlineNotice kind="warning" title="This action cannot be undone">
+        <p className="project-cache-dialog__consequence">
+          Deleted cache files cannot be recovered. {" "}
           Training material, prepared datasets, tokenizer files, saved versions, evaluations,
           conversations, runtime identity, and recovery state are excluded.
-        </InlineNotice>
+        </p>
         <DefinitionList
           items={[
             {
@@ -312,7 +315,7 @@ export function ProjectPage() {
           ]}
         />
         <FormActions>
-          <Button onClick={() => setClearOpen(false)}>Cancel</Button>
+          <Button data-dialog-cancel onClick={() => setClearOpen(false)}>Cancel</Button>
           <Button
             variant="danger"
             icon={Trash2}

@@ -9,6 +9,7 @@ import {
   phaseLabel,
 } from "../workflows/operations.mjs";
 import { trainingCompletionEvidence } from "../workflows/postTraining.mjs";
+import { operationPresentation } from "../workflows/operationPresentation.mjs";
 import { errorMessage, formatDuration, formatNumber, formatRate } from "../workflows/formatters.js";
 import {
   Button,
@@ -35,28 +36,9 @@ export function OperationProgress({
   const phase = phaseLabel(operation);
   const stopRequested = state === "stop_requested";
   const terminal = isTerminal(operation);
-  const detailItems = metrics ? metrics(operation) : defaultMetrics(operation);
-  const completedMeasuredWork =
-    state === "failed" &&
-    Number(operation.current_progress) > 0 &&
-    operation.total_progress !== null &&
-    operation.total_progress !== undefined &&
-    Number(operation.current_progress) >= Number(operation.total_progress);
-  const recovered =
-    operation.outcome === "recovered_and_completed" ||
-    operation.result?.recovered_after_restart;
-  const needsAttention =
-    operation.outcome === "needs_attention" ||
-    operation.result?.completion_outcome === "needs_attention";
-  const outcomeTitle = recovered
-    ? "Recovered and completed"
-    : needsAttention
-    ? "Saved version needs attention"
-    : completedMeasuredWork
-    ? "Training steps completed; version finalisation failed"
-    : state === "failed"
-      ? "Training did not complete"
-      : phase;
+  const detailItems = (metrics ? metrics(operation) : defaultMetrics(operation))
+    .filter(item => !(terminal && ["Remaining", "Remaining time", "Worker"].includes(item.label)));
+  const { training, completedMeasuredWork, recovered, needsAttention, outcomeTitle, errorTitle } = operationPresentation(operation);
 
   async function handleStop() {
     setStopping(true);
@@ -92,7 +74,7 @@ export function OperationProgress({
         />
       </div>
 
-      {progress ? (
+      {progress && state !== "completed" ? (
         <div className="progress-block">
           <div
             className={`progress-track ${completedMeasuredWork ? "progress-track--attention" : ""}`}
@@ -111,7 +93,7 @@ export function OperationProgress({
             <span>
               {completedMeasuredWork
                 ? "Training steps complete · finalisation incomplete"
-                : recovered
+                : recovered && training
                   ? "Training steps complete · finalisation recovered"
                   : `${Math.round(progress.percentage)}%`}
             </span>
@@ -124,12 +106,9 @@ export function OperationProgress({
       ) : null}
 
       {phases.length ? (
-        <PhaseSequence
-          phases={phases}
-          current={operation.phase}
-          state={state}
-          operation={operation}
-        />
+        <Disclosure summary="Operation stages" className="operation-progress__stages">
+          <PhaseSequence phases={phases} current={operation.phase} state={state} operation={operation} />
+        </Disclosure>
       ) : null}
 
       {detailItems.length ? <DefinitionList items={detailItems} compact /> : null}
@@ -144,11 +123,7 @@ export function OperationProgress({
         <>
           <InlineNotice
             kind={needsAttention ? "warning" : "error"}
-            title={
-              needsAttention
-                ? "Post-training workflow needs attention"
-                : operation.error?.failed_phase || "Version finalisation"
-            }
+            title={errorTitle}
           >
             {errorMessage(operation.error, "The operation could not complete.")}
           </InlineNotice>

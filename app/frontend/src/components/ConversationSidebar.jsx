@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { HistoryActionMenu } from "./HistoryActionMenu.jsx";
 import {
   ChevronRight,
   Brain,
@@ -82,6 +83,7 @@ export function ConversationSidebar({
   const [folderDraft, setFolderDraft] = useState("");
   const [collapsed, setCollapsed] = useState(() => storedSections(mode));
   const triggerRefs = useRef(new Map());
+  const menuKeyboard = useRef(false);
   const renameRef = useRef(null);
 
   const [today, setToday] = useState(() => new Date());
@@ -268,7 +270,8 @@ export function ConversationSidebar({
               if (element) triggerRefs.current.set(item.id, element);
               else triggerRefs.current.delete(item.id);
             }}
-            onClick={() => {
+            onClick={(event) => {
+              menuKeyboard.current = event.detail === 0;
               setSubmenuFor(null);
               setMenuFor(menuOpen ? null : item.id);
             }}
@@ -287,7 +290,7 @@ export function ConversationSidebar({
     const choices = moveChoicesFor(item, folders);
     const submenuOpen = String(submenuFor) === String(item.id);
     return (
-      <div className="chat-menu" role="menu" aria-label={`Actions for ${title}`}>
+      <HistoryActionMenu anchor={triggerRefs.current.get(item.id)} label={`Actions for ${title}`} keyboard={menuKeyboard.current} onClose={closeMenu}>
         <button type="button" role="menuitem" onClick={() => beginRename(item)}>
           <Pencil aria-hidden="true" /> Rename
         </button>
@@ -388,7 +391,7 @@ export function ConversationSidebar({
         >
           <Trash2 aria-hidden="true" /> Delete
         </button>
-      </div>
+      </HistoryActionMenu>
     );
   }
 

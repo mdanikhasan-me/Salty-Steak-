@@ -162,8 +162,8 @@ export function EvaluatePage({ onNavigate }) {
                 <h2>Choose what to measure</h2>
               </div>
               <Status
-                value={active ? evaluationOperation.state : "not_started"}
-                label={active ? "Evaluation in progress" : "Not started"}
+                value={evaluationOperation ? evaluationOperation.state : "not_started"}
+                label={active ? "Evaluation in progress" : evaluationOperation ? undefined : "Not started"}
               />
             </div>
             <div className="evaluation-form">

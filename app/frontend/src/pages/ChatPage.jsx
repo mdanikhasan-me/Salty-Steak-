@@ -2725,7 +2725,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
           <WorkspaceSettings section={settingsView} onSectionChange={setSettingsView} onClose={() => setInspectorOpen(false)} active={!pluginSetup}>
           {settingsView === "general" ? <GeneralSettings onSectionChange={setSettingsView} onNavigate={(destination) => { setInspectorOpen(false); onNavigate(destination); }} />
           : settingsView === "companion" ? <CompanionSettings />
-          : settingsView === "about" ? <AboutPage onBack={() => setSettingsView("general")} />
+          : settingsView === "about" ? <AboutPage />
           : settingsView === "plugins" ? (
             <PluginsSettingsSheet embedded active={false} title="Connections" onClose={() => setInspectorOpen(false)}>
               <PluginsPanel
@@ -2932,25 +2932,25 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
 
       <Dialog
         open={managementMode === "delete"}
+        compact
         title="Delete conversation"
         description={managedConversation?.title || ""}
         onClose={closeManagement}
       >
-        <InlineNotice kind="warning" title="Permanent deletion">
+        <p className="confirmation-consequence">
           This conversation and every message in it will be removed. It cannot be recovered.
-        </InlineNotice>
+        </p>
         {managementError ? (
           <InlineNotice kind="error" title="Conversation not deleted">
             {managementError}
           </InlineNotice>
         ) : null}
         <FormActions>
-          <Button disabled={managementBusy} onClick={closeManagement}>
+          <Button data-dialog-cancel disabled={managementBusy} onClick={closeManagement}>
             Cancel
           </Button>
           <Button
             variant="danger"
-            icon={Trash2}
             busy={managementBusy}
             onClick={deleteConversation}
           >

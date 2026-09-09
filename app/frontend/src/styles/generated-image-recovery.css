@@ -1,0 +1,40 @@
+.message-generated-image.message-generated-image--failed {
+  width: min(100%, 440px);
+  padding: 14px 16px;
+  border: 1px solid #ffffff12;
+  border-radius: 10px;
+  background: #ffffff03;
+}
+
+.message-generated-image .message-generated-image__recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.message-generated-image .message-generated-image__recovery p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--ink-soft);
+}
+
+.message-generated-image .message-generated-image__recovery button {
+  flex: 0 0 auto;
+  border: 1px solid #ffffff18;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+.message-generated-image .message-generated-image__recovery button:hover {
+  background: #ffffff08;
+}
+
+.message-generated-image figcaption button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

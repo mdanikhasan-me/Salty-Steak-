@@ -177,7 +177,7 @@ export function DataPage() {
         <div className="page-context-summary" aria-label="Dataset summary">
           <span><strong>{datasets.length}</strong> local sources</span>
           <span><strong>{readyCount}</strong> training ready</span>
-          <span><strong>{new Intl.NumberFormat().format(totalPreparedTokens)}</strong> prepared tokens</span>
+          {readyCount > 0 ? <span><strong>{new Intl.NumberFormat().format(totalPreparedTokens)}</strong> prepared tokens</span> : null}
         </div>
       </PageHeader>
 

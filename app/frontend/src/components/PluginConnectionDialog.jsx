@@ -38,6 +38,7 @@ export function PluginConnectionDialog({
 
   function submit(event) {
     event.preventDefault();
+    if (busy) return;
     const toolNames = allowedTools.split(",").map((item) => item.trim()).filter(Boolean);
     if (toolNames.some((name) => /\s/.test(name))) {
       setValidationError("Tool names cannot contain spaces. Separate each tool with a comma.");
@@ -81,6 +82,7 @@ export function PluginConnectionDialog({
               <span>Server endpoint</span>
               <input
                 type="url"
+                disabled={busy}
                 required
                 spellCheck="false"
                 autoComplete="off"
@@ -94,6 +96,7 @@ export function PluginConnectionDialog({
               <span>Bearer token <em>optional</em></span>
               <input
                 type="password"
+                disabled={busy}
                 autoComplete="off"
                 value={bearerToken}
                 placeholder={connector.credentials_present ? "Stored - leave blank to keep it for this endpoint" : "Paste token"}
@@ -104,6 +107,7 @@ export function PluginConnectionDialog({
               <span>Allowed tools <em>optional</em></span>
               <input
                 type="text"
+                disabled={busy}
                 spellCheck="false"
                 value={allowedTools}
                 placeholder="search_mail, create_event"

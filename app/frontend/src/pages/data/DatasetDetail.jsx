@@ -58,13 +58,15 @@ export function DatasetDetail({
           <h2>{dataset.display_name || dataset.name}</h2>
           <p>{dataset.description || "Training material stored on this computer."}</p>
         </div>
-        <Status value={readiness.value} label={readiness.label} />
+        {!dataset.source_changed ? <Status value={readiness.value} label={readiness.label} /> : null}
       </header>
 
       {dataset.source_changed ? (
-        <InlineNotice kind="warning" title="The source file changed">
-          Validate and prepare this dataset again before using it for training.
-        </InlineNotice>
+        <div className="dataset-readiness" role="status">
+          <strong>Source changed</strong>
+          <p>Validate the updated file before preparing it for training.</p>
+          <Button busy={starting === "validation"} disabled={validationActive || preparationActive} onClick={onValidate}>Validate source</Button>
+        </div>
       ) : null}
       {legacy ? (
         <InlineNotice kind="information" title="Raw source preserved safely">
@@ -80,11 +82,11 @@ export function DatasetDetail({
         </InlineNotice>
       ) : null}
 
-      <div className="dataset-metric-strip" aria-label="Dataset metrics">
+      {dataset.training_ready ? <div className="dataset-metric-strip" aria-label="Dataset metrics">
         <DatasetMetric label="Source records" value={formatNumber(dataset.record_count)} />
         <DatasetMetric
           label="Prepared sequences"
-          value={formatNumber(dataset.prepared_sequence_count || preparedMetadata.prepared_sequence_count)}
+          value={formatNumber(dataset.prepared_sequence_count ?? preparedMetadata.prepared_sequence_count)}
         />
         <DatasetMetric
           label="Prepared tokens"
@@ -94,7 +96,7 @@ export function DatasetDetail({
           label="Assistant targets"
           value={formatNumber(preparedMetadata.accepted_target_windows)}
         />
-      </div>
+      </div> : null}
 
       <DefinitionList
         items={[
@@ -110,14 +112,14 @@ export function DatasetDetail({
             value: String(dataset.format || "Not reported").toUpperCase(),
           },
           { label: "Size", value: formatBytes(dataset.size_bytes) },
-          { label: "Records", value: formatNumber(dataset.record_count) },
+          { label: "Records", value: dataset.source_changed || !validated ? "Validate source to measure" : formatNumber(dataset.record_count) },
           {
             label: "Tokens",
-            value: dataset.token_count
+            value: dataset.training_ready && dataset.token_count != null
               ? formatNumber(dataset.token_count)
               : "Available after preparation",
           },
-          { label: "Last used", value: formatDate(dataset.last_used_at) },
+          { label: "Last used", value: dataset.last_used_at ? formatDate(dataset.last_used_at) : undefined },
           {
             label: "Accepted assistant targets",
             value: preparedMetadata.accepted_target_windows === undefined

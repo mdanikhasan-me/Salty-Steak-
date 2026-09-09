@@ -35,9 +35,10 @@ export function PreparationDialog({
 
   return (
     <Dialog
+      className="workbench-dialog"
       open={open}
       title="Prepare for training"
-      description={`Create a verified, tokenised copy of ${datasetName || "this dataset"}. The original source is never changed.`}
+      description={`Create a training copy of ${datasetName || "this dataset"}. Your original file stays unchanged.`}
       onClose={onClose}
     >
       <form onSubmit={onSubmit} className="stack-form">

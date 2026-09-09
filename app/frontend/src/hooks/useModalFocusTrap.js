@@ -10,7 +10,7 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function useModalFocusTrap({ active = true, onClose, canClose = true } = {}) {
+export function useModalFocusTrap({ active = true, onClose, canClose = true, initialFocusSelector } = {}) {
   const containerRef = useRef(null);
   const closeRef = useRef(onClose);
   const canCloseRef = useRef(canClose);
@@ -33,7 +33,7 @@ export function useModalFocusTrap({ active = true, onClose, canClose = true } = 
     );
     // Keep the dialog focusable without drawing a selection box around its
     // first unrelated control when opened with a pointer.
-    const initialFocus = window.requestAnimationFrame(() => root.focus({ preventScroll: true }));
+    const initialFocus = window.requestAnimationFrame(() => (root.querySelector(initialFocusSelector || "[data-modal-initial-focus]") || root).focus({ preventScroll: true }));
 
     function handleKeyDown(event) {
       if (event.key === "Escape" && canCloseRef.current) {
@@ -70,7 +70,7 @@ export function useModalFocusTrap({ active = true, onClose, canClose = true } = 
         window.requestAnimationFrame(() => previous.focus());
       }
     };
-  }, [active]);
+  }, [active, initialFocusSelector]);
 
   return containerRef;
 }
