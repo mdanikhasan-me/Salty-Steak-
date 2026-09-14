@@ -865,6 +865,8 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     function closeOnEscape(event) {
       const trigger = composerMenuTriggerRefs.current.get(composerMenu);
       if (["ArrowDown", "ArrowUp"].includes(event.key) && document.activeElement === trigger) {
+        const slider = document.querySelector(`#composer-${composerMenu}-menu input[type="range"]`);
+        if (slider) { event.preventDefault(); slider.focus(); return; }
         const items = document.querySelectorAll(`#composer-${composerMenu}-menu [role="menuitem"],#composer-${composerMenu}-menu [role="menuitemradio"]`);
         const enabled = [...items].filter(item=>!item.disabled);
         event.preventDefault();
@@ -2599,7 +2601,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     ref={(element) => composerMenuTriggerRefs.current.set("cooking", element)}
                     type="button"
                     className="composer-selector composer-selector--cooking"
-                    aria-haspopup="menu"
+                    aria-haspopup="dialog"
                     aria-expanded={composerMenu === "cooking"}
                     aria-controls="composer-cooking-menu"
                     aria-label={`Cooking mode: ${cookingModeLabel(cookingMode)}`}
@@ -2611,7 +2613,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     <ChevronDown aria-hidden="true" />
                   </button>
                   {composerMenu === "cooking" ? (
-                    <ResponseModeControl value={cookingMode} autoFocus={composerMenuKeyboardRef.current} onChange={mode=>setGenerationSettings(current=>({...current,reasoning_mode:mode}))}/>
+                    <ResponseModeControl value={cookingMode} modelLabel={activeModelLabel} autoFocus={composerMenuKeyboardRef.current} onChange={mode=>setGenerationSettings(current=>({...current,reasoning_mode:mode}))}/>
                   ) : null}
                 </div>
               </div>
