@@ -53,6 +53,7 @@ from ..training.identity_intent import (
     IDENTITY_INTENT_LABEL,
     identity_intent_messages,
     is_personal_context_request,
+    is_local_personal_recall,
     normalise_identity_intent,
 )
 from ..training.identity_evaluation import (
@@ -2013,11 +2014,23 @@ class ChatService:
         return history
 
     def _remembered_context(self, query: str) -> tuple[str, list[str]]:
+        from .personal_research import needs_personal_query
         records = self.memory.recall(
             str(query or ""),
             limit=4,
             sources=(EXPLICIT_GLOBAL_MEMORY_SOURCE,),
         )
+        if (is_personal_context_request(query) or needs_personal_query(query)) and len(records) < 4:
+            # "Do you remember me?" need not share words with a saved fact.
+            # Supply a bounded set of explicitly saved notes for the model to
+            # interpret; never draw private messages from another conversation.
+            known_ids = {record.memory_id for record in records}
+            for record in self.memory.recent(limit=4, sources=(EXPLICIT_GLOBAL_MEMORY_SOURCE,)):
+                if record.memory_id not in known_ids:
+                    records.append(record)
+                    known_ids.add(record.memory_id)
+                if len(records) == 4:
+                    break
         if not records:
             return "", []
         notes = json.dumps(
@@ -6449,6 +6462,26 @@ class ChatService:
         if decision is None or decision.get("action") == RESPOND:
             return None
 
+        if decision.get("action") == RESEARCH:
+            from .personal_research import ground_personal_query, needs_personal_query
+            from .dispatch import TurnOutcome
+            personal_request = latest_user_message(history) or request
+            if needs_personal_query(personal_request):
+                grounded = ground_personal_query(
+                    personal_request, history,
+                    lambda messages: self._agent_generate(
+                        messages, context=context,
+                        generation_settings={**dict(generation_settings), "maximum_output_tokens": 256},
+                        response_format="json",
+                    ),
+                )
+                if grounded["status"] != "ready":
+                    return TurnOutcome("respond", content=grounded.get("clarification") or (
+                        "I couldn't determine which personal information to search for. "
+                        "Please specify the name or subject you want me to look up."
+                    ), details={"personal_research_grounding": grounded["status"], "web_lookup_performed": False})
+                decision = {**decision, "query": grounded["query"], "question": grounded["query"]}
+
 
 
 
@@ -7106,6 +7139,57 @@ class ChatService:
             ),
             "",
         )
+        local_personal_recall = (
+            is_local_personal_recall(search_query)
+            and not generation_settings.get("image_mode")
+            and not generation_settings.get("agent_mode")
+        )
+        if local_personal_recall:
+            relationship["personal_context_route"] = {
+                "reason": "private_recall_uses_conversation_and_saved_memory",
+                "research_selected": bool(generation_settings.get("research_mode")),
+                "web_lookup_required": False,
+            }
+            # Per-turn effective settings only. The composer selection remains
+            # enabled for subsequent public research requests.
+            generation_settings = {
+                **generation_settings,
+                "research_forced": False,
+                "research_command": False,
+                "research_available": False,
+                "web_search_enabled": False,
+            }
+            search_enabled = False
+            history.insert(0, {"role": "system", "content": (
+                "For the part of the latest request asking about the user or saved "
+                "conversation context, answer from this conversation and the "
+                "user-approved saved notes. Complete any other requested text work normally. "
+                "Address the user as you/your; do not adopt their name as your own. "
+                "If the requested fact is absent, say you do not know it. "
+                "Conversation role labels such as User, Human, and Assistant are not "
+                "anyone's personal name. Do not infer the user's name from those labels, "
+                "the model's trainer, an account path, or an earlier assistant guess. "
+                "Only use a name the user supplied in this conversation or saved notes. "
+                "The Research toggle does not supply private facts; no web lookup is needed "
+                "for this recall question. Earlier unrelated web results are not evidence "
+                "of the user's identity."
+            )})
+            user_turns = [message for message in history if message.get("role") == "user"]
+            if (
+                relationship.get("global_memory_count") == 0
+                and not generation_settings.get("system_prompt")
+                and not relationship.get("attachment_prompt_context")
+            ):
+                history.insert(1, {"role": "system", "content": (
+                    "Recall availability: no saved user notes were retrieved. "
+                    + ("There are no earlier user messages in this conversation. "
+                       if len(user_turns) == 1 else
+                       "Earlier user messages are supplied below; use only facts they explicitly state. ")
+                    + "A greeting or a question about the user's name does not establish "
+                    "their name. Neither does an earlier assistant guess. Unless a user "
+                    "message explicitly supplies the requested personal fact, you do not "
+                    "know it. Say so without guessing or treating a role label as a name."
+                )})
 
 
 
@@ -7292,7 +7376,15 @@ class ChatService:
                         details=relationship,
                     )
                 explicit_image_mode = bool(generation.get("image_mode"))
-                if explicit_image_mode:
+                if local_personal_recall:
+                    learned_route = "respond"
+                    learned_route_details = {
+                        "available": True, "controller": "personal_context_boundary",
+                        "adapter_ids": [], "route": "respond", "fail_closed": False,
+                        "duration_seconds": 0.0, "output_tokens": 0,
+                        "model_sharing_context": True,
+                    }
+                elif explicit_image_mode:
 
 
 
@@ -8396,7 +8488,7 @@ class ChatService:
             relationship["runtime_id"] = runtime_instance_id
             relationship["source_sha256"] = source_sha256
             context.raise_if_stop_requested()
-            generation["learned_route"] = None
+            generation["learned_route"] = "respond" if local_personal_recall else None
             relationship["learned_route_controller"] = {
                 "available": False,
                 "reason": "legacy_runtime_has_no_routing_adapter",

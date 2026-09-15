@@ -33,6 +33,7 @@ thing.
 from __future__ import annotations
 
 import glob
+import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -271,6 +272,13 @@ def filesystem_observer() -> Observer:
         subject = str(predicate.subject or "").strip()
         if not subject:
             return None
+        # A planner variable is not a filesystem location. Observing a literal
+        # "$temp_file_path" used to certify deletion without checking the file.
+        if (
+            not Path(subject).is_absolute()
+            or re.search(r"\$(?:\{[^}]+\}|[A-Za-z_]\w*)|%[^%]+%|\{\{[^}]+\}\}", subject)
+        ):
+            return None
         try:
             if any(character in subject for character in "*?["):
 
@@ -284,7 +292,11 @@ def filesystem_observer() -> Observer:
                     None,
                 )
                 return found is None if predicate.kind == "absent" else found is not None
-            exists = Path(subject).exists()
+            try:
+                Path(subject).stat()
+                exists = True
+            except FileNotFoundError:
+                exists = False
         except OSError:
             return None
         return exists if predicate.kind == "present" else not exists

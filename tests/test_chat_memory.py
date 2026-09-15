@@ -292,11 +292,48 @@ def test_saved_memory_prompt_keeps_user_perspective_and_quoted_data(tmp_path: Pa
         application.close()
 
 
+@pytest.mark.parametrize('query', [
+    'Do you remember me? Explain Python lists.', 'Search me online',
+])
+def test_personal_reference_recalls_explicit_notes_without_shared_words(tmp_path, query):
+    application = Application(_project(tmp_path), recover_operations=False)
+    try:
+        saved = application.save_chat_memory('My name is Sofia Reed.')
+        briefing, ids = application.chat._remembered_context(query)
+        assert saved['memory']['memory_id'] in ids
+        assert 'Sofia Reed' in briefing
+        assert len(ids) <= 4
+    finally:
+        application.close()
+
+
+def test_personal_recall_finds_explicit_notes_without_shared_query_words(tmp_path: Path):
+    application = Application(_project(tmp_path), recover_operations=False)
+    try:
+        saved = application.save_chat_memory("My name is Sofia Rahman.")
+        application.chat.memory.remember(kind="context", subject="Private automatic record", body="SHOULD_NOT_APPEAR", source="legacy_automatic")
+        brief, ids = application.chat._remembered_context("Do you remember me? Explain what a Python list is.")
+        assert saved["memory"]["memory_id"] in ids
+        assert "Sofia Rahman" in brief
+        assert "SHOULD_NOT_APPEAR" not in brief
+        assert len(ids) <= 4
+    finally:
+        application.close()
+
+
 @pytest.mark.parametrize("name", ["Mira Sen", "Leo Park", "Amina Okafor"])
 @pytest.mark.parametrize("source", ["saved_memory", "same_chat"])
 @pytest.mark.parametrize("learned_router", [True, False])
+@pytest.mark.parametrize("mode,research,prompt", [
+    ("instant", False, "what is my name now ?"),
+    ("cooking", False, "i simply asked do you know me ? my name"),
+    ("instant", True, "what is my name"),
+    ("cooking", True, "i simply asked do you know me ? my name"),
+    ("cooking", True, "Actually, my name is {name}. Please use this corrected name in this conversation."),
+])
 def test_personal_recall_reaches_generation_with_its_context_and_without_identity_adapter(
-    tmp_path: Path, name: str, source: str, learned_router: bool,
+    tmp_path: Path, name: str, source: str, learned_router: bool, mode: str,
+    research: bool, prompt: str, monkeypatch,
 ) -> None:
     """Exercise persisted chat + retrieval + routing + final answer validation.
 
@@ -306,6 +343,7 @@ def test_personal_recall_reaches_generation_with_its_context_and_without_identit
     application = Application(_project(tmp_path), recover_operations=False)
     runtime = _capture_runtime(application, tmp_path)
     generated_answer = f"Your name is {name}."
+    prompt = prompt.format(name=name)
     def adapters(lane):
         if lane == "routing_intent":
             return ("routing-test",) if learned_router else ()
@@ -323,6 +361,9 @@ def test_personal_recall_reaches_generation_with_its_context_and_without_identit
         )
         return response
     runtime.generate = generate
+    def no_web(*args, **kwargs):
+        raise AssertionError("Private recall must not dispatch web research")
+    monkeypatch.setattr("app.backend.chat.runners.LiveRunners.run_research", no_web)
     try:
         conversation = application.create_conversation()
         private_other = application.create_conversation()
@@ -332,8 +373,10 @@ def test_personal_recall_reaches_generation_with_its_context_and_without_identit
         else:
             _user_message(application, conversation["id"], f"My name is {name}.")
         operation = application.chat.start_message(
-            conversation["id"], "what is my name now ?",
-            {"context_window_tokens": 32768, "reasoning_mode": "instant"},
+            conversation["id"], prompt,
+            {"context_window_tokens": 32768, "reasoning_mode": mode,
+             "research_mode": research, "research_forced": research,
+             "web_search_enabled": research},
         )
         assert application.operations.wait(operation["id"], timeout=10)["state"] == "completed"
         assert runtime.calls
@@ -344,15 +387,65 @@ def test_personal_recall_reaches_generation_with_its_context_and_without_identit
         assert answer_calls
         for call in answer_calls:
             messages = call["messages"]
-            prompt = "\n".join(message["content"] for message in messages)
-            assert f"My name is {name}." in prompt
-            assert "PRIVATE_OTHER_CHAT_PERSON" not in prompt
-            assert "what is my name now ?" in prompt
+            supplied = "\n".join(message["content"] for message in messages)
+            assert f"My name is {name}." in supplied
+            assert "PRIVATE_OTHER_CHAT_PERSON" not in supplied
+            assert prompt in supplied
+            if source == "saved_memory":
+                assert "Recall availability: no saved user notes were retrieved" not in supplied
         visible = application.get_conversation(conversation["id"])["messages"]
         assistant = next(message for message in reversed(visible) if message["role"] == "assistant")
         assert assistant["content"] == generated_answer
         assert "identity question" not in assistant["content"]
+        assert assistant["technical_details"]["learned_route"] == "respond"
         user = next(message for message in reversed(visible) if message["role"] == "user")
         assert user["technical_details"]["global_memory_count"] == (1 if source == "saved_memory" else 0)
+    finally:
+        application.close()
+
+
+@pytest.mark.parametrize("prior", [None, "hi", "My name is Sora Ito."])
+@pytest.mark.parametrize("mode,research", [
+    ("instant", False), ("instant", True), ("cooking", False), ("cooking", True),
+])
+def test_recall_without_saved_notes_uses_user_evidence_and_preserves_generated_answer(
+    tmp_path: Path, prior: str | None, mode: str, research: bool, monkeypatch,
+) -> None:
+    application = Application(_project(tmp_path), recover_operations=False)
+    runtime = _capture_runtime(application, tmp_path)
+    answer = "Your name is Sora Ito." if prior and "Sora" in prior else "You haven't told me your name."
+    original_generate = runtime.generate
+    def generate(**kwargs):
+        response = original_generate(**kwargs)
+        response.text = answer
+        return response
+    runtime.generate = generate
+    def no_web(*args, **kwargs):
+        raise AssertionError("Private name recall must not call web research")
+    monkeypatch.setattr("app.backend.chat.runners.LiveRunners.run_research", no_web)
+    try:
+        conversation = application.create_conversation()
+        if prior:
+            _user_message(application, conversation["id"], prior)
+        operation = application.chat.start_message(
+            conversation["id"], "i simply asked do you know me ? my name",
+            {"reasoning_mode": mode, "research_mode": research,
+             "research_forced": research, "web_search_enabled": research},
+        )
+        assert application.operations.wait(operation["id"], timeout=10)["state"] == "completed"
+        assert runtime.calls
+        for call in runtime.calls:
+            prompt = "\n".join(message["content"] for message in call["messages"])
+            assert "Recall availability: no saved user notes were retrieved" in prompt
+            assert "A greeting or a question about the user's name does not establish their name" in prompt
+            assert "Neither does an earlier assistant guess" in prompt
+            assert ("There are no earlier user messages" in prompt) == (prior is None)
+            if prior:
+                assert prior in prompt
+            assert not call.get("enabled_adapter_ids")
+        messages = application.get_conversation(conversation["id"])["messages"]
+        final = next(message for message in reversed(messages) if message["role"] == "assistant")
+        assert final["content"] == answer
+        assert final["technical_details"]["learned_route"] == "respond"
     finally:
         application.close()

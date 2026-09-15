@@ -49,6 +49,18 @@ def is_personal_context_request(value: object) -> bool:
     """
 
     text = re.sub(r"\s+", " ", str(value or "").casefold()).replace("’", "'")
+    # Quoted examples in translation, editing, or explanation tasks are data,
+    # not the speaker asking us to recall their identity.
+    text = re.sub(r'"[^"\n]*"|“[^”\n]*”|`[^`\n]*`|(?<!\w)\'[^\'\n]*\'(?!\w)', " ", text)
+    # Speech and short follow-ups often separate the referent from the question
+    # with punctuation ("do you know me? my name"). It is still one request.
+    words = re.sub(r"[^\w' ]", " ", text)
+    words = re.sub(r"\s+", " ", words).strip()
+    if re.search(r"\b(?:do|did|would) you (?:know|remember|recognize|recognise) me\b", words):
+        return True
+    if re.fullmatch(r"(?:and |so |then )?my (?:full |first |last |preferred )?name(?: now| again)?", words):
+        return True
+    text = words
     return bool(re.search(
         r"\b(?:"
         r"(?:what(?:'s| is| was)|remember|recall|know|tell me|say|repeat)\b[^?.!\n]{0,80}\bmy (?:full |first |last |preferred )?name\b"
@@ -60,6 +72,55 @@ def is_personal_context_request(value: object) -> bool:
         r"|what (?:did|have) i (?:tell|told|say|said|share|shared)\b"
         r")", text
     ))
+
+
+def is_local_personal_recall(value: object) -> bool:
+    """Research selection is a capability, not a demand to web-search private facts.
+
+    Explicit public lookup stays eligible for research. This decision does not
+    identify the user or extract their name; model generation uses the supplied
+    conversation and saved notes.
+    """
+    text = str(value or "").casefold().replace("’", "'")
+    declaration = bool(re.search(
+        r"(?:^|[.!?]\s*)(?:actually[ ,]+|correction[ :]+)?"
+        r"(?:my (?:full |preferred )?name (?:is|was)\s+\S+|"
+        r"(?:please )?call me\s+\S+|i go by\s+\S+)", text,
+    ))
+    # A fact supplied alongside an assistant-identity question does not change
+    # the subject of that question. Let its normal intent routing decide it.
+    if declaration and re.search(
+        r"\b(?:your (?:name|model|trainer)|who (?:are|trained|created) you)\b", text,
+    ):
+        return False
+    if not (is_personal_context_request(value) or declaration):
+        return False
+    # A mentioned capability is not an instruction to use it. Read each clause
+    # so a negated lookup cannot make private facts eligible for a web search,
+    # while a separate affirmative lookup still remains research work.
+    for clause in re.split(r"[;.!?\n]+|\b(?:but|then)\b", text):
+        if re.search(r"\bwhat (?:did|have) i (?:tell|told|ask|asked|say|said)\b", clause):
+            # Asking what an earlier instruction said does not repeat it.
+            continue
+        lookup = re.search(
+            r"\b(?:search|google|browse|look\s+up)\b"
+            r"|\bresearch\s+(?!(?:is|was|mode|toggle|button|on|off|selected|enabled|disabled)\b)\w+"
+            r"|\b(?:from|on|through|using)\s+(?:my\s+|the\s+)?(?:public\s+)?(?:website|web|internet|online|profile)\b"
+            r"|\b(?:find|check)\b[^;.!?\n]{0,60}\b(?:online|domains?|public\s+profiles?)\b",
+            # Current-public work can be a second task after private recall.
+            clause,
+        )
+        if not lookup:
+            lookup = re.search(r"\b(?:find|check|retrieve)\b[^;.!?\n]{0,60}\b(?:latest|current|today's|news|weather)\b", clause)
+        if not lookup:
+            continue
+        before = clause[:lookup.start()]
+        if re.search(r"\b(?:don't|do not|never|no|without|stop|avoid|not)\b[^,;.!?\n]{0,70}$", before):
+            continue
+        if re.match(r"(?:search|research)\s+(?:is|was|mode|toggle|button|on|off|selected|enabled|disabled)\b", clause[lookup.start():]):
+            continue
+        return False
+    return True
 
 
 def normalise_identity_intent(value: object) -> str | None:
@@ -89,5 +150,6 @@ __all__ = [
     "OTHER_INTENT_LABEL",
     "identity_intent_messages",
     "is_personal_context_request",
+    "is_local_personal_recall",
     "normalise_identity_intent",
 ]
