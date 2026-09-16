@@ -252,13 +252,12 @@ class Executor:
         return self.connectors.verify(node.connector, node.operation, payload).data
 
     def _verify_capability(self, specification: Mapping[str, Any]) -> Any:
-        return self.broker.invoke(
-            {
-                "capability": specification["capability"],
-                "arguments": dict(specification.get("arguments") or {}),
-                "user_confirmed": True,
-                "authority_mode": self.authority_mode,
-            }
+        from ..automation.invocation import invoke_capability
+        return invoke_capability(
+            self.broker, specification["capability"],
+            dict(specification.get("arguments") or {}),
+            authority_mode=self.authority_mode, task=self.task,
+            granted=self.granted,
         )
 
     @staticmethod
@@ -379,6 +378,7 @@ class Executor:
             authority_mode=self.authority_mode,
             granted=self.granted or [node.capability],
             repair=self.repair,
+            task=self.task,
         )
         if isinstance(result, Mapping) and result.get("status") not in {
             None,

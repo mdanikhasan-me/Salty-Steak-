@@ -254,10 +254,15 @@ AGENT_RULES_HEAD = (
 )
 
 AGENT_RULES_TAIL = (
-    "- Use respond only when the task is fully complete or you have confirmed "
-    "it is impossible.\n"
-    "- Never ask the user clarifying questions mid-task. Make a reasonable "
-    "decision and continue.\n"
+    "- Use respond when the task is fully complete, you have confirmed it is "
+    "impossible, or a destructive target remains ambiguous after read-only "
+    "discovery and you need the user to identify it.\n"
+    "- Resolve routine choices autonomously from the user's request and fresh "
+    "observations. Never invent a destructive target or a Windows user path. "
+    "For removal, first establish the exact requested path or selection; if "
+    "the target remains ambiguous after read-only discovery, ask which target "
+    "the user means and do not delete anything. Full access does not identify "
+    "an unspecified file. Do not ask again for permission already granted.\n"
     "- If an action fails, try a different approach before giving up.\n"
     "- Describe each action briefly in the reason field so the user can follow "
     "your progress.\n\n"
@@ -1514,6 +1519,7 @@ class AgentLoop:
                     authority_mode=self.authority_mode,
                     granted=self.capabilities,
                     repair=self._repair_arguments,
+                    task=self.task,
                 )
                 observation = summarise_observation(
                     route.capability,
@@ -2313,6 +2319,7 @@ class AgentLoop:
                     authority_mode=self.authority_mode,
                     granted=self.capabilities,
                     repair=None,
+                    task=self.task,
                 )
                 observation = summarise_observation(route.capability, result)
             except Exception as error:

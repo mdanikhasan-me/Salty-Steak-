@@ -6533,7 +6533,26 @@ class ChatService:
 
 
 
+        if goal_spec is not None and str(decision.get("action") or "") in {SINGLE_ACTION, PLAN}:
+            from .goal_state import is_concrete_filesystem_target
+            unresolved = [
+                predicate.subject for predicate in goal_spec.required
+                if predicate.kind == "absent" and not is_concrete_filesystem_target(predicate.subject)
+            ]
+            if unresolved:
+                from .dispatch import TurnOutcome
+                return TurnOutcome(
+                    "respond",
+                    content="Which exact file or folder should I remove? The requested target has not been resolved, so nothing has been deleted.",
+                    details={"status": "waiting", "needs_target_clarification": True, "unresolved_targets": unresolved,
+                             "execution_performed": False, "goal_compilation": goal_compilation},
+                )
+
         task = TaskContext(goal=request[:200])
+        task.deletion_targets = tuple(
+            predicate.subject for predicate in (goal_spec.required if goal_spec is not None else ())
+            if predicate.kind == "absent"
+        )
 
 
 

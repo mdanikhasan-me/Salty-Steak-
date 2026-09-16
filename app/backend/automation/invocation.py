@@ -147,6 +147,7 @@ def invoke_capability(
     granted: Any = (),
     repair: Callable[[str], Mapping[str, Any] | None] | None = None,
     on_route: Callable[[Any], None] | None = None,
+    task: Any = None,
 ) -> dict[str, Any]:
     """Carry out one capability call, repairing a near-miss once.
 
@@ -167,6 +168,8 @@ def invoke_capability(
         on_route(route)
 
     def call(payload: Mapping[str, Any]) -> dict[str, Any]:
+        from .target_scope import bind_delete_selection
+        payload = bind_delete_selection(route.capability, payload, task)
         return broker.invoke(
             {
                 "capability": route.capability,

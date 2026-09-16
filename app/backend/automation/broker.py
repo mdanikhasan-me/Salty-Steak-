@@ -1149,8 +1149,30 @@ class AutomationBroker:
 
 
 
+        still_present: list[str] = []
+        unverified_paths: list[str] = []
+        if operation == "delete":
+            for item in matched:
+                verification_error = None
+                try:
+                    item.lstat()
+                except FileNotFoundError:
+                    pass
+                except OSError as error:
+                    unverified_paths.append(str(item))
+                    verification_error = f"Could not verify deletion: {error}"
+                else:
+                    still_present.append(str(item))
+                    verification_error = "The path still exists after deletion was requested"
+                if verification_error:
+                    record["affected_paths"] = [path for path in record["affected_paths"] if path != str(item)]
+                    if not any(failure["path"] == str(item) for failure in record["failed_paths"]):
+                        record["failed_paths"].append({"path": str(item), "error": verification_error})
+        else:
+            still_present = [str(item) for item in matched if item.exists()]
         record["after_state"] = {
-            "still_present": [str(item) for item in matched if item.exists()],
+            "still_present": still_present,
+            "unverified_paths": unverified_paths,
             "preserved_present": [item for item in preserved if Path(item).exists()],
         }
         record["mutating"] = True

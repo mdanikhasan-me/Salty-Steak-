@@ -258,6 +258,13 @@ def verify_predicates(
     return True, evidence
 
 
+def is_concrete_filesystem_target(subject: object) -> bool:
+    text = str(subject or "").strip()
+    return bool(text) and Path(text).is_absolute() and not re.search(
+        r"\$(?:\{[^}]+\}|[A-Za-z_]\w*)|%[^%]+%|\{\{[^}]+\}\}", text,
+    )
+
+
 def filesystem_observer() -> Observer:
     """Answers ``present``/``absent`` by looking at the disk right now.
 
@@ -274,10 +281,7 @@ def filesystem_observer() -> Observer:
             return None
         # A planner variable is not a filesystem location. Observing a literal
         # "$temp_file_path" used to certify deletion without checking the file.
-        if (
-            not Path(subject).is_absolute()
-            or re.search(r"\$(?:\{[^}]+\}|[A-Za-z_]\w*)|%[^%]+%|\{\{[^}]+\}\}", subject)
-        ):
+        if not is_concrete_filesystem_target(subject):
             return None
         try:
             if any(character in subject for character in "*?["):

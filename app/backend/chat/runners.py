@@ -588,7 +588,7 @@ _STATUS_QUESTION_TERMS = frozenset({"current", "latest", "stable", "status", "ve
 _STATUS_FINDING_TERMS = frozenset(
     {"available", "current", "latest", "maintenance", "newest", "released", "stable"}
 )
-_VERSION_TOKEN = re.compile(r"\b\d+(?:\.\d+){1,3}\b")
+_VERSION_TOKEN = re.compile(r"\b\d+(?:\.\d+){1,3}\b(?![\d.]|\s*(?:%|percent\b|per\s+cent\b))", re.I)
 _RESEARCH_BOILERPLATE = (
     "call to action",
     "enjoy the new release",
@@ -640,11 +640,37 @@ def _latest_status_version(
     """Newest settled version matching a series explicitly named by the user."""
 
     requested = [_version_tuple(value) for value in _VERSION_TOKEN.findall(question)]
+    subject_terms = _question_terms(question) - _DIRECT_ANSWER_TERMS - {
+        "what", "which", "how", "does", "please", "software", "number", "series",
+    }
+    subject_terms = {term for term in subject_terms if not term.isdigit()}
     versions: set[str] = set()
     for finding in findings:
-        if finding.get("disputed"):
+        if finding.get("disputed") or finding.get("validated") is False:
             continue
-        for value in _VERSION_TOKEN.findall(str(finding.get("text") or "")):
+        text = str(finding.get("text") or "")
+        if not re.search(r"\b(?:release|released|version|patch|maintenance)\b", text, re.I):
+            continue
+        if not subject_terms:
+            continue
+        subject_pattern = r"\b(?:" + "|".join(re.escape(term) for term in subject_terms) + r")\s+(?:(?:version|release|v)\s*)?$"
+        for match in _VERSION_TOKEN.finditer(text):
+            value = match.group()
+            # Evidence for a product somewhere in the finding cannot attribute
+            # every number to that product. Require a direct subject/version
+            # phrase and an adjacent release statement, otherwise leave the
+            # answer to supported synthesis instead of fabricating an override.
+            before = text[:match.start()]
+            after = text[match.end():]
+            if not re.search(subject_pattern, before, re.I):
+                continue
+            if not re.match(
+                r"\s*(?:(?:is|was|has|been|the|a|an|now|current|latest|newest|stable|"
+                r"first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+                r"maintenance|security|patch)\s+){0,7}(?:release[ds]?|version)\b",
+                after, re.I,
+            ):
+                continue
             parts = _version_tuple(value)
             if requested and not any(
                 parts[: len(prefix)] == prefix for prefix in requested if prefix
@@ -1073,7 +1099,15 @@ def _evidence_limits(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any
 
 def _reads_like_process(answer: str) -> bool:
     head = answer.strip().lower()[:200]
-    return any(phrase in head for phrase in _PROCESS_PHRASES)
+    try:
+        control = json.loads(answer)
+    except (TypeError, ValueError):
+        control = None
+    if isinstance(control, dict) and set(control) <= {"query", "action", "reason", "question"} and set(control) & {"query", "action"}:
+        return True
+    return any(phrase in head for phrase in _PROCESS_PHRASES) or bool(re.match(
+        r"(?:i will|i'll|let me)\s+(?:research|search|verify|investigate|look up)\b", head,
+    ))
 
 
 def _plain_failure(node: Any) -> str:
@@ -1226,6 +1260,7 @@ class LiveRunners:
                     authority_mode=self.authority_mode,
                     granted=self.capabilities,
                     repair=self._repair_arguments,
+                    task=self.task,
                 )
             except CapabilityCallFailed as error:
 
@@ -1832,10 +1867,11 @@ class LiveRunners:
         report = loop.run(str(decision.get("query") or question))
         self._publish_research_stage(report, "synthesizing")
         answer = self._answer_from(question, report)
-        self._publish_research_stage(report, "completed", answer=answer)
+        status = "failed" if getattr(self, "_answer_synthesis_failed", False) else "completed"
+        self._publish_research_stage(report, status, answer=answer)
         return {
             "answer": answer,
-            "status": "completed",
+            "status": status,
             "activity_journal": _research_activity_journal(report, answer),
             "research": {
                 key: report[key]
@@ -1947,8 +1983,10 @@ class LiveRunners:
         the statistics belong in the provenance beside it.
         """
 
+        self._answer_synthesis_failed = False
         claims = list(report.get("claims") or [])
         if not claims:
+            self._answer_synthesis_failed = True
             return (
                 "I could not find enough to answer that. "
                 + self._summarise(report)
@@ -2034,6 +2072,9 @@ class LiveRunners:
 
 
 
+        if self.generate is not None or self.generate_with_preview is not None:
+            self._answer_synthesis_failed = True
+            return "I found sources, but could not produce a supported answer to your question."
         fallback = "\n".join(
             f"- {claim.get('text')}"
             for claim in ordered[:6]

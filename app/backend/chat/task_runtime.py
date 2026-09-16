@@ -238,6 +238,7 @@ class TaskContext:
     ) -> None:
         self.task_id = task_id or str(uuid.uuid4())
         self.goal = str(goal)
+        self.deletion_targets: tuple[str, ...] | None = None
         self.cancellation = CancellationToken()
         self.metrics = TaskMetrics()
         self.world_state = WorldState()
