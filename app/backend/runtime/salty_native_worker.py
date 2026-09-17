@@ -608,6 +608,7 @@ class SaltyNativeWorkerRuntime:
         enabled_adapter_ids: Sequence[str] | None = None,
         allowed_first_tokens: Sequence[str] = (),
         response_format: str = "text",
+        resource_mode: str = "normal",
     ) -> SaltyNativeGeneration:
         self.warmup()
         cancellation_path = (
@@ -639,6 +640,7 @@ class SaltyNativeWorkerRuntime:
                         ),
                         "allowed_first_tokens": list(allowed_first_tokens),
                         "response_format": response_format,
+                        "resource_mode": resource_mode,
                         "cancellation_path": str(cancellation_path),
                     },
                     should_stop=should_stop,
@@ -697,6 +699,7 @@ class SaltyNativeWorkerRuntime:
         enabled_adapter_ids: Sequence[str] | None = None,
         allowed_first_tokens: Sequence[str] = (),
         response_format: str = "text",
+        resource_mode: str = "normal",
     ) -> SaltyNativeGeneration:
         """Use the worker's adaptive model-sharing learned-identity context."""
 
@@ -730,6 +733,7 @@ class SaltyNativeWorkerRuntime:
                         ),
                         "allowed_first_tokens": list(allowed_first_tokens),
                         "response_format": response_format,
+                        "resource_mode": resource_mode,
                         "cancellation_path": str(cancellation_path),
                     },
                     should_stop=should_stop,

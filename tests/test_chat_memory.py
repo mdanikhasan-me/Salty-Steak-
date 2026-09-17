@@ -333,7 +333,7 @@ def test_personal_recall_finds_explicit_notes_without_shared_query_words(tmp_pat
 ])
 def test_personal_recall_reaches_generation_with_its_context_and_without_identity_adapter(
     tmp_path: Path, name: str, source: str, learned_router: bool, mode: str,
-    research: bool, prompt: str, monkeypatch,
+    research: bool, prompt: str, monkeypatch, resource_mode="normal",
 ) -> None:
     """Exercise persisted chat + retrieval + routing + final answer validation.
 
@@ -376,11 +376,14 @@ def test_personal_recall_reaches_generation_with_its_context_and_without_identit
             conversation["id"], prompt,
             {"context_window_tokens": 32768, "reasoning_mode": mode,
              "research_mode": research, "research_forced": research,
+             "resource_mode": resource_mode,
              "web_search_enabled": research},
         )
         assert application.operations.wait(operation["id"], timeout=10)["state"] == "completed"
         assert runtime.calls
         for call in runtime.calls:
+            if resource_mode == "turtle":
+                assert call.get("resource_mode") == "turtle"
             assert not call.get("enabled_adapter_ids")
             assert not call["messages"][0]["content"].startswith("Classify only the latest user message")
         answer_calls = [call for call in runtime.calls if not call["messages"][0]["content"].startswith("Classify the public-information")]
@@ -402,6 +405,14 @@ def test_personal_recall_reaches_generation_with_its_context_and_without_identit
         assert user["technical_details"]["global_memory_count"] == (1 if source == "saved_memory" else 0)
     finally:
         application.close()
+
+
+@pytest.mark.parametrize('mode', ['instant','cooking'])
+def test_turtle_reaches_normal_chat_generation_with_research_selected(tmp_path, monkeypatch, mode):
+    test_personal_recall_reaches_generation_with_its_context_and_without_identity_adapter(
+        tmp_path, 'Test Person', 'saved_memory', True, mode, True, 'What is my name?',
+        monkeypatch, resource_mode='turtle',
+    )
 
 
 @pytest.mark.parametrize("prior", [None, "hi", "My name is Sora Ito."])

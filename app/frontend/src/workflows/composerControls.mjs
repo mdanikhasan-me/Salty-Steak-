@@ -141,6 +141,7 @@ const GENERATION_SETTING_KEYS = Object.freeze([
   "repetition_penalty",
   "seed",
   "reasoning_mode",
+  "resource_mode",
   "reasoning_visibility",
   "web_search_enabled",
   "system_prompt",
@@ -205,6 +206,7 @@ export function normaliseGenerationSettingsSnapshot(value, defaults = {}) {
       : 8_192;
   }
   settings.reasoning_mode = normaliseCookingMode(merged.reasoning_mode);
+  settings.resource_mode = merged.resource_mode === "turtle" ? "turtle" : "normal";
   settings.reasoning_visibility = normaliseReasoningVisibility(
     merged.reasoning_visibility,
   );

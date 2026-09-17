@@ -141,6 +141,7 @@ const DEFAULT_GENERATION_SETTINGS = {
   repetition_penalty: 1.1,
   seed: -1,
   reasoning_mode: "instant",
+  resource_mode: "normal",
   reasoning_visibility: "summaries",
   computer_authority_mode: "ask_every_time",
   web_search_enabled: false,
@@ -2613,7 +2614,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     <ChevronDown aria-hidden="true" />
                   </button>
                   {composerMenu === "cooking" ? (
-                    <ResponseModeControl value={cookingMode} modelLabel={activeModelLabel} autoFocus={composerMenuKeyboardRef.current} onChange={mode=>setGenerationSettings(current=>({...current,reasoning_mode:mode}))}/>
+                    <ResponseModeControl value={cookingMode} modelLabel={activeModelLabel} turtle={generationSettings.resource_mode === "turtle"} onTurtleChange={enabled=>setGenerationSettings(current=>({...current,resource_mode:enabled ? "turtle" : "normal"}))} autoFocus={composerMenuKeyboardRef.current} onChange={mode=>setGenerationSettings(current=>({...current,reasoning_mode:mode}))}/>
                   ) : null}
                 </div>
               </div>

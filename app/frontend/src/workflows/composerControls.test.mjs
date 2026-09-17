@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+test("Turtle persists independently from effort and reaches every request", () => {
+  const snapshot = normaliseGenerationSettingsSnapshot({reasoning_mode:"cooking",resource_mode:"turtle"});
+  assert.equal(snapshot.resource_mode,"turtle");
+  assert.equal(snapshot.reasoning_mode,"cooking");
+  assert.equal(generationSettingsForRequest(snapshot).resource_mode,"turtle");
+  assert.equal(generationTurnSettingsForRequest(snapshot,{}, {researchMode:true}).resource_mode,"turtle");
+  assert.equal(normaliseGenerationSettingsSnapshot({resource_mode:"turbo"}).resource_mode,"normal");
+});
+
 import {
   COOKING_MODES,
   COMPUTER_AUTHORITY_MODES,

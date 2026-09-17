@@ -1601,6 +1601,7 @@ class SaltyNativeRuntime:
         enabled_adapter_ids: Sequence[str] | None = None,
         allowed_first_tokens: Sequence[str] = (),
         response_format: str = "text",
+        resource_mode: str = "normal",
     ) -> SaltyNativeGeneration:
         """Generate a learned identity answer with the selected Chat context.
 
@@ -1692,6 +1693,7 @@ class SaltyNativeRuntime:
                     enabled_adapter_ids=explicit,
                     allowed_first_tokens=allowed_first_tokens,
                     response_format=response_format,
+                    resource_mode=resource_mode,
                 )
                 generated.technical_details.update(
                     {
@@ -1750,6 +1752,7 @@ class SaltyNativeRuntime:
         enabled_adapter_ids: Sequence[str] | None = None,
         allowed_first_tokens: Sequence[str] = (),
         response_format: str = "text",
+        resource_mode: str = "normal",
     ) -> SaltyNativeGeneration:
         with self._lock:
             if not self.loaded or not self._api or not self._context or not self._vocab:
@@ -1909,6 +1912,8 @@ class SaltyNativeRuntime:
                 )()
                 self._prompt_token_buffer = prompt_buffer
             prompt_token_buffer = prompt_buffer
+            from .resource_pacing import GenerationPacer
+            pacer = GenerationPacer(resource_mode)
             batch: Any = None
             try:
                 for chunk_index, (start, end) in enumerate(prompt_ranges):
@@ -1965,6 +1970,10 @@ class SaltyNativeRuntime:
                         token = self._api.native.llama_sampler_sample(
                             sampler, self._context, -1
                         )
+                    if not pacer.pause(should_stop):
+                        cancelled = True
+                        finish_reason = "cancelled"
+                        break
                     if self._api.native.llama_vocab_is_eog(self._vocab, token):
                         finish_reason = "end_of_generation"
                         break
@@ -2022,6 +2031,7 @@ class SaltyNativeRuntime:
                 technical_details={
                     **self.describe(),
                     "input_context_tokens": len(prompt_tokens),
+                    **pacer.details(),
                     "effective_context_limit": effective_context_limit,
                     "context_reallocated": context_reallocated,
                     "adapter_activation_changed": adapter_activation_changed,

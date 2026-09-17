@@ -49,6 +49,7 @@ from ..system.config import AppConfig
 from ..system.environment import HostEnvironmentRegistry, seed_world_state
 from ..system.files import sha256_file
 from ..tooling.web_search import WebSearchClient
+from ..runtime.resource_pacing import normalize_resource_mode
 from ..training.identity_intent import (
     IDENTITY_INTENT_LABEL,
     identity_intent_messages,
@@ -978,6 +979,7 @@ def _apply_reasoning_mode(
 
 def _generation_control_provenance(settings: dict[str, Any]) -> dict[str, Any]:
     return {
+        "resource_mode_requested": settings.get("resource_mode", "normal"),
         "reasoning_mode_requested": settings["reasoning_mode_requested"],
         "reasoning_mode_effective": settings["reasoning_mode"],
         "reasoning_visibility_effective": settings["reasoning_visibility"],
@@ -1681,6 +1683,7 @@ class ChatService:
             "seed": default_number("seed", int(defaults["seed"]), int),
             "reasoning_mode_requested": requested_reasoning,
             "reasoning_mode": reasoning_mode,
+            "resource_mode": normalize_resource_mode(supplied.get("resource_mode")),
             "reasoning_visibility": reasoning_visibility,
             "web_search_enabled": web_search_enabled,
             "system_prompt": prompt,
@@ -2761,6 +2764,8 @@ class ChatService:
             }
             if on_preview is not None:
                 generation_arguments["on_preview"] = on_preview
+            if generation_settings.get("resource_mode") == "turtle":
+                generation_arguments["resource_mode"] = "turtle"
             response = self.model_bundle_runtime.generate(**generation_arguments)
 
 
@@ -7343,6 +7348,8 @@ class ChatService:
             "stream_signatures": {},
         }
         if active_target_kind == "model_bundle":
+            if generation.get("resource_mode") == "turtle":
+                generation_arguments["resource_mode"] = "turtle"
             if self.model_bundle_runtime is None:
                 raise RuntimeError("Native model bundle runtime disappeared")
 

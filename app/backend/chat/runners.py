@@ -432,6 +432,11 @@ _PROCESS_PHRASES = (
 
 FINALISER_BASE_RULES = (
     "Answer the user's question using only the findings below. Write the "
+    "answer only where the cited text supports it. A validated source means "
+    "the page was readable, not that every claim is true. Repeated text across "
+    "publishers can be copied; source counts and heuristic confidence are not "
+    "truth probabilities. Distinguish single-source assertions from independent "
+    "support and conflicting evidence. "
     "answer itself in plain prose — do not describe the search, do not count "
     "sources, do not mention findings or claims. "
     "Answer only what was asked; do not turn a narrow status question into a "
@@ -2028,6 +2033,9 @@ class LiveRunners:
                                     "contradicts": list(claim.get("contradicts") or []),
                                     "confidence": claim.get("confidence"),
                                     "validated": bool(claim.get("validated")),
+                                    "validation_scope": claim.get("validation_scope", "source_readability"),
+                                    "support_status": claim.get("support_status"),
+                                    "confidence_scope": claim.get("confidence_scope", "retrieval_heuristic_not_truth_probability"),
                                     "independent_source_count": int(
                                         claim.get("independent_source_count") or 0
                                     ),

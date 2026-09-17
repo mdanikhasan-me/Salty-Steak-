@@ -104,6 +104,7 @@ RESEARCH_REQUEST_WORDS = frozenset(
     fewer find findings give identify independent information least official one
     prefer provide research result results source sources technical using validate
     validated validation verification verify
+    what when where why how does do can could would should explain describe compare
     """.split()
 )
 STATUS_QUESTION_WORDS = frozenset(
@@ -126,7 +127,7 @@ STATUS_CLAIM_WORDS = frozenset(
 def _words(text: str) -> set[str]:
     return {
         word
-        for word in re.findall(r"[a-z0-9']+", str(text).casefold())
+        for word in re.findall(r"[^\W_]+(?:'[^\W_]+)?", str(text).casefold())
         if word not in NOISE and len(word) > 1
     }
 
@@ -607,10 +608,12 @@ class ResearchLedger:
     def claim_relevant_to_question(self, claim: Claim) -> bool:
         """Whether a claim can contribute to this question's completion gate."""
 
-        if not self.is_status_question:
-            return True
         words = _words(claim.text)
         subject = self.question_subject_words
+        if not self.is_status_question:
+            # This is a conservative lexical eligibility test, not proof that
+            # the claim is true. Unrelated snippets must not meet coverage.
+            return not subject or bool(words & subject)
         subject_matches = len(words.intersection(subject))
         required_subject_matches = min(2, len(subject))
         if subject and subject_matches < required_subject_matches:
@@ -700,10 +703,10 @@ class ResearchLedger:
                 self.status_target_publishers
             ) >= required
         return (
-            len(self.corroborated_claims) >= self.budget.coverage_target
+            len(self.relevant_corroborated_claims) >= self.budget.coverage_target
             or (
-                len(self.claims) >= self.budget.coverage_target
-                and len(self.evidence_publishers) >= required
+                len(self.relevant_claims) >= self.budget.coverage_target
+                and len(self.relevant_evidence_publishers) >= required
             )
         )
 
@@ -767,6 +770,12 @@ class ResearchLedger:
         record["validated"] = bool(evidence) and all(
             source.get("validation") == "validated" for source in evidence
         )
+        record["validation_scope"] = "source_readability"
+        record["support_status"] = (
+            "disputed" if claim.disputed else
+            "independently_repeated" if record["corroborated"] else "single_source"
+        )
+        record["confidence_scope"] = "retrieval_heuristic_not_truth_probability"
         return record
 
     def report(self) -> dict[str, Any]:
