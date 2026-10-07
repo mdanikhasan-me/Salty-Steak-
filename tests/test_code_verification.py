@@ -220,6 +220,45 @@ def test_missing_module_is_a_prerequisite_not_a_code_failure(tmp_path):
     assert 'prerequisite' in report['issues'][0]
 
 
+def test_nested_python_harness_imports_project_without_path_boilerplate(tmp_path, monkeypatch):
+    monkeypatch.setenv('PYTHONPATH', str(tmp_path / 'unrelated-private-imports'))
+    plan = python_plan()
+    plan['test_files'][0]['content'] = 'from calculator import add\nassert add(2,3)==5\nprint("CHECKS_OK")\n'
+    report = verify('```python\ndef add(a,b):return a+b\n```', tmp_path, plan)
+    assert report['status'] == 'passed', report
+
+
+def test_invalid_plan_repaired_before_any_source_rewrite(tmp_path):
+    from app.backend.chat.code_verification import VerificationPlanSession
+    calls = []
+    def factory(payload):
+        calls.append(payload)
+        plan = python_plan()
+        if len(calls) == 1: plan['test_files'] = []
+        else: assert 'supplied test harness' in payload['plan_validation_error']
+        return plan
+    session = VerificationPlanSession()
+    report = verify_project('```python\ndef add(a,b):return a+b\n```', 'add', work_root=tmp_path,
+        plan_factory=lambda payload:session.plan(payload,factory), should_stop=lambda:False,
+        publish=lambda _:None)
+    assert report['status'] == 'passed' and len(calls) == 2
+    assert calls[0]['source_blocks'] == calls[1]['source_blocks']
+
+
+def test_invalid_plan_repair_is_bounded(tmp_path):
+    from app.backend.chat.code_verification import VerificationPlanSession
+    calls = []
+    session = VerificationPlanSession()
+    def factory(payload):
+        calls.append(payload)
+        return '{}'
+    report = verify_project('```python\nx=1\n```', 'test', work_root=tmp_path,
+        plan_factory=lambda payload:session.plan(payload,factory), should_stop=lambda:False,
+        publish=lambda _:None)
+    assert report['status'] == 'unverified' and len(calls) == 2
+    assert not list(tmp_path.iterdir())
+
+
 def test_zero_tests_is_not_a_pass(tmp_path):
     plan=python_plan();plan['checks'][0]['stdout_contains']=[]
     plan['test_files'][0]['content']='print("Ran 0 tests")\n'

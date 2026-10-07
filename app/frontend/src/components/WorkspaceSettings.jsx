@@ -21,7 +21,7 @@ export function applyAppearance(value) {
 
 const SECTIONS = [
   ["general", "General"], ["memory", "Memory"], ["plugins", "Connections"],
-  ["companion", "Companion"],
+  ["companion", "Companion"], ["data", "Data & storage"],
 ];
 
 export function WorkspaceSettings({ section, onSectionChange, onClose, active = true, children }) {

@@ -4,15 +4,23 @@ import json
 from ..database.conversation_workspaces import checked_workspace_mode
 
 
+def _epoch(connection):
+    row = connection.execute("SELECT value FROM application_metadata WHERE key='data.cleanup_epoch'").fetchone()
+    return int(row['value']) if row else 0
+
+
 def load_workspace_state(database, mode):
     checked_workspace_mode(mode)
-    row = database.fetch_one("SELECT value FROM application_metadata WHERE key=?", (f"ui.workspace.{mode}",))
-    if row is None:
-        return {}
+    with database.transaction() as connection:
+        epoch = _epoch(connection)
+        row = connection.execute("SELECT value FROM application_metadata WHERE key=?", (f"ui.workspace.{mode}",)).fetchone()
     try:
-        return json.loads(row["value"])
+        value = json.loads(row["value"]) if row else {}
     except (ValueError, TypeError):
-        return {}
+        value = {}
+    if epoch:
+        value['epoch'] = epoch
+    return value
 
 
 def save_workspace_state(database, mode, payload):
@@ -36,7 +44,10 @@ def save_workspace_state(database, mode, payload):
         "drafts": [item for item in drafts[-32:] if isinstance(item, list) and len(item) == 2 and isinstance(item[1], dict) and (item[0] == "new" or item[0] in owned)],
         "instructions": [item for item in instructions[-64:] if isinstance(item, list) and len(item) == 2 and isinstance(item[1], str) and item[0] in owned],
     }
-    database.execute("INSERT INTO application_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (f"ui.workspace.{mode}", json.dumps(value, ensure_ascii=False)))
+    with database.transaction() as connection:
+        if payload.get('epoch', 0) != _epoch(connection):
+            raise RuntimeError('Application data was cleared; reload before saving workspace drafts')
+        connection.execute("INSERT INTO application_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (f"ui.workspace.{mode}", json.dumps(value, ensure_ascii=False)))
     return {"saved": True}
 
 

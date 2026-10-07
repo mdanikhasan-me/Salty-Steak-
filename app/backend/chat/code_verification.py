@@ -42,7 +42,7 @@ that references the supplied project metadata. Do not use -c/-e eval snippets.
 For CLI smoke runs use kind:run and stdout_contains with a concrete expected result.
 Builds and behavioral test harnesses must exit zero. For an expected CLI error,
 use kind:run with the exact nonzero exit code and stderr_contains or stdout_contains.
-For Python, import the source from the project root explicitly if the test script is in _checks/.
+The runner adds the fresh project root to PYTHONPATH for Python harness imports.
 '''
 
 
@@ -203,9 +203,20 @@ class VerificationPlanSession:
         if self._plan is not None:
             validate_plan(copy.deepcopy(self._plan), payload['source_blocks'])
             return copy.deepcopy(self._plan)
-        raw = factory(payload)
-        plan = json.loads(raw) if isinstance(raw, str) else copy.deepcopy(raw)
-        validate_plan(plan, payload['source_blocks'])
+        candidate_payload = dict(payload)
+        for attempt in range(2):
+            raw = factory(candidate_payload)
+            try:
+                plan = json.loads(raw) if isinstance(raw, str) else copy.deepcopy(raw)
+                validate_plan(plan, payload['source_blocks'])
+                break
+            except (ValueError, TypeError, KeyError, AttributeError) as error:
+                if attempt:
+                    raise
+                # Repair the invalid plan, not the generated source. Once valid,
+                # the harness is frozen and cannot be weakened by later repairs.
+                candidate_payload = {**payload, 'invalid_plan': raw,
+                                     'plan_validation_error': str(error)}
         self._plan = copy.deepcopy(plan)
         return copy.deepcopy(plan)
 

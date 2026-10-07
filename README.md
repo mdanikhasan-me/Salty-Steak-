@@ -308,3 +308,5 @@ The current priorities, data-preservation requirements, version-control approach
 and future fine-tuning/self-improvement direction are recorded in
 [the personal assistant roadmap](docs/PERSONAL_ASSISTANT_ROADMAP.md).
 
+The data-clearing scopes, preservation boundaries, and coding verification contract
+are documented in [data and verification](docs/DATA_AND_VERIFICATION.md).

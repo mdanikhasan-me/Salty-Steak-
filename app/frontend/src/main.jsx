@@ -9,6 +9,7 @@ import "./styles/workspace-polish.css";
 import "./styles/charming-palette.css";
 import "./styles/response-experience.css";
 import './styles/work-activity.css';
+import './styles/data-settings.css';
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 

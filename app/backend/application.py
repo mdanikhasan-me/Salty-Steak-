@@ -187,6 +187,8 @@ class Application:
         mark("configuration_loaded")
         mark("workspace_layout_started")
         self.paths = create_storage_layout(self.config)
+        from .system.data_management import DataManagement
+        self.data_management = DataManagement(self)
         self.model_bundles = ModelBundleRegistry(self.paths.workspace / "models")
         mark("workspace_layout_ready")
         mark("database_opening_and_schema_migration_started")

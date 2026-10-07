@@ -36,6 +36,7 @@ import { api, asList } from "../api/client.js";
 import { ChatMessage } from "../components/ChatMessage.jsx";
 import { LiveResponse } from "../components/LiveResponse.jsx";
 import { ActionTimeline } from '../components/ActionTimeline.jsx';
+import { DataSettings } from '../components/DataSettings.jsx';
 import { AgentActivityPanel } from "../components/AgentActivityPanel.jsx";
 import { ConversationSidebar } from "../components/ConversationSidebar.jsx";
 import { ResponseDetails } from "../components/ResponseDetails.jsx";
@@ -254,7 +255,9 @@ function sessionFor(mode) {
 }
 const pendingWorkspaceSaves = new Map();
 function persistWorkspace(mode, session) {
+  if (session.retired) return Promise.resolve();
   const snapshot = {
+    epoch: session.epoch || 0,
     selectedId: session.selectedId || null, settings: session.settings,
     drafts: [...session.drafts].slice(-32).map(([id, value]) => [id, { draft: value.draft, settings: value.settings, researchMode: Boolean(value.researchMode) }]),
     instructions: [...session.instructions].slice(-64),
@@ -266,6 +269,13 @@ export function ChatPage(props) {
   const { workspaceMode } = useShell();
   const [loaded, setLoaded] = useState(null);
   const [loadError, setLoadError] = useState("");
+  const [clearedData, setClearedData] = useState(null);
+  const onDataCleared = useCallback(result => {
+    for (const session of workspaceSessions.values()) session.retired = true;
+    workspaceSessions.clear();
+    pendingWorkspaceSaves.clear();
+    setClearedData(result);
+  }, []);
   useEffect(() => {
     let cancelled = false;
     setLoadError("");
@@ -278,11 +288,12 @@ export function ChatPage(props) {
     }).catch(() => { if (!cancelled) setLoadError("This workspace could not be opened. Try again."); });
     return () => { cancelled = true; };
   }, [workspaceMode]);
+  if (clearedData) return <DataSettings initialResult={clearedData} />;
   if (!sessionFor(workspaceMode).loaded && loaded !== workspaceMode) return <div className="workspace-opening" role="status">{loadError || "Opening workspace…"}{loadError ? <button type="button" onClick={() => window.location.reload()}>Try again</button> : null}</div>;
-  return <ChatWorkspace key={workspaceMode} {...props} workspaceMode={workspaceMode} />;
+  return <ChatWorkspace key={workspaceMode} {...props} workspaceMode={workspaceMode} onDataCleared={onDataCleared} />;
 }
 
-function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceMode }) {
+function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceMode, onDataCleared }) {
   const session = sessionFor(workspaceMode);
   const selectionKey = `${SELECTED_CONVERSATION_KEY}:${workspaceMode}`;
   const settingsKey = `${GENERATION_SETTINGS_KEY}:${workspaceMode}`;
@@ -2721,6 +2732,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
           <WorkspaceSettings section={settingsView} onSectionChange={setSettingsView} onClose={() => setInspectorOpen(false)} active={!pluginSetup}>
           {settingsView === "general" ? <GeneralSettings onSectionChange={setSettingsView} onNavigate={(destination) => { setInspectorOpen(false); onNavigate(destination); }} />
           : settingsView === "companion" ? <CompanionSettings />
+          : settingsView === "data" ? <DataSettings onCleared={onDataCleared} />
           : settingsView === "about" ? <AboutPage />
           : settingsView === "plugins" ? (
             <PluginsSettingsSheet embedded active={false} title="Connections" onClose={() => setInspectorOpen(false)}>

@@ -120,6 +120,13 @@ class ApiRouter:
 
         if method == "GET" and parts == ("automation", "status"):
             return app.automation_status()
+        if method == 'POST' and parts == ('data','preview'):
+            body = self._read_json()
+            return app.data_management.preview(self._required_string(body,'scope'))
+        if method == 'POST' and parts == ('data','clear'):
+            body = self._read_json()
+            return app.data_management.execute(self._required_string(body,'token'),
+                                               self._required_string(body,'confirmation'))
         if method == 'GET' and len(parts) == 3 and parts[:2] == ('automation', 'previews'):
             return app.action_preview_content(parts[2])
         if (method == 'GET' and len(parts) == 5 and parts[:2] == ('chat','conversations')

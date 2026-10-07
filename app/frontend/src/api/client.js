@@ -131,6 +131,8 @@ const readOperation = createSharedRead(id => request(`/operations/${encodeURICom
 const saveUiPreferences = createLatestWriter(preferences => request("/preferences/ui", { method: "POST", body: preferences }));
 
 export const api = {
+  previewDataClear: scope => request('/data/preview',{method:'POST',body:{scope},timeout:120000}),
+  clearApplicationData: (token,confirmation) => request('/data/clear',{method:'POST',body:{token,confirmation},timeout:600000}),
   makeRequestKey,
 
   health: () => request("/health", { timeout: 5_000 }),

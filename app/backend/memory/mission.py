@@ -1108,5 +1108,23 @@ class AutomationMissionMemory:
         with self._lock:
             self._connection.close()
 
+    def cleanup_revision(self) -> tuple[int, int]:
+        """Detect writes since a reviewed cleanup, including other connections."""
+        with self._lock:
+            return (self._connection.total_changes,
+                    self._connection.execute('PRAGMA data_version').fetchone()[0])
+
+    def clear(self) -> None:
+        """Erase app-owned automation memory at the user's explicit request."""
+        with self._lock, self._connection:
+            self._connection.execute('PRAGMA secure_delete=ON')
+            for table in ('mission_events','mission_actions','mission_items','mission_locations','mission_principals'):
+                self._connection.execute(f'DELETE FROM {table}')
+            self._task_locations.clear()
+            self._task_principals.clear()
+        with self._lock:
+            self._connection.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            self._connection.execute('VACUUM')
+
 
 __all__ = ["AutomationMissionMemory", "MISSION_MEMORY_SCHEMA"]

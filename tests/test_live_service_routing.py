@@ -669,6 +669,28 @@ def test_lock_in_runs_real_terminal_tests_repairs_and_retests(application,tmp_pa
     assert Path(report['work_directory'],'_evidence/result.json').is_file()
 
 
+def test_missing_verification_dependency_does_not_trigger_speculative_source_repairs(application, tmp_path):
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+    from app.backend.chat.code_verification import PLAN_INSTRUCTION
+    draft = '```python\ndef add(a,b):return a+b\n```'
+    plan = {'requirements':['add numbers'], 'sources':[{'block':0,'path':'calculator.py'}],
+            'test_files':[{'path':'_checks/check.py','content':'import missing_dependency_938420\n'}],
+            'checks':[{'name':'behavior','kind':'test','argv':['python','_checks/check.py'],'requirements':[0]}]}
+    def reply(kwargs):
+        first = kwargs['messages'][0].get('content','')
+        if first == ROUTE_SYSTEM: return 'A'
+        if first == PLAN_INSTRUCTION: return json.dumps(plan)
+        assert not first.startswith(('Review the supplied answer','Revise the draft'))
+        if kwargs.get('reasoning_mode') == 'cooking': return '<think>Consider the function.</think>'
+        return draft
+    _wire(application,tmp_path,reply)
+    application.chat.model_bundle['runtime_family'] = 'salty_native_steak35'
+    _, messages = _send(application,'Write add(a,b) in Python.',settings={'reasoning_mode':'lock_in'})
+    report = messages[-1]['technical_details']['lock_in_verification']
+    assert report['status'] == 'unverified' and report['repairs'] == 0
+    assert 'prerequisite' in report['issues'][0]
+
+
 def test_cooking_activity_ends_reasoning_before_answer_and_preserves_prefill_time(application, tmp_path, monkeypatch):
     import time
     from app.backend.chat import service

@@ -26,6 +26,9 @@ def run_check(argv: Sequence[str], cwd: Path, *, should_stop: Callable[[], bool]
             "LIBPATH", "JAVA_HOME", "DOTNET_ROOT", "VCTOOLSINSTALLDIR", "WINDOWSSDKDIR"}
     environment = {k: v for k, v in os.environ.items() if k.upper() in keep}
     environment.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8",
+                        # A harness under _checks/ must import the generated
+                        # project's modules, never the user's ambient PYTHONPATH.
+                        "PYTHONPATH": str(cwd.resolve()),
                         "PYTHONUTF8": "1", "CI": "1", "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
                         "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1", "DOTNET_CLI_HOME": str(cwd),
                         "npm_config_cache": str(cwd / ".npm-cache"), "npm_config_offline": "true",

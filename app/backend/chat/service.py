@@ -9534,7 +9534,10 @@ class ChatService:
                     update_generation_activity("lock-in-terminal", kind="verification",
                         label="Local checks finished", detail=measured["scope"],
                         state="failed" if measured["status"] == "failed" else "completed")
-                    if measured["status"] in {"failed", "cancelled"}:
+                    if measured["status"] in {"failed", "cancelled", "unverified"}:
+                        # An unavailable execution prerequisite is not a source
+                        # defect. Do not let a speculative critique turn missing
+                        # evidence into a repair loop that rewrites valid code.
                         return measured
                 # A model critique is a review, never runtime-test evidence.
                 if len(draft) > 60000:

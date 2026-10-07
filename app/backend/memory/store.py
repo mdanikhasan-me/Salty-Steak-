@@ -330,16 +330,26 @@ class SemanticMemory:
             )
         return cursor.rowcount > 0
 
+    def cleanup_revision(self) -> tuple[int, int]:
+        """Detect writes since a reviewed cleanup, including other connections."""
+        with self._lock:
+            return (self._connection.total_changes,
+                    self._connection.execute('PRAGMA data_version').fetchone()[0])
+
     def forget_all(self) -> int:
         """Erase everything. The user owns this and must be able to empty it."""
 
         with self._lock, self._connection:
+            self._connection.execute('PRAGMA secure_delete=ON')
             count = self._connection.execute(
                 "SELECT COUNT(*) AS n FROM memories"
             ).fetchone()["n"]
             self._connection.execute("DELETE FROM memory_fts_map")
             self._connection.execute("DELETE FROM memories")
             self._connection.execute("INSERT INTO memories_fts(memories_fts) VALUES('delete-all')")
+        with self._lock:
+            self._connection.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            self._connection.execute('VACUUM')
         return int(count)
 
 
