@@ -522,6 +522,7 @@ class ResearchLoop:
                     validation=str(page.get("validation") or "validated"),
                     content_sha256=str(page.get("content_sha256") or ""),
                     content_characters=int(page.get("content_characters") or 0),
+                    document_fingerprint=page.get('document_fingerprint'),
                 )
                 if source is None:
                     for site in wave["sites"]:

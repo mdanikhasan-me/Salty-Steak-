@@ -251,6 +251,9 @@ class Source:
     content_sha256: str = ""
     content_characters: int = 0
     retrieval_details: dict[str, Any] = field(default_factory=dict)
+    document_fingerprint: dict[str, Any] = field(default_factory=dict)
+    document_group: str = ''
+    document_match: dict[str, Any] = field(default_factory=dict)
 
     @property
     def domain(self) -> str:
@@ -279,6 +282,8 @@ class Source:
             "content_sha256": self.content_sha256,
             "content_characters": self.content_characters,
             "retrieval_details": dict(self.retrieval_details),
+            "document_group": self.document_group or self.source_id,
+            "document_match": dict(self.document_match),
         }
 
 
@@ -417,6 +422,7 @@ class ResearchLedger:
         validation: str = "validated",
         content_sha256: str = "",
         content_characters: int = 0,
+        document_fingerprint: Mapping[str, Any] | None = None,
     ) -> Source | None:
         """Register a source. None when it was already read."""
 
@@ -432,7 +438,26 @@ class ResearchLedger:
             validation=str(validation or "validated"),
             content_sha256=str(content_sha256 or ""),
             content_characters=max(0, int(content_characters or 0)),
+            document_fingerprint=dict(document_fingerprint or {}),
         )
+        source.document_group = source.source_id
+        from .document_identity import copied_document_similarity
+        matches = []
+        for previous in self.sources.values():
+            similarity = copied_document_similarity(source.document_fingerprint, previous.document_fingerprint)
+            if similarity is not None and similarity >= 0.85:
+                matches.append((previous, similarity))
+        if matches:
+            representative = matches[0][0].document_group or matches[0][0].source_id
+            groups = {item.document_group or item.source_id for item,_ in matches}
+            for previous in self.sources.values():
+                if previous.document_group in groups:
+                    previous.document_group = representative
+            source.document_group = representative
+            source.document_match = {'method':'near_duplicate_extracted_text',
+                                     'source':matches[0][0].source_id,
+                                     'estimated_jaccard':round(matches[0][1],4),
+                                     'scope':'copy_detection_not_verified_authorship'}
         self.sources[source.source_id] = source
         return source
 
@@ -494,16 +519,8 @@ class ResearchLedger:
         mirror must not manufacture a cross-source dispute.
         """
 
-        source = self.sources.get(source_id)
-        key = source.independence_key if source is not None else ""
-        if not key:
-            return False
-        existing_keys = {
-            self.sources[item].independence_key
-            for item in claim.sources
-            if item in self.sources and self.sources[item].independence_key
-        }
-        return any(existing != key for existing in existing_keys)
+        existing = self._independent_keys(claim.sources)
+        return bool(existing) and len(self._independent_keys([*claim.sources,source_id])) > len(existing)
 
     def record_observation(self, observation: Mapping[str, Any]) -> None:
         """One page binding one product to one price, kept whole.
@@ -597,12 +614,38 @@ class ResearchLedger:
         return self._elapsed_before_resume + time.monotonic() - self.started_at
 
     def independent_source_count(self, claim: Claim) -> int:
-        domains = {
-            self.sources[source_id].independence_key
-            for source_id in claim.sources
-            if source_id in self.sources and self.sources[source_id].independence_key
-        }
-        return len(domains)
+        return len(self._independent_keys(claim.sources))
+
+    def _independent_keys(self, source_ids: Iterable[str]) -> set[str]:
+        """Group contributing evidence by publisher OR copied document.
+
+        Only the contributing sources participate: copying one document does
+        not make a publisher's unrelated original reporting a mirror too.
+        """
+        groups = []
+        for identifier in sorted(set(source_ids)):
+            source = self.sources.get(identifier)
+            if source is None or not source.independence_key:
+                continue
+            publishers = {source.independence_key}
+            documents = {source.document_group or source.source_id}
+            remaining = []
+            for old_publishers, old_documents in groups:
+                if publishers & old_publishers or documents & old_documents:
+                    publishers |= old_publishers
+                    documents |= old_documents
+                else:
+                    remaining.append((old_publishers,old_documents))
+            # A merge may connect a component visited earlier in this pass.
+            changed = True
+            while changed:
+                changed = False
+                for item in remaining[:]:
+                    if publishers & item[0] or documents & item[1]:
+                        publishers |= item[0]; documents |= item[1]
+                        remaining.remove(item); changed = True
+            groups = [*remaining,(publishers,documents)]
+        return {min(publishers) for publishers,_ in groups}
 
     @property
     def evidence_publishers(self) -> set[str]:
@@ -613,11 +656,7 @@ class ResearchLedger:
             for claim in self.claims.values()
             for source_id in claim.sources
         }
-        return {
-            self.sources[source_id].independence_key
-            for source_id in contributing
-            if source_id in self.sources and self.sources[source_id].independence_key
-        }
+        return self._independent_keys(contributing)
 
     @property
     def is_status_question(self) -> bool:
@@ -665,11 +704,7 @@ class ResearchLedger:
             for claim in self.relevant_claims
             for source_id in claim.sources
         }
-        return {
-            self.sources[source_id].independence_key
-            for source_id in contributing
-            if source_id in self.sources and self.sources[source_id].independence_key
-        }
+        return self._independent_keys(contributing)
 
     @property
     def relevant_corroborated_claims(self) -> list[Claim]:
@@ -717,11 +752,7 @@ class ResearchLedger:
             if target in _versions(claim.text)
             for source_id in claim.sources
         }
-        return {
-            self.sources[source_id].independence_key
-            for source_id in contributing
-            if source_id in self.sources and self.sources[source_id].independence_key
-        }
+        return self._independent_keys(contributing)
 
     @property
     def evidence_sufficient(self) -> bool:
@@ -876,7 +907,8 @@ class ResearchLedger:
                 name: getattr(self.budget, name)
                 for name in Budget.__dataclass_fields__
             },
-            "sources": [source.to_dict() for source in self.sources.values()],
+            "sources": [{**source.to_dict(), 'document_fingerprint':source.document_fingerprint}
+                        for source in self.sources.values()],
             "claims": [claim.to_dict() for claim in self.claims.values()],
             "observations": [dict(item) for item in self.observations],
             "rejected_sources": [dict(item) for item in self.rejected_sources],
@@ -920,6 +952,9 @@ class ResearchLedger:
                 content_sha256=str(item.get("content_sha256") or ""),
                 content_characters=max(0, int(item.get("content_characters") or 0)),
                 retrieval_details=dict(item.get("retrieval_details") or {}),
+                document_fingerprint=dict(item.get('document_fingerprint') or {}),
+                document_group=str(item.get('document_group') or item.get('source') or ''),
+                document_match=dict(item.get('document_match') or {}),
             )
             ledger.sources[source.source_id] = source
         ledger.claims = {}

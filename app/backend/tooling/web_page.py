@@ -300,12 +300,15 @@ def _read_public_page(url: str, *, timeout: float = 8.0, question: str = "",
         r"^\s*(?:loading(?:\.\.\.|…)?|please\s+wait)\s*$", text[:3000], re.I))
     from ..research.passages import select_passages
     selected=select_passages(text,question)
+    from ..research.document_identity import document_fingerprint
+    fingerprint = document_fingerprint(text)
     # Only expose rows retained in the bounded evidence packet. Their column
     # bindings must survive the subsequent statement parser as one unit.
     retained_rows=[row for row in table_rows if row in selected['summary']]
     return {"url": final_url, "title": title, "content_type":content_type, **selected,
             "content_sha256": hashlib.sha256(payload).hexdigest(),
             "hash_scope":"response_body_bytes",
+            "document_fingerprint":fingerprint,
             "retrieval": "public_http", "content_characters": len(selected['summary']), "links": links,
             "read_limit":{"max_characters":20_000},
             "render_required":needs_render and len(text)<1000, "search_forms":forms,

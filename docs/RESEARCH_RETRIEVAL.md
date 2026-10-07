@@ -31,6 +31,20 @@ representation hash is retained separately from the validated summary hash:
 These identify different representations and must not overwrite each other.
 The claim ledger/checkpoint retains both scopes; neither hash proves factual truth.
 
+For complete static HTML/Markdown/text reads, a bounded content sketch is computed
+before question-specific passages are selected. It retains the lowest 256 fixed
+hashes of seven-word sequences (no random seed). Long near-duplicate documents share
+a document group, even on different hosts. Independence counts group contributing
+sources by publisher or copied document, while preserving every original URL/claim.
+Unrelated original reporting from a host that also carries a mirror stays separate.
+The sketch is persisted in checkpoints, not repeated in answer-facing claim packets.
+
+This is conservative copy detection, not proof of common authorship: at least 400
+words, 128 distinct sampled sequences and estimated Jaccard overlap of 0.85 are
+required. Shared short facts and repetitive boilerplate do not qualify. Translations,
+heavily edited copies and partial browser/PDF reads can remain undetected; documents
+without sketches retain the existing publisher-only heuristic.
+
 ## Acceptance boundaries and open work
 
 Live extraction/source checks cover original RFC, Python, Docker and NASA pages.
@@ -40,8 +54,8 @@ hidden contradictory facts, nested template tables, Markdown code/example links,
 balanced destinations and provenance round trips.
 
 Remaining limits include non-rendered CSS visibility, image-only PDF OCR, access
-challenges and broad unseen-host coverage. Cross-host mirrors can still inflate the
-ledger's heuristic independent-source count when origin identity is not established;
-the live RFC run exposed this between the RFC Editor and HTTPWG copies. Do not treat
-that heuristic as proof of independent corroboration. Fresh full-model acceptance
+challenges and broad unseen-host coverage. The live RFC Editor/HTTPWG mirror case now
+retains both URLs but counts one contributing origin; unidentified copies can still
+inflate the heuristic count. Do not treat that heuristic as proof of independent
+corroboration. Fresh full-model acceptance
 and installed native release gates remain separate from source/test success.
