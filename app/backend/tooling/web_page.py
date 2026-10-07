@@ -14,6 +14,28 @@ from html.parser import HTMLParser
 
 MAX_BYTES = 2_000_000
 PUBLIC_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+VOID_TAGS = frozenset({'area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'})
+
+
+def _explicitly_hidden(tag, attributes):
+    if (tag in {'script','style','noscript','svg','template'} or 'hidden' in attributes
+            or str(attributes.get('aria-hidden') or '').strip().lower() == 'true'):
+        return True
+    # Inline declarations only. External CSS/media queries require the browser
+    # reader; this does not pretend to calculate the complete CSS cascade.
+    style = re.sub(r'/\*.*?\*/', '', attributes.get('style') or '', flags=re.S)
+    declarations = {}
+    for declaration in style.split(';'):
+        name, separator, value = declaration.partition(':')
+        name, value = name.strip().lower(), value.strip().lower()
+        if not separator or name not in {'display','visibility'}:
+            continue
+        important = bool(re.search(r'!\s*important\s*$', value))
+        value = re.sub(r'!\s*important\s*$', '', value).strip()
+        if name not in declarations or important or not declarations[name][1]:
+            declarations[name] = (value, important)
+    return (declarations.get('display', ('',False))[0] == 'none'
+            or declarations.get('visibility', ('',False))[0] in {'hidden','collapse'})
 
 
 class PDFReadError(ValueError):
@@ -78,6 +100,8 @@ class PageText(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.hidden = 0
+        self._visibility_stack = []
+        self.hidden_elements = 0
         self.title_depth = 0
         self.title = []
         self.parts = []
@@ -98,6 +122,14 @@ class PageText(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
+        hidden = _explicitly_hidden(tag, attributes)
+        if hidden:
+            self.hidden_elements += 1
+        if tag not in VOID_TAGS:
+            self._visibility_stack.append((tag, hidden))
+            self.hidden += int(hidden)
+        if self.hidden or hidden:
+            return
         if tag=='pre':self._pre_depth+=1
         if tag in {'h1','h2','h3','h4','h5','h6'}:self._heading=[]
         if tag == 'table':self._table_headers=[];self._table_context=self._last_heading
@@ -122,11 +154,18 @@ class PageText(HTMLParser):
         if tag == "a":
             href = dict(attrs).get("href")
             self._link = {"url": href, "text": []} if href else None
-        if tag in {"script", "style", "noscript", "svg", "template"}: self.hidden += 1
         if tag == "title": self.title_depth += 1
         if self._cell is None and tag in {"p", "div", "br", "h1", "h2", "h3", "li", "tr", "article", "section"}: self.parts.append("\n")
 
     def handle_endtag(self, tag):
+        was_hidden = self.hidden
+        for index in range(len(self._visibility_stack)-1, -1, -1):
+            if self._visibility_stack[index][0] == tag:
+                self.hidden -= sum(int(hidden) for _,hidden in self._visibility_stack[index:])
+                del self._visibility_stack[index:]
+                break
+        if was_hidden:
+            return
         if tag=='pre':self._pre_depth=max(0,self._pre_depth-1)
         if tag in {'h1','h2','h3','h4','h5','h6'} and self._heading is not None:
             self._last_heading=' '.join(''.join(self._heading).split())[:240];self._heading=None
@@ -154,7 +193,6 @@ class PageText(HTMLParser):
         if tag == "a" and self._link is not None:
             self.links.append({"url": self._link["url"], "title": " ".join("".join(self._link["text"]).split())[:240]})
             self._link = None
-        if tag in {"script", "style", "noscript", "svg", "template"}: self.hidden = max(0, self.hidden - 1)
         if tag == "title": self.title_depth = max(0, self.title_depth - 1)
         if self._cell is None and tag in {"p", "div", "h1", "h2", "h3", "li", "tr"}: self.parts.append("\n")
 
@@ -232,10 +270,11 @@ def _read_public_page(url: str, *, timeout: float = 8.0, question: str = "",
             text = "\n\n".join(f"[PDF page {item['page']}]\n{item['text']}" for item in result['pages'])
             return {**result, "url": response.geturl(), "title": result['title'] or urllib.parse.urlsplit(address).path.rsplit('/',1)[-1],
                     "summary": text, "retrieval": "public_pdf", "content_sha256": hashlib.sha256(payload).hexdigest(),
-                    "content_characters": len(text), "content_type": content_type}
+                    "hash_scope":"response_body_bytes", "content_characters": len(text), "content_type": content_type}
         text = payload.decode(response.headers.get_content_charset() or "utf-8", errors="replace")
         final_url = response.geturl()
     forms=[]
+    visibility = None
     table_rows=[]
     if content_type in {"text/html", "application/xhtml+xml"}:
         parser = PageText(); parser.feed(text)
@@ -245,14 +284,15 @@ def _read_public_page(url: str, *, timeout: float = 8.0, question: str = "",
                  if urllib.parse.urlsplit(urllib.parse.urljoin(final_url,item['url'])).scheme in {'http','https'}]
         forms=parser.forms[:8]
         table_rows=parser.table_rows
+        visibility = {'method':'explicit_html_and_inline_styles',
+                      'hidden_elements':parser.hidden_elements, 'computed_styles':False}
     else:
         title = urllib.parse.urlsplit(address).hostname
         links = []
         if content_type in {'text/markdown','text/x-markdown'}:
             from ..research.passages import markdown_blocks
-            links=[{'url':urllib.parse.urljoin(final_url,href),'title':label[:240]}
-                for label,href in re.findall(r'(?<!!)\[([^\]\n]+)\]\(([^\s)]+)(?:\s+"[^"]*")?\)',text)[:200]
-                if not href.startswith('#') and urllib.parse.urlsplit(urllib.parse.urljoin(final_url,href)).scheme in {'http','https'}]
+            from ..research.markdown_links import markdown_links
+            links = markdown_links(text, final_url)
             text=markdown_blocks(text)
     if len(text.strip()) < 120: raise ValueError("Source did not return enough readable text")
     needs_render = bool(re.search(
@@ -265,7 +305,9 @@ def _read_public_page(url: str, *, timeout: float = 8.0, question: str = "",
     retained_rows=[row for row in table_rows if row in selected['summary']]
     return {"url": final_url, "title": title, "content_type":content_type, **selected,
             "content_sha256": hashlib.sha256(payload).hexdigest(),
+            "hash_scope":"response_body_bytes",
             "retrieval": "public_http", "content_characters": len(selected['summary']), "links": links,
             "read_limit":{"max_characters":20_000},
             "render_required":needs_render and len(text)<1000, "search_forms":forms,
-            "table_rows":retained_rows,"table_rows_read":len(retained_rows)}
+            "table_rows":retained_rows,"table_rows_read":len(retained_rows),
+            **({'visibility':visibility} if visibility is not None else {})}

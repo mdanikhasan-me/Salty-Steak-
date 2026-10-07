@@ -257,7 +257,13 @@ def validate_page(
         "url": final_url,
         "title": title,
         "summary": text,
+        # Keep the reader's byte/document hash separate from the bounded text
+        # packet used by the ledger. These are different representations.
+        **({'reader_content_sha256':page.get('reader_content_sha256',page['content_sha256']),
+            'reader_hash_scope':page.get('reader_hash_scope',page.get('hash_scope','unspecified'))}
+           if page.get('content_sha256') else {}),
         "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "hash_scope":"validated_summary_utf8",
         "content_characters": len(text),
         "validation": "validated",
     }
@@ -541,9 +547,10 @@ class ResearchLoop:
                         'retrieval', 'page_count', 'truncated', 'read_limit',
                         'downloaded_bytes', 'document_bytes', 'range_requests',
                         'extraction', 'representation_validator', 'hash_scope',
+                        'reader_content_sha256','reader_hash_scope',
                         'selected_ranges','selection','source_text_characters',
                         'content_type','table_rows_read','scanned_text_characters',
-                        'page_text_characters','fallback_reason','render_wait_seconds',
+                        'page_text_characters','fallback_reason','render_wait_seconds','visibility',
                     ) if key in page
                 }
                 if candidate.get('_discovered_from'):

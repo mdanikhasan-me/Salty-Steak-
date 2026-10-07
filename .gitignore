@@ -20,6 +20,9 @@ backups/
 scratchpad/
 tests/*
 !tests/*.py
+!tests/fixtures/
+tests/fixtures/*
+!tests/fixtures/*.py
 tools/*
 !tools/build_desktop.ps1
 !tools/snapshot_release_source.py
