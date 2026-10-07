@@ -1277,6 +1277,7 @@ class LiveRunners:
         self.generate_structured = generate_structured or generate
         self.generate_research_review = generate_research_review
         self._coverage_findings: list[Mapping[str, Any]] = []
+        self._answer_findings: list[Mapping[str, Any]] = []
         self.generate_with_preview = generate_with_preview
         self.generate_structured_with_preview = (
             generate_structured_with_preview or generate_with_preview
@@ -1955,6 +1956,8 @@ class LiveRunners:
             }
 
         question = str(decision.get("question") or decision.get("goal") or request)
+        self._coverage_findings = []
+        self._answer_findings = []
 
 
 
@@ -2021,7 +2024,9 @@ class LiveRunners:
             | {"process_summary": self._summarise(report)},
 
             "sources": report["sources"],
-            "claims": _select_finaliser_findings(question,report["claims"],limit=25),
+            # Persist the evidence actually sent to the answer pass, not a
+            # separately reranked list that can drop a cited primary source.
+            "claims": list(self._answer_findings),
 
 
 
@@ -2179,6 +2184,8 @@ class LiveRunners:
             selected_ids={c.get('claim') for c in ordered}
             extra=_select_finaliser_findings(need,claims,limit=2)
             ordered += [c for c in extra if c.get('claim') not in selected_ids]
+
+        self._answer_findings = list(ordered)
 
         if self.generate is not None or self.generate_with_preview is not None:
             if self.task is not None:

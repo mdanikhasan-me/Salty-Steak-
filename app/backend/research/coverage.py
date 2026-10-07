@@ -88,7 +88,14 @@ def assess_coverage(question: str, findings: Sequence[Mapping], generate: Callab
         {'role':'user','content':json.dumps(payload,ensure_ascii=False,separators=(',',':'))}]
     errors = []
     for attempt in range(2):
-        raw = generate(messages)
+        try:
+            raw = generate(messages)
+        except (TimeoutError, OSError) as error:
+            # An optional coverage review cannot erase successfully retrieved
+            # evidence. Preserve unknown coverage; cancellation exceptions and
+            # programming errors still propagate to the owning operation.
+            return {**result, 'error':str(error)[:200], 'attempts':attempt+1,
+                    'format_errors':errors, 'failure_kind':'review_transport'}
         try:
             return {**result, **_parse_review(raw, allowed, disputed),
                     'attempts': attempt + 1, 'format_errors': errors}

@@ -1,3 +1,5 @@
+import { executionEvidenceLabel } from '../workflows/verificationEvidence.mjs';
+
 export function VerificationReport({ report }) {
   if (!report) return null;
   const attempts = Array.isArray(report.attempts) ? report.attempts : [report];
@@ -17,6 +19,7 @@ export function VerificationReport({ report }) {
       <summary>Attempt {index+1} · {attempt.status === "passed" ? "passed" : attempt.status === "failed" ? "failed" : "unverified"}</summary>
       {attempt.checks.map((check,i)=><div className="verification-command" key={i}>
         <strong>{check.name}</strong><small>{check.kind} · {check.status} · exit {check.exit_code ?? "—"}</small>
+        {executionEvidenceLabel(check) ? <small>{executionEvidenceLabel(check)}</small> : null}
         {Array.isArray(check.argv) ? <code>{check.argv.join(" ")}</code> : null}
         {check.stdout ? <pre aria-label="Standard output">{check.stdout}</pre> : null}
         {check.stderr ? <pre aria-label="Standard error">{check.stderr}</pre> : null}

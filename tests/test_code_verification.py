@@ -60,6 +60,97 @@ def test_pytest_only_skipped_does_not_verify_behavior(tmp_path):
     assert result['status']=='unverified' and not result['covered_requirements']
 
 
+@pytest.mark.parametrize('decorator', ['unittest.skip("not executed")', 'unittest.expectedFailure'])
+def test_real_unittest_without_any_passing_case_is_unverified(tmp_path, decorator):
+    plan=python_plan()
+    plan['test_files'][0]['content'] = f'''import unittest
+from calculator import add
+class Behavior(unittest.TestCase):
+    @{decorator}
+    def test_add(self):
+        self.assertEqual(add(2,3),5)
+if __name__ == '__main__': unittest.main()
+'''
+    plan['checks'][0]['stdout_contains']=[]
+    result=verify('```python\ndef add(a,b):return a-b\n```',tmp_path,plan)
+    assert result['checks'][0]['exit_code']==0
+    assert result['status']=='unverified' and not result['covered_requirements']
+
+
+@pytest.mark.parametrize('summary', ['1 xfailed in 0.01s','2 skipped, 1 xfailed in 0.01s'])
+def test_pytest_expected_failures_do_not_verify_requirements(tmp_path, summary):
+    plan=python_plan();plan['checks'][0].update(argv=['python','-m','pytest','_checks'],stdout_contains=[])
+    result=verify('```python\ndef add(a,b):return a-b\n```',tmp_path,plan,
+        runner=lambda *a,**kw:{'status':'completed','exit_code':0,'stdout':summary,'stderr':''})
+    assert result['status']=='unverified' and not result['covered_requirements']
+
+
+def test_real_unittest_passing_case_with_skip_still_has_execution_evidence(tmp_path):
+    plan=python_plan()
+    plan['test_files'][0]['content']='''import unittest
+from calculator import add
+class Behavior(unittest.TestCase):
+    def test_add(self): self.assertEqual(add(2,3),5)
+    @unittest.skip('optional environment')
+    def test_optional(self): self.fail('not available')
+if __name__ == '__main__': unittest.main()
+'''
+    plan['checks'][0]['stdout_contains']=[]
+    result=verify('```python\ndef add(a,b):return a+b\n```',tmp_path,plan)
+    assert result['status']=='passed'
+    assert result['checks'][0]['test_evidence']=={
+        'runner':'unittest','tests':2,'passing':1,'behavior_verified':True}
+
+
+@pytest.mark.parametrize('output,passing', [
+    ('\x1b[32m2 passed\x1b[0m, 1 skipped in 0.10s',2),
+    ('1 xfailed in 0.10s',0),
+    ('1 skipped, 1 xfailed in 0.10s',0),
+    ('...\n',0),
+])
+def test_pytest_summary_needs_observed_passing_cases(output, passing):
+    from app.backend.chat.code_verification import passing_test_evidence
+    evidence=passing_test_evidence(['python','-m','pytest','_checks'],output)
+    assert evidence['passing']==passing
+    assert evidence['behavior_verified']==(passing>0)
+
+
+def test_script_named_pytest_is_not_mistaken_for_the_pytest_runner():
+    from app.backend.chat.code_verification import passing_test_evidence
+    evidence=passing_test_evidence(['python','_checks/pytest.py'],'Assertions completed')
+    assert evidence['runner']=='custom'
+
+
+def test_real_pytest_expected_failure_is_not_a_behavioral_pass(tmp_path):
+    plan=python_plan()
+    plan['test_files'][0]['content']='''import pytest
+from calculator import add
+@pytest.mark.xfail(reason='known broken result')
+def test_add(): assert add(2,3)==5
+'''
+    plan['checks'][0].update(argv=['python','-m','pytest','-q','_checks'],stdout_contains=[])
+    result=verify('```python\ndef add(a,b):return a-b\n```',tmp_path,plan)
+    assert result['checks'][0]['exit_code']==0
+    assert 'xfailed' in result['checks'][0]['stdout']
+    assert result['status']=='unverified' and not result['covered_requirements']
+
+
+@pytest.mark.parametrize('flag', ['-O','-OO','-uO','-BuOO'])
+def test_python_optimization_cannot_disable_verification_assertions(tmp_path, flag):
+    plan=python_plan()
+    plan['checks'][0]['argv']=['python',flag,'_checks/test_calc.py']
+    result=verify('```python\ndef add(a,b):return a-b\n```',tmp_path,plan)
+    assert result['status']=='unverified'
+    assert 'assertions' in result['issues'][0]
+
+
+def test_python_interpreter_options_do_not_hide_assertion_disabling_flag(tmp_path):
+    plan=python_plan()
+    plan['checks'][0]['argv']=['python','-X','dev','-O','_checks/test_calc.py']
+    result=verify('```python\ndef add(a,b):return a-b\n```',tmp_path,plan)
+    assert result['status']=='unverified' and 'assertions' in result['issues'][0]
+
+
 def test_expected_cli_error_requires_and_checks_stderr(tmp_path):
     plan={'requirements':['reject invalid input'], 'sources':[{'block':0,'path':'main.py'}],
           'checks':[{'name':'reject invalid','kind':'run','argv':['python','main.py'],
@@ -257,6 +348,44 @@ def test_invalid_plan_repair_is_bounded(tmp_path):
         publish=lambda _:None)
     assert report['status'] == 'unverified' and len(calls) == 2
     assert not list(tmp_path.iterdir())
+
+
+def test_plan_repairs_missing_requirement_mapping_before_any_execution(tmp_path):
+    from app.backend.chat.code_verification import VerificationPlanSession
+    calls=[]
+    session=VerificationPlanSession()
+    def factory(payload):
+        calls.append(payload)
+        plan=python_plan()
+        plan['requirements'].append('handle negative values')
+        if len(calls)>1:
+            assert 'indexes [1]' in payload['plan_validation_error']
+            plan['checks'][0]['requirements']=[0,1]
+        return plan
+    report=verify_project('```python\ndef add(a,b):return a+b\n```','add',work_root=tmp_path,
+        plan_factory=lambda payload:session.plan(payload,factory),should_stop=lambda:False,publish=lambda _:None)
+    assert report['status']=='passed' and len(calls)==2
+    assert report['covered_requirements']==[0,1]
+
+
+def test_plan_repair_receives_command_policy_errors_before_freezing(tmp_path):
+    from app.backend.chat.code_verification import VerificationPlanSession
+    calls=[]
+    session=VerificationPlanSession()
+    def factory(payload):
+        calls.append(payload)
+        plan=python_plan()
+        if len(calls)==1:
+            plan['checks'].append({'name':'invalid shell','kind':'run','argv':['bash','-c','echo OK'],
+                                   'requirements':[0],'stdout_contains':['OK']})
+        else:
+            assert 'Shell verification requires a saved script file' in payload['plan_validation_error']
+        return plan
+    report=verify_project('```python\ndef add(a,b):return a+b\n```','add',work_root=tmp_path,
+        tools={'python':[sys.executable],'bash':['bash']},
+        plan_factory=lambda payload:session.plan(payload,factory),should_stop=lambda:False,publish=lambda _:None)
+    assert report['status']=='passed' and len(calls)==2
+    assert len(report['checks'])==1
 
 
 def test_zero_tests_is_not_a_pass(tmp_path):

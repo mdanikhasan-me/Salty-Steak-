@@ -45,8 +45,17 @@ folders. Model-generated plans map source files, provide test harnesses and decl
 requirement coverage. Syntax/build success alone is not a behavioral pass. Logs,
 exit codes, assertions and file hashes are recorded.
 
+For recognized pytest/unittest output, zero executed passing cases does not satisfy
+behavioral coverage: all-skipped and expected-failure-only runs remain unverified,
+even with exit code zero. Passing-test counts are retained alongside the command
+evidence. Python optimization flags that disable assertions are rejected. Custom
+scripts still rely on their actual exit status and explicit assertions; their output
+is not a trusted structured test report and cannot establish untested requirements.
+
 Invalid plans get one bounded plan correction before any source repair. Once a plan
 is valid its requirements, tests and commands remain fixed across source repairs.
+Command-policy and missing requirement mappings are checked before that freeze, so
+an unsupported shell form is a plan error rather than a reason to rewrite valid code.
 Python harnesses inherit only the generated project root as PYTHONPATH, not private
 ambient import paths. Missing prerequisites remain **unverified**, rather than
 triggering speculative source rewrites. No dependency is installed automatically.

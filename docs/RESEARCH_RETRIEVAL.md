@@ -31,6 +31,15 @@ representation hash is retained separately from the validated summary hash:
 These identify different representations and must not overwrite each other.
 The claim ledger/checkpoint retains both scopes; neither hash proves factual truth.
 
+An optional coverage-model timeout or transport error leaves coverage explicitly
+unavailable rather than discarding successfully retrieved evidence. The answering
+pass retains those sources and the unknown-coverage status. User cancellation is not
+converted into a successful response.
+
+Saved answer provenance contains the same selected claims that were sent to the
+answering pass. It is not independently reranked afterward: doing that can hide
+primary evidence that actually supported the answer, especially after coverage review.
+
 For complete static HTML/Markdown/text reads, a bounded content sketch is computed
 before question-specific passages are selected. It retains the lowest 256 fixed
 hashes of seven-word sequences (no random seed). Long near-duplicate documents share

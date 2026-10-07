@@ -43,6 +43,10 @@ For CLI smoke runs use kind:run and stdout_contains with a concrete expected res
 Builds and behavioral test harnesses must exit zero. For an expected CLI error,
 use kind:run with the exact nonzero exit code and stderr_contains or stdout_contains.
 The runner adds the fresh project root to PYTHONPATH for Python harness imports.
+Python also provides standard-library inspection tools: ast and pathlib can inspect
+saved source files, sys.stdlib_module_names identifies standard modules, and unittest
+can express behavior assertions. Static requirements can be checked by a saved harness;
+they do not require shell snippets or package installation. Absence of imports is valid.
 '''
 
 
@@ -208,7 +212,27 @@ class VerificationPlanSession:
             raw = factory(candidate_payload)
             try:
                 plan = json.loads(raw) if isinstance(raw, str) else copy.deepcopy(raw)
-                validate_plan(plan, payload['source_blocks'])
+                checked = validate_plan(plan, payload['source_blocks'])
+                plan_issues = []
+                available = {name:[name] for name in payload.get('tools',[])}
+                for check in checked['checks']:
+                    if check['argv'][0] in available:
+                        try:
+                            # Validate command policy before freezing a plan;
+                            # no process runs and built outputs are checked later.
+                            command_argv(check['argv'], available, Path.cwd())
+                        except ValueError as error:
+                            plan_issues.append(f"{check['name']}: {error}")
+                behavioral = [check for check in checked['checks'] if check['kind']=='test'
+                              or (check['kind']=='run' and (check['stdout_contains'] or check['stderr_contains']))]
+                if behavioral:
+                    covered = {index for check in behavioral for index in check.get('requirements',[])}
+                    missing = sorted(set(range(len(checked['requirements']))) - covered)
+                    if missing:
+                        plan_issues.append(f'Behavioral test plan leaves requirement indexes {missing} without a check. '
+                                           'Provide genuine checks or explain that verification is unavailable; do not claim coverage.')
+                if plan_issues:
+                    raise ValueError('; '.join(plan_issues))
                 break
             except (ValueError, TypeError, KeyError, AttributeError) as error:
                 if attempt:
@@ -230,6 +254,19 @@ def command_argv(argv: list[str], tools: dict[str,list[str]], root: Path) -> lis
         if re.match(r'^(https?|ftp)://',value,re.I):
             raise ValueError("Network targets are outside local verification")
     if name in tools:
+        if name == 'python':
+            option_value = False
+            for option in argv[1:]:
+                if option_value:
+                    option_value = False
+                    continue
+                if not option.startswith('-') or option in {'--','-m','-c'}:
+                    break
+                if option in {'-W','-X'}:
+                    option_value = True
+                    continue
+                if re.fullmatch(r'-[bBdEhiIOPqRsSuvVx?]*O[bBdEhiIOPqRsSuvVx?]*',option):
+                    raise ValueError('Python optimization disables test assertions and cannot be used for verification')
         if name in {'python','node','ruby','php','java'} and any(part.lower() in {'-c','-e','--eval','--print','-r'} for part in argv[1:]):
             raise ValueError("Verification commands must run saved project files, not eval snippets")
         if name == 'npm' and (len(argv)<2 or argv[1] not in {'test','run','exec'}):
@@ -253,6 +290,32 @@ def command_argv(argv: list[str], tools: dict[str,list[str]], root: Path) -> lis
     if path.suffix.lower() in {'.cmd','.bat','.ps1','.sh'}:
         raise ValueError("Use a listed interpreter for scripts")
     return [str(path.resolve()), *argv[1:]]
+
+
+def passing_test_evidence(argv: list[str], output: str) -> dict:
+    """Separate a successful runner exit from executed, passing test cases."""
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
+    unittest_runs = list(re.finditer(r'^Ran (\d+) tests? in [^\n]+$',text,re.M))
+    if unittest_runs:
+        ran = unittest_runs[-1]
+        total = int(ran.group(1))
+        footer = re.search(r'^OK(?:\s*\(([^\n]*)\))?\s*$',text[ran.end():],re.M)
+        if footer:
+            counts = dict((name,int(value)) for name,value in re.findall(
+                r'(skipped|expected failures)=(\d+)',footer.group(1) or ''))
+            passed = max(0,total-sum(counts.values()))
+            return {'runner':'unittest','tests':total,'passing':passed,
+                    'behavior_verified':passed>0}
+    pytest_runner = (bool(argv) and Path(argv[0]).stem.casefold() in {'pytest','py.test'}) or any(
+        first == '-m' and second == 'pytest' for first,second in zip(argv,argv[1:]))
+    if pytest_runner:
+        counts = re.findall(r'\b(\d+) (passed|skipped|xfailed|xpassed|deselected)\b',text)
+        passed = sum(int(value) for value,kind in counts if kind=='passed')
+        return {'runner':'pytest','passing':passed,'behavior_verified':passed>0,
+                'summary_observed':bool(counts)}
+    no_tests = bool(re.search(r'\b(?:0 tests?|no tests (?:ran|found|collected))\b',text,re.I))
+    return {'runner':'custom','behavior_verified':not no_tests,
+            'scope':'exit status and explicit assertions; test count not observed'}
 
 
 def verify_project(answer: str, request: str, *, work_root: Path, plan_factory: Callable,
@@ -315,11 +378,10 @@ def verify_project(answer: str, request: str, *, work_root: Path, plan_factory: 
             issues.append(f"{check['name']}: {reason} (exit {result.get('exit_code')})"[:2500]);break
         if check['kind']=='test' or (check['kind']=='run' and (check['stdout_contains'] or check['stderr_contains'])):
             diagnostics = str(result.get('stdout','')) + '\n' + str(result.get('stderr',''))
-            skipped_only = (check['kind']=='test' and re.search(r'\b[1-9]\d* skipped\b|OK \(skipped=\d+\)', diagnostics)
-                            and not re.search(r'\b[1-9]\d* passed\b', diagnostics)
-                            and (('pytest' in check['argv']) or re.search(r'Ran 0 tests',diagnostics)))
-            if skipped_only or re.search(r'\b(?:0 tests?|no tests (?:ran|found|collected))\b', diagnostics, re.I):
-                issues.append(f"{check['name']}: runner reported no tests; exit zero is not verification.")
+            test_evidence = passing_test_evidence(check['argv'],diagnostics) if check['kind']=='test' else {'behavior_verified':True}
+            results[-1]['test_evidence'] = test_evidence
+            if not test_evidence['behavior_verified']:
+                issues.append(f"{check['name']}: no passing behavioral tests were observed; exit zero is not verification.")
             else:
                 covered.update(check.get('requirements',[]))
     else:

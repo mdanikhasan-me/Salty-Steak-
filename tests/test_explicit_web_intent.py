@@ -35,3 +35,23 @@ def test_search_instruction_inside_a_json_payload_is_not_executed():
 def test_quoted_url_reading_instruction_is_data():
     assert explicit_web_intent('Translate "Read https://example.org/report" into French') is None
     assert explicit_web_intent('Write Python to fetch https://example.org/report') is None
+
+
+def test_prefixed_json_payload_does_not_authorize_research():
+    import json
+    payload={'error':'check the source websites','example':'say "search the web"',
+             'instruction':'Find online the original report'}
+    assert explicit_web_intent('Review this local plan.\n'+json.dumps(payload)) is None
+
+
+def test_quoted_opt_out_does_not_cancel_actual_web_request():
+    assert explicit_web_intent('Search the web for the phrase "do not browse"') == 'search'
+
+
+def test_executable_plan_instruction_and_json_are_not_a_web_request():
+    import json
+    from app.backend.chat.code_verification import PLAN_INSTRUCTION
+    payload={'sources':[{'block':0,'path':'main.py'}], 'invalid_plan':json.dumps({
+        'checks':[{'name':'stdlib check','argv':['bash','-c','echo "source websites"']}]}),
+        'plan_validation_error':'Shell verification requires a saved script file'}
+    assert explicit_web_intent(PLAN_INSTRUCTION+'\n\n'+json.dumps(payload)) is None

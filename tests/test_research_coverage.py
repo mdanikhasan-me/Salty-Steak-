@@ -1,4 +1,67 @@
 import json
+
+
+def test_coverage_timeout_preserves_unknown_coverage_without_retrying_transport():
+    from app.backend.research.coverage import assess_coverage
+    calls=[]
+    def timeout(messages):
+        calls.append(messages)
+        raise TimeoutError('review deadline exhausted')
+    result=assess_coverage('question',[{'claim':'clm-1','text':'Observed fact'}],timeout)
+    assert result['status']=='unavailable' and not result['sufficient']
+    assert result['failure_kind']=='review_transport' and len(calls)==1
+
+
+def test_coverage_does_not_swallow_user_cancellation():
+    from app.backend.research.coverage import assess_coverage
+    import pytest
+    class Cancelled(RuntimeError):pass
+    def cancel(messages):raise Cancelled('User stopped')
+    with pytest.raises(Cancelled):assess_coverage('question',[],cancel)
+
+
+def test_review_timeout_does_not_discard_readable_research_sources():
+    from app.backend.chat.runners import LiveRunners
+    def review(*args,**kwargs):raise TimeoutError('review deadline')
+    def generate(messages):
+        if messages[0]['content'].startswith('Reply with one JSON object'):
+            return '{"query":null}'
+        return 'The survey counted 42 orchid samples. [Report](https://reports.example/orchids)'
+    runner=LiveRunners(generate=generate,generate_research_review=review,
+        search=lambda query:[{'url':'https://reports.example/orchids'}],
+        read=lambda url:{'url':url,'title':'Orchid report',
+                         'summary':'The survey counted 42 orchid samples in the documented collection.'},
+        research_profile='instant')
+    result=runner.run_research(decision={},request='How many orchid samples were counted?')
+    assert result['status']=='completed'
+    assert '42' in result['answer']
+    assert result['sources'][0]['url']=='https://reports.example/orchids'
+    assert result['research']['coverage_assessment']['status']=='unavailable'
+    assert not result['research']['evidence_sufficient']
+
+
+def test_runner_returns_exact_evidence_used_for_answer_not_a_second_ranking(monkeypatch):
+    from app.backend.chat import runners as module
+    from app.backend.chat.runners import LiveRunners
+    seen=[]
+    original=module._select_finaliser_findings
+    def select(question,findings,**kwargs):
+        if kwargs.get('limit')==25:
+            raise AssertionError('A second ranking can discard evidence used by the answer')
+        return original(question,findings,**kwargs)
+    monkeypatch.setattr(module,'_select_finaliser_findings',select)
+    def generate(messages):
+        if messages[0]['content'].startswith('Reply with one JSON object'):return '{"query":null}'
+        seen.extend(json.loads(messages[-1]['content'])['findings'])
+        return 'The survey counted 42 orchid samples. [Report](https://reports.example/orchids)'
+    runner=LiveRunners(generate=generate,
+        search=lambda query:[{'url':'https://reports.example/orchids'}],
+        read=lambda url:{'url':url,'title':'Orchid report',
+            'summary':'The survey counted 42 orchid samples in the documented collection.'})
+    result=runner.run_research(decision={},request='How many orchid samples were counted?')
+    assert seen
+    assert [c['claim'] for c in result['claims']]==[c['claim'] for c in seen]
+    assert all(c['evidence'] for c in result['claims'])
 import pytest
 from app.backend.research.coverage import assess_coverage
 from app.backend.research.loop import ResearchLoop

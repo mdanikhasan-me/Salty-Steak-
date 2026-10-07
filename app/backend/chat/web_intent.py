@@ -11,6 +11,10 @@ def explicit_web_intent(request: str) -> str | None:
     if str(request).lstrip().startswith(("{", "[")):
         return None
     text = re.sub(r"```[\s\S]*?```|`[^`]*`", " ", str(request)).casefold()
+    # Quoted examples and JSON string values remain data even when preceded
+    # by an instruction such as "review this plan". Respect escaped quotes;
+    # otherwise a nested code string can accidentally become web authority.
+    text = re.sub(r'"(?:\\.|[^"\\])*"|\u201c[^\u201d]*\u201d', ' ', text)
     if re.search(r"\b(?:do not|don't|never)\s+(?:use\s+)?(?:search|browse|research|the web|web search|the internet)\b"
                  r"|\b(?:without|no)\s+(?:web\s+search|browsing|internet\s+access|online\s+search)\b", text):
         return "off"
@@ -18,8 +22,7 @@ def explicit_web_intent(request: str) -> str | None:
         return "deep"
     # A direct request to read a supplied public address does not require a
     # separate "search the web" incantation. Code/quoted payloads stay data.
-    prose = re.sub(r'"[^"\n]*"|\u201c[^\u201d\n]*\u201d', ' ', text)
-    if re.search(r'^\s*(?:please\s+)?(?:read|fetch|retrieve|summari[sz]e|check)\b.{0,120}https?://', prose):
+    if re.search(r'^\s*(?:please\s+)?(?:read|fetch|retrieve|summari[sz]e|check)\b.{0,120}https?://', text):
         return 'search'
     # Asking for current offers or actual links is itself a retrieval request.
     # It must work in Blink/Cook/Lock In without the user knowing a toggle.

@@ -8,6 +8,7 @@ import {
   supportFor,
 } from "../workflows/responseProvenance.mjs";
 import { usedSources } from "../workflows/claimEvidence.mjs";
+import { VerificationReport } from './VerificationReport.jsx';
 
 
 
@@ -81,6 +82,7 @@ export function ResponseDetails({ details, onClose, onOpenExternal }) {
       </header>
 
       <div className="response-details__body" onClick={onOpenExternal}>
+        <VerificationReport report={details?.lock_in_verification}/>
         {account.activity.length ? (
           <section className="response-section">
             <h3>Activity</h3>
