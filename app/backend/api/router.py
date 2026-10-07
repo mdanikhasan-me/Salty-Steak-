@@ -120,6 +120,16 @@ class ApiRouter:
 
         if method == "GET" and parts == ("automation", "status"):
             return app.automation_status()
+        if method == 'GET' and len(parts) == 3 and parts[:2] == ('automation', 'previews'):
+            return app.action_preview_content(parts[2])
+        if (method == 'GET' and len(parts) == 5 and parts[:2] == ('chat','conversations')
+                and parts[3] == 'vision-previews'):
+            return app.vision_preview_content(parts[2], parts[4])
+        if method == "POST" and parts == ("automation", "browser", "surface"):
+            return app.dock_browser_surface(self._read_json())
+        if (method == "GET" and len(parts) == 4
+                and parts[:3] == ("automation", "browser", "preview")):
+            return app.browser_preview_content(parts[3])
         if method == "POST" and parts == ("automation", "grant"):
             return app.grant_automation(self._read_json())
         if method == "POST" and parts == ("automation", "revoke"):

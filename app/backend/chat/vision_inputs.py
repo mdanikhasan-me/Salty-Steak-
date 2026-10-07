@@ -353,6 +353,19 @@ class VisionInputStore:
             raise PermissionError("Vision input metadata identity is invalid")
         return path, metadata
 
+    def preview(self, input_id: str, conversation_id: str) -> tuple[Path, dict[str, Any]]:
+        if not VISION_INPUT_ID.fullmatch(str(input_id)):
+            raise PermissionError('Invalid image input identity')
+        with self._lock:
+            directory = (self.root / input_id).resolve()
+            if self.root not in directory.parents:
+                raise PermissionError('Image input is outside its store')
+            metadata = json.loads((directory / 'input.json').read_text(encoding='utf-8'))
+            if (metadata.get('conversation_id') != conversation_id
+                    or metadata.get('input_id') != input_id or not metadata.get('operation_id')):
+                raise PermissionError('Image does not belong to this conversation')
+            return self._verified_image_path(directory, metadata), metadata
+
     @staticmethod
     def _verified_image_path(directory: Path, metadata: Mapping[str, Any]) -> Path:
         filename = str(metadata.get("image_filename") or "")

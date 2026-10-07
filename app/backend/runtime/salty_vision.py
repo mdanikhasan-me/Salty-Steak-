@@ -26,12 +26,12 @@ from typing import Any, Callable, Mapping, Sequence
 from ..system.files import atomic_write_json
 
 
-BASE_STEAK_PUBLIC_NAME = "Base Steak 2.0"
+BASE_STEAK_PUBLIC_NAME = "Base Steak 3.1 27B"
 BASE_STEAK_TEXT_SHA256 = (
-    "c725cc0e496ee7e6cf1b165171507fde0ae6b8cc8509130f391df366a604f3ca"
+    "35af83c798511dd119262c04534c6a643fada1bc8f7bdf63e42511690fa0f297"
 )
 BASE_STEAK_VISION_SHA256 = (
-    "05f662501f8bd45607b079723a3e238a4e888fd085a10a53f4057a0e250f6934"
+    "998c5c301dfd55e65f21ae3999c22997abf07e3d440bca1da1f52c501313366b"
 )
 VISION_RUNTIME_ID = "salty_vision_engine_steak20_b10333"
 VISION_STAGE_SCHEMA = "salty-steak-vision-runtime-v1"
@@ -43,7 +43,7 @@ VISION_SMOKE_IMAGE_SHA256 = (
     "14a487697c059a674563f01808991bea7652c342936c0bc46967625195deee66"
 )
 VISION_SMOKE_OUTPUT_SHA256 = (
-    "20ae9915f06550a35c472c1d0e80b48ed3ee8895c6e3b2e3f8c59fda9fc184fa"
+    "6d70191ea82dfaf87ae2852a1e30173f39ec8213a96a7f81b096f104015a1427"
 )
 VISION_RUNTIME_FILES = (
     "ggml.dll",
@@ -78,12 +78,12 @@ VISION_RUNTIME_SHA256 = {
     "cublas64_12.dll": "e40202fe4223c1cd2d2dce7beec59e1ed61c7801bd827309183be9b50e358f4c",
     "cublasLt64_12.dll": "2a896460bef60ed57ef32b0875812f355a6984e671d638bb632f5e8c1d7a831f",
     "cudart64_12.dll": "d28e42265da7462162a54da6b7a99ea4fa2caf8139d862bb500db875d0b32dfc",
-    "ggml.dll": "c44601e1ea7e15e4bba1a51b93ded7f9c70f1e0dc6af61650f44cbe913059640",
-    "ggml-base.dll": "b53433fdba89a8456d688fb93e851285808ed3701fab9bff404dbeb86f2b66f2",
-    "ggml-cpu.dll": "92eae795c6375d2facc57752f0fa5f5d6c9e495700400261aeaa1e84f10a8569",
+    "ggml.dll": "43260b2802808b7add13e5838ac7bf2ed12450a8b102425b43a3bcd9f518ae5f",
+    "ggml-base.dll": "54bc2abfae49963aae75c7a19df66910af68eea9b70fc60b479843882f87bdbf",
+    "ggml-cpu.dll": "a5230c2139b825318fc56587c83055da0a71a1c937aeda220396d4d988548f2f",
     "ggml-cuda.dll": "b1958cc67dace83d533e12de56389c10e3577ccf4ec381e2734c38aab473c02d",
     "libomp140.x86_64.dll": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33",
-    "llama.dll": "2c6f5e9b2d6bc59b7bef41680bacd5b278656aeea43eadd9308b1ede55071a3c",
+    "llama.dll": "cb34cf39d2d0a8bf9784a506a6943c7246c419514f6596fa6c752983434e0ffd",
     "llama-common.dll": "dea8c975229c107b0c701a58818913e56c5fa99e34682c63730a67fcb4c78edb",
     "llama-mtmd-cli.exe": "c96389291a8d1814f8e0c1d7028d7e2e3fb8d419b2c66f15c6b345651fa621d0",
     "mtmd.dll": "734ced986b0c86ca8feb235af81ce11327bec32b709afb89ad02a3e230655afb",

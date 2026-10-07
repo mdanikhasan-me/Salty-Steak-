@@ -5,8 +5,8 @@ import { splitAssistantContent } from "../workflows/chatContent.mjs";
 
 export function LiveResponse({ operation }) {
   const previous = useRef(null);
-  const preview = operation?.result?.generation_preview || operation?.progress?.generation_preview;
   const details = operation?.result || operation?.progress || {};
+  const preview = details.research_progress?.generation_preview || details.generation_preview;
   const route = details.learned_route_controller?.route;
   const researchPhase = details.research_progress?.phase;
   const publicRoute = !route || ["respond", "identity"].includes(route)

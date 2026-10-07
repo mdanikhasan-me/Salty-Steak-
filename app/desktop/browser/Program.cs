@@ -12,6 +12,7 @@
 
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -26,13 +27,14 @@ internal static class Program
     [STAThread]
     private static int Main(string[] arguments)
     {
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         var visible = arguments.Contains("--visible");
         var profile = ReadOption(arguments, "--profile")
             ?? Path.Combine(Path.GetTempPath(), "salty-steak-browser");
 
         using var pump = new ApplicationContextPump();
-        session = new BrowserSession(profile, visible);
+        session = new BrowserSession(profile, visible, arguments.Contains("--embedded"));
 
         var reader = new Thread(() => ReadLoop(pump)) { IsBackground = true };
         reader.Start();
@@ -267,27 +269,38 @@ internal sealed class BrowserTab
     public async Task Navigate(string url)
     {
         var completed = new TaskCompletionSource<bool>();
+        ulong? navigationId = null;
+        void Started(object? sender, CoreWebView2NavigationStartingEventArgs args)
+            => navigationId = args.NavigationId;
+        void DomReady(object? sender, CoreWebView2DOMContentLoadedEventArgs args)
+        {
+            if (navigationId == args.NavigationId) completed.TrySetResult(true);
+        }
         void Handler(object? sender, CoreWebView2NavigationCompletedEventArgs args)
         {
-            Core.NavigationCompleted -= Handler;
-            completed.TrySetResult(args.IsSuccess);
+            if (navigationId == args.NavigationId) completed.TrySetResult(args.IsSuccess);
         }
-
+        Core.NavigationStarting += Started;
+        Core.DOMContentLoaded += DomReady;
         Core.NavigationCompleted += Handler;
-        Core.Navigate(url);
-        var reached = await Task.WhenAny(completed.Task, Task.Delay(30_000))
-            .ConfigureAwait(true);
-        if (reached != completed.Task)
+        try
         {
+            Core.Navigate(url);
+            // Readable DOM need not wait for every image, ad or tracking
+            // subresource to finish. The agent still observes the actual page.
+            var reached = await Task.WhenAny(completed.Task, Task.Delay(25_000))
+                .ConfigureAwait(true);
+            if (reached != completed.Task)
+                throw new TimeoutException($"The page DOM did not become ready: {url}");
+            if (!await completed.Task.ConfigureAwait(true))
+                throw new BridgeException("navigation_failed", $"The page could not be opened: {url}");
+        }
+        finally
+        {
+            Core.NavigationStarting -= Started;
+            Core.DOMContentLoaded -= DomReady;
             Core.NavigationCompleted -= Handler;
-            throw new TimeoutException($"The page did not finish loading: {url}");
         }
-
-        if (!await completed.Task.ConfigureAwait(true))
-        {
-            throw new BridgeException("navigation_failed", $"The page could not be opened: {url}");
-        }
-
         await Settle().ConfigureAwait(true);
     }
 
@@ -339,15 +352,60 @@ internal sealed class BrowserSession
     private CoreWebView2Environment? environment;
     private BrowserTab? active;
     private int nextTabNumber = 1;
+    private IntPtr embeddedParent;
+    private bool embeddedVisible;
+    private readonly bool preferEmbedded;
+    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetParent(IntPtr child, IntPtr parent);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowStyle(IntPtr window, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)] private static extern IntPtr SetWindowStyle(IntPtr window, int index, IntPtr value);
+    [DllImport("user32.dll")] private static extern IntPtr GetParent(IntPtr window);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
 
-    public BrowserSession(string profileDirectory, bool visible)
+    private JsonObject DockSurface(JsonObject payload)
+    {
+        var parent = new IntPtr(payload["parent_window"]!.GetValue<long>());
+        GetWindowThreadProcessId(parent, out var pid);
+        if (pid == 0 || pid != payload["parent_pid"]!.GetValue<uint>())
+            throw new InvalidOperationException("The embedding window is no longer available.");
+        if (payload["visible"]?.GetValue<bool>() != true)
+        {
+            ShowWindow(window!.Handle, 0); embeddedVisible = false;
+            return new JsonObject { ["embedded"] = embeddedParent != IntPtr.Zero, ["visible"] = false };
+        }
+        if (embeddedParent != parent)
+        {
+            window!.Hide();
+            window.FormBorderStyle = FormBorderStyle.None;
+            window.ShowInTaskbar = false;
+            var handle = window.Handle;
+            var style = GetWindowStyle(handle, -16).ToInt64();
+            SetWindowStyle(handle, -16, new IntPtr((style & ~0x80000000L) | 0x40000000L | 0x02000000L));
+            SetParent(handle, parent);
+            if (GetParent(handle) != parent) throw new InvalidOperationException("Could not embed the browser surface.");
+            embeddedParent = parent;
+        }
+        window!.Show();
+        var x = payload["x"]!.GetValue<int>(); var y = payload["y"]!.GetValue<int>();
+        var width = payload["width"]!.GetValue<int>(); var height = payload["height"]!.GetValue<int>();
+        if (!SetWindowPos(window!.Handle, IntPtr.Zero, x, y, width, height, 0x0040 | 0x0010 | 0x0020))
+            throw new InvalidOperationException("Could not position the browser surface.");
+        ShowWindow(window.Handle, 5); embeddedVisible = true; surfaceVisible = true;
+        return new JsonObject { ["embedded"] = true, ["visible"] = true, ["parent_window"] = parent.ToInt64(), ["window"] = window.Handle.ToInt64(), ["width"] = width, ["height"] = height };
+    }
+
+    public BrowserSession(string profileDirectory, bool visible, bool preferEmbedded = false)
     {
         this.profileDirectory = profileDirectory;
         surfaceVisible = visible;
+        this.preferEmbedded = preferEmbedded;
     }
 
     public async Task<JsonObject> Dispatch(string command, JsonObject payload)
     {
+        if (command == "verify_html") return await HtmlVerifier.Verify(payload).ConfigureAwait(true);
         if (command == "ping")
         {
             return new JsonObject
@@ -360,6 +418,7 @@ internal sealed class BrowserSession
         }
 
         await EnsureStarted().ConfigureAwait(true);
+        if (command == "dock_surface") return DockSurface(payload);
 
 
 
@@ -384,6 +443,30 @@ internal sealed class BrowserSession
                 var state = Describe(active!);
                 state["visible"] = IsSurfacePresented();
                 return state;
+
+            case "capture_preview":
+                using (var captured = new MemoryStream())
+                {
+                    await core.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, captured)
+                        .ConfigureAwait(true);
+                    captured.Position = 0;
+                    using var source = System.Drawing.Image.FromStream(captured);
+                    var scale = Math.Min(1.0, Math.Min(1280.0 / source.Width, 900.0 / source.Height));
+                    var width = Math.Max(1, (int)(source.Width * scale));
+                    var height = Math.Max(1, (int)(source.Height * scale));
+                    using var bitmap = new Bitmap(width, height);
+                    using (var graphics = Graphics.FromImage(bitmap))
+                    {
+                        graphics.DrawImage(source, 0, 0, width, height);
+                    }
+                    using var png = new MemoryStream();
+                    bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+                    var preview = Describe(tab);
+                    preview["width"] = width;
+                    preview["height"] = height;
+                    preview["png_base64"] = Convert.ToBase64String(png.ToArray());
+                    return preview;
+                }
 
             case "new_tab":
                 var created = await CreateTab().ConfigureAwait(true);
@@ -419,6 +502,24 @@ internal sealed class BrowserSession
                 return await tab.Bridge($"window.__salty.read({payload.ToJsonString()})")
                     .ConfigureAwait(true);
 
+            case "wait_for":
+                var waitOptions = (JsonObject)payload.DeepClone();
+                waitOptions["visible"] = true;
+                waitOptions["enabled"] = true;
+                var waitLimit = Math.Clamp(payload["wait_timeout_ms"]?.GetValue<int>() ?? 5000, 0, 10000);
+                var waitStarted = System.Diagnostics.Stopwatch.StartNew();
+                JsonObject observed;
+                do
+                {
+                    observed = await tab.Bridge($"window.__salty.query({waitOptions.ToJsonString()})").ConfigureAwait(true);
+                    if ((observed["count"]?.GetValue<int>() ?? 0) > 0 || waitStarted.ElapsedMilliseconds >= waitLimit) break;
+                    await Task.Delay(100).ConfigureAwait(true);
+                } while (true);
+                observed["timed_out"] = (observed["count"]?.GetValue<int>() ?? 0) == 0;
+                observed["waited_ms"] = (int)waitStarted.ElapsedMilliseconds;
+                observed["tab"] = tab.Id;
+                return observed;
+
             case "get_media":
                 return await tab.Bridge("window.__salty.media()")
                     .ConfigureAwait(true);
@@ -449,6 +550,19 @@ internal sealed class BrowserSession
 
                 await Task.Delay(350).ConfigureAwait(true);
                 result["tab"] = tab.Id;
+                result["action_dispatched"] = true;
+                // A dispatched action is not proof of the user's requested
+                // outcome. Return fresh evidence without replaying the action
+                // if navigation makes the immediate read temporarily fail.
+                try
+                {
+                    var after = await tab.Bridge("window.__salty.read({text_limit:1200,limit:12})").ConfigureAwait(true);
+                    result["after_state"] = after;
+                }
+                catch (Exception error)
+                {
+                    result["observation_error"] = "Action was dispatched; read the page again before deciding what to do next: " + error.Message;
+                }
                 if (active is not null && active != tab)
                 {
                     result["active_tab"] = active.Id;
@@ -484,6 +598,10 @@ internal sealed class BrowserSession
 
             case "show_window":
                 Activate(tab);
+                if (embeddedParent != IntPtr.Zero)
+                    return new JsonObject { ["visible"] = IsSurfacePresented(), ["embedded"] = true };
+                if (preferEmbedded)
+                    return new JsonObject { ["visible"] = false, ["embedded_requested"] = true };
 
 
                 window!.ShowInTaskbar = true;
@@ -498,6 +616,11 @@ internal sealed class BrowserSession
                 return new JsonObject { ["visible"] = true };
 
             case "hide_window":
+                if (embeddedParent != IntPtr.Zero)
+                {
+                    ShowWindow(window!.Handle, 0); embeddedVisible = false;
+                    return new JsonObject { ["visible"] = false, ["embedded"] = true };
+                }
 
 
                 window!.ShowInTaskbar = false;
@@ -593,6 +716,8 @@ internal sealed class BrowserSession
 
     private bool IsSurfacePresented()
     {
+        if (embeddedParent != IntPtr.Zero)
+            return embeddedVisible && window is not null && IsWindowVisible(window.Handle) && IsWindowVisible(embeddedParent);
         if (window is null || !surfaceVisible || !window.Visible || !window.ShowInTaskbar
             || window.WindowState == FormWindowState.Minimized)
         {
@@ -661,6 +786,9 @@ internal sealed class BrowserSession
 
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageBridge.Script)
             .ConfigureAwait(true);
+        // The initial about:blank document already exists before registration.
+        // A first read/query must be valid before any navigation as well.
+        await core.ExecuteScriptAsync(PageBridge.Script).ConfigureAwait(true);
 
 
 

@@ -160,6 +160,7 @@ export const api = {
       body: {},
     }),
   getAutomationStatus: () => request("/automation/status"),
+  browserPreviewUrl: (auditId) => `${API_ROOT}/automation/browser/preview/${encodeURIComponent(auditId)}`,
   grantAutomation: (payload) => request("/automation/grant", {
     method: "POST",
     body: payload,

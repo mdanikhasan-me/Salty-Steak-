@@ -421,6 +421,7 @@ class SaltyNativeProfile:
     thread_poll: int = 100
     kv_precision: str = "q8_0"
     cuda_output_projection: bool = False
+    adaptive_context_allocation: bool = False
 
 
 
@@ -432,8 +433,8 @@ class SaltyNativeProfile:
             raise ValueError("Native profile_id cannot be empty")
         if self.gpu_layers < 0:
             raise ValueError("Native gpu_layers cannot be negative")
-        if not 256 <= self.context_limit <= 262_144:
-            raise ValueError("Native context_limit must be between 256 and 262144")
+        if not 256 <= self.context_limit <= 800_000:
+            raise ValueError("Native context_limit must be between 256 and 800000")
         if self.resident_context_limit is not None and not (
             256 <= self.resident_context_limit <= self.context_limit
         ):
@@ -1183,7 +1184,11 @@ class SaltyNativeRuntime:
         return {
             "loaded": self.loaded,
             "runtime_id": self._runtime_id,
-            "runtime_family": "salty_native_steak20",
+            "runtime_family": (
+                "salty_native_steak35"
+                if "steak35" in str(getattr(self, "library_directory", "")).casefold()
+                else "salty_native_steak20"
+            ),
             "engine": "direct_in_process_native_library",
             "profile": asdict(self.profile),
             "source_sha256": self.source_sha256,
@@ -1204,7 +1209,11 @@ class SaltyNativeRuntime:
                 for spec in getattr(self, "adapters", ())
             ],
             "active_adapter_ids": list(getattr(self, "_active_adapter_ids", ())),
-            "architectural_context_limit": 262_144,
+            "architectural_context_limit": (
+                800_000
+                if "steak35" in str(getattr(self, "library_directory", "")).casefold()
+                else 262_144
+            ),
             "configured_context_limit": self.profile.context_limit,
             "resident_context_limit": self.profile.initial_context_limit,
             "allocated_context_limit": self._allocated_context_limit,
@@ -1433,6 +1442,25 @@ class SaltyNativeRuntime:
         """
 
         with self._lock:
+            # Base models without a routing LoRA can use the same isolated
+            # classifier context. Allocate it lazily so the route probe never
+            # overwrites the resident conversation KV state.
+            if (
+                self.loaded and self._api and self._model and self._threadpool
+                and not self._routing_context
+                and not self.conditional_adapter_ids("routing_intent")
+                and not enabled_adapter_ids
+            ):
+                route_limit = min(2048, self.profile.initial_context_limit)
+                route_context = self._create_context(
+                    self._api, self._model, route_limit, enabled_adapter_ids=()
+                )
+                self._api.native.llama_attach_threadpool(
+                    route_context, self._threadpool, None
+                )
+                self._routing_context = route_context
+                self._routing_context_limit = route_limit
+                self._routing_adapter_ids = ()
             if (
                 not self.loaded
                 or not self._api
@@ -1594,6 +1622,7 @@ class SaltyNativeRuntime:
         stop_sequences: Sequence[str] = (),
         should_stop: Callable[[], bool] | None = None,
         on_text: Callable[[str], None] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
         context_window_tokens: int | None = None,
         reserved_output_tokens: int | None = None,
         reasoning_mode: str = "instant",
@@ -1686,6 +1715,7 @@ class SaltyNativeRuntime:
                     stop_sequences=stop_sequences,
                     should_stop=should_stop,
                     on_text=on_text,
+                    on_progress=on_progress,
                     context_window_tokens=requested_identity_limit,
                     reserved_output_tokens=reserved_output_tokens,
                     reasoning_mode=reasoning_mode,
@@ -1745,6 +1775,7 @@ class SaltyNativeRuntime:
         stop_sequences: Sequence[str] = (),
         should_stop: Callable[[], bool] | None = None,
         on_text: Callable[[str], None] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
         context_window_tokens: int | None = None,
         reserved_output_tokens: int | None = None,
         reasoning_mode: str = "cooking",
@@ -1821,9 +1852,15 @@ class SaltyNativeRuntime:
                 allowed_token_ids = tuple(dict.fromkeys(encoded_choices))
                 available_output = 1
 
-            context_reallocated = self._ensure_context_allocation(
-                effective_context_limit
-            )
+            allocation_limit = effective_context_limit
+            if self.profile.adaptive_context_allocation:
+                allocation_limit = _adaptive_identity_context_limit(
+                    selected_ceiling=effective_context_limit,
+                    resident_limit=self.profile.initial_context_limit,
+                    prompt_tokens=len(prompt_tokens),
+                    reserved_output_tokens=available_output,
+                )
+            context_reallocated = self._ensure_context_allocation(allocation_limit)
             adapter_activation_changed = self._set_adapter_activation(
                 enabled_adapter_ids
             )
@@ -1934,6 +1971,8 @@ class SaltyNativeRuntime:
                             f"Native decode failed with status {decode_status}"
                         )
                     self._resident_tokens.extend(chunk)
+                    if on_progress is not None:
+                        on_progress({"phase": "prefill", "token_count": end})
                     if chunk_index + 1 == len(prompt_ranges):
                         prefill_finished_at = time.perf_counter()
 
@@ -1982,6 +2021,16 @@ class SaltyNativeRuntime:
                     piece = text_decoder.feed(self._piece_bytes(token))
                     generated.append(token)
                     pieces.append(piece)
+                    if on_progress is not None:
+                        decode_seconds = max(0.0, time.perf_counter() - first_token_at)
+                        on_progress({
+                            "phase": "decode", "token_count": len(generated),
+                            "decode_duration_seconds": round(decode_seconds, 3),
+                            "decode_tokens_per_second": (
+                                round((len(generated) - 1) / decode_seconds, 3)
+                                if decode_seconds > 0 and len(generated) > 1 else None
+                            ),
+                        })
                     stop_index = stop_matcher.feed(piece)
                     json_complete = bool(
                         json_completion and json_completion.feed(piece)

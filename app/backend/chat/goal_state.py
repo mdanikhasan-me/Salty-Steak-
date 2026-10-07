@@ -441,7 +441,7 @@ def runtime_observer(
             if not isinstance(active, Mapping) or not wanted:
                 return None
             return wanted in str(active.get("title") or active.get("name") or "").casefold()
-        if predicate.kind in {"active_url", "browser_visible"}:
+        if predicate.kind in {"active_url", "browser_visible", "browser_title_reported"}:
             snapshot = invoke_once(
                 "browser_session",
                 "browser.control",
@@ -449,6 +449,14 @@ def runtime_observer(
             )
             if not isinstance(snapshot, Mapping) or snapshot.get("status") != "succeeded":
                 return None
+            if predicate.kind == "browser_title_reported":
+                title = str(snapshot.get("title") or "").strip()
+                answer = str(orchestration.get("answer") or "")
+                if not title:
+                    return None
+                if predicate.subject != "$observed_title" and title != predicate.subject:
+                    return False
+                return title.casefold() in answer.casefold()
             if predicate.kind == "browser_visible":
                 visible = snapshot.get("visible")
                 return bool(visible) if isinstance(visible, bool) else None
@@ -460,7 +468,8 @@ def runtime_observer(
             actual = str(snapshot.get("url") or "")
             if not wanted or not actual:
                 return None
-            return _canonical_url(actual) == _canonical_url(wanted)
+            return (_canonical_url(actual) == _canonical_url(wanted)
+                    or _observed_www_redirect(orchestration, wanted, actual))
         if predicate.kind == "media_playing":
             first = _read_media(broker)
             if first is None:
@@ -575,6 +584,31 @@ def _selected_url(value: Any) -> str:
 
     visit(value)
     return selected[-1] if selected else ""
+
+
+def _observed_www_redirect(orchestration: Mapping[str, Any], wanted: str, actual: str) -> bool:
+    """Accept a measured www/HTTPS redirect, never infer navigation from a name."""
+    try:
+        before, after = urlsplit(wanted), urlsplit(actual)
+        if (not before.hostname or not after.hostname
+                or before.hostname.casefold().removeprefix("www.") != after.hostname.casefold().removeprefix("www.")
+                or (before.path or "/", before.query, before.fragment) != (after.path or "/", after.query, after.fragment)
+                or before.scheme not in {"http", "https"} or after.scheme != "https"
+                or before.port != after.port):
+            return False
+    except ValueError:
+        return False
+    steps = orchestration.get("steps") or (orchestration.get("agent_task") or {}).get("steps") or []
+    for step in steps:
+        if not isinstance(step, Mapping) or step.get("action") != "browser.control":
+            continue
+        arguments, observation = step.get("arguments") or {}, step.get("observation") or {}
+        if (arguments.get("command") in {"open_url", "navigate"}
+                and _canonical_url(str(arguments.get("url") or "")) == _canonical_url(wanted)
+                and observation.get("status") == "succeeded"
+                and _canonical_url(str(observation.get("url") or "")) == _canonical_url(actual)):
+            return True
+    return False
 
 
 def _canonical_url(value: str) -> str:

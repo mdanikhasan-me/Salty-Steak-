@@ -423,7 +423,7 @@ GOAL_SPEC_INSTRUCTION = (
     '"required_outcomes":[{"kind":"...","subject":"...","detail":""}],'
     '"unknowns":[],"future_dependencies":[],"stopping_conditions":[]}\n'
     "Observable outcome kinds: present, absent, window_present, window_absent, "
-    "window_focused, active_url, browser_visible, media_playing, artifact_valid, "
+    "window_focused, active_url, browser_visible, browser_title_reported, media_playing, artifact_valid, "
     "exact_page, stock_confirmed. Use only kinds needed by this request.\n"
     "present/absent subjects are exact absolute paths or an absolute path with "
     "a wildcard. Use **\\*.ext when the request explicitly includes nested "
@@ -432,6 +432,10 @@ GOAL_SPEC_INSTRUCTION = (
     "$artifact when the path will only exist at "
     "runtime. active_url uses an exact URL the user supplied, or $selected_url "
     "when an earlier observation must select it. browser_visible subject is true. "
+    "A request to report the page title uses browser_title_reported with subject $observed_title, "
+    "not a file artifact. A starting URL is not a required final URL when the task "
+    "then clicks or follows a link. Browser visibility is required only when the "
+    "user asks to see/watch/use the window, not merely to retrieve information. "
     "media_playing uses $active_media unless the user named a specific item.\n"
     "For an explicitly native or installed application, use window_present or "
     "window_focused with the application name. Do not use active_url, "
@@ -446,7 +450,8 @@ GOAL_SPEC_INSTRUCTION = (
     "List every resource they said to keep, leave alone, preserve, or not touch. "
     "Do not guess runtime identifiers, paths, URLs, names, or state. Record such "
     "facts in unknowns/future_dependencies and bind them from observations later. "
-    "Invent nothing; use empty lists when the request says nothing about a field."
+    "Invent nothing; use empty lists when the request says nothing about a field. "
+    "Be concise: omit optional explanations and do not repeat the request in every field."
 )
 
 GOAL_SPEC_REPAIR_INSTRUCTION = (

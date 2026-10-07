@@ -150,6 +150,70 @@
 .live-response { margin-top:16px; }
 .live-response__tail { white-space:pre-wrap; overflow-wrap:anywhere; }
 .live-response__notice { display:block; font-size:12px; color:var(--muted); margin-bottom:12px; }
+
+/* A single text-led live state; telemetry belongs in Activity. */
+.live-progress { max-width:100%; margin:12px 0 24px; }
+.live-progress__row { display:flex; align-items:center; min-height:28px; }
+.live-progress__trigger,.live-progress__current { display:inline-flex; align-items:center; gap:7px; min-width:0; max-width:100%; padding:4px 0; border:0; border-radius:4px; background:none; color:var(--muted); font:inherit; font-size:15px; font-weight:400; line-height:1.5; text-align:left; }
+.live-progress__trigger { cursor:pointer; }
+.live-progress__trigger:hover { background:none; color:var(--ink-soft); }
+.live-progress__trigger:focus-visible { outline:2px solid var(--focus); outline-offset:5px; }
+.live-progress__text { overflow-wrap:anywhere; }
+.live-progress__chevron { width:14px; height:14px; flex:none; color:var(--muted-light); transition:transform 160ms ease; }
+.live-progress__trigger[aria-expanded="true"] .live-progress__chevron { transform:rotate(90deg); }
+.live-progress__meta { display:flex; flex-wrap:wrap; align-items:center; gap:0; margin:8px 0 0; color:var(--muted-light); font-size:12px; font-variant-numeric:tabular-nums; }
+.live-progress__meta>span+span::before { content:" / "; white-space:pre; color:var(--muted-light); padding:0 7px; }
+.live-progress--compact { margin:0; }
+.live-progress--compact .live-progress__current { font-size:14px; line-height:1.6; }
+.live-progress__waiting { margin:14px 0 0; color:var(--muted); font-size:12px; line-height:1.6; }
+.live-progress__earlier { margin-top:16px; color:var(--muted-light); font-size:12px; }
+.live-progress__earlier>summary { cursor:pointer; padding:5px 0; }
+.live-progress__history { display:grid; gap:10px; list-style:none; padding:4px 0 0 13px; margin:8px 0 0; border-left:1px solid #ffffff14; color:var(--muted); }
+.live-progress__history li { line-height:1.5; }
+@media(prefers-reduced-motion:no-preference) {
+  .live-progress:not(.live-progress--compact) .live-progress__text {
+    background-image:linear-gradient(100deg,var(--muted-light) 32%,var(--ink) 49%,var(--muted-light) 66%);
+    background-size:240% 100%; background-position:120% 0; background-clip:text; -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+    animation:response-text-sweep 3.2s linear infinite;
+  }
+  @keyframes response-text-sweep { from { background-position:120% 0; } to { background-position:-120% 0; } }
+}
+@media(prefers-reduced-motion:reduce) { .live-progress__chevron { transition:none; } }
+.reduce-motion .live-progress__text { animation:none; background:none; -webkit-text-fill-color:currentColor; }
+@media(forced-colors:active) { .live-progress__text { animation:none!important; background:none!important; -webkit-text-fill-color:currentColor!important; } }
+.chat-page .message--generating .message__header { margin-bottom:10px; }
+.chat-page .live-response { margin-top:0; font-size:15px; line-height:1.8; }
+.chat-page>.cooking-activity { border-radius:14px; box-shadow:inset 0 0 0 1px #ffffff06; }
+.chat-page .cooking-activity__header { padding:20px 22px 16px; min-height:76px; }
+.chat-page .cooking-activity__header strong { font-size:14px; font-weight:550; }
+.chat-page .cooking-activity__header span { margin-top:4px; color:var(--muted-light); font-size:12px; }
+.chat-page .cooking-activity__header>button { width:30px; height:30px; border-radius:6px; color:var(--muted); }
+.chat-page .cooking-activity__body { padding:8px 22px 24px; }
+.activity-overview { padding:0 0 24px; }
+.activity-overview .live-progress__waiting { margin-top:14px; font-size:12px; }
+.activity-overview__actions { margin-top:18px; }
+.activity-overview__actions button { min-height:32px; padding:7px 10px; background:transparent; box-shadow:inset 0 0 0 1px #ffffff16; color:var(--muted); font-size:12px; }
+.activity-overview__actions button:hover { color:var(--ink); background:#ffffff06; }
+.activity-history { gap:14px; margin:0 0 22px; }
+.activity-history li { align-items:start; gap:10px; }
+.activity-history strong { font-size:12px; line-height:1.6; font-weight:400; color:var(--muted); }
+.activity-history svg { width:13px; height:13px; color:var(--muted-light); margin-top:3px; }
+.activity-diagnostics { margin-top:0; padding-top:16px; border-top:1px solid #ffffff0c; }
+.activity-diagnostics>summary,.activity-event-log>summary { padding:7px 0; font-size:12px; color:var(--muted); cursor:pointer; }
+.activity-diagnostics>summary:hover,.activity-event-log>summary:hover { color:var(--ink-soft); }
+.activity-diagnostics>summary:focus-visible,.activity-event-log>summary:focus-visible { outline:2px solid var(--focus); outline-offset:3px; border-radius:3px; }
+.chat-page .activity-diagnostics>.cooking-activity__metrics { padding:16px 0; margin:8px 0; gap:22px 12px; }
+.chat-page .cooking-activity__metrics dt { font-size:11px; font-weight:400; letter-spacing:0; text-transform:none; color:var(--muted-light); }
+.chat-page .cooking-activity__metrics dd { margin:5px 0 0; font-size:13px; font-weight:500; color:var(--ink-soft); font-variant-numeric:tabular-nums; }
+.activity-event-log { padding-top:8px; border-top:1px solid #ffffff0c; }
+.activity-event-log>summary span { font-variant-numeric:tabular-nums; color:var(--muted-light); margin-left:5px; font-size:11px; }
+.chat-page .activity-event-log .cooking-activity__journal { margin:16px 0 0; padding:0; }
+.chat-page .activity-event-log .cooking-activity__journal li { padding-bottom:18px; }
+@media(max-width:640px) {
+ .live-progress { margin:8px 0 20px; }
+ .live-progress__trigger { font-size:14px; min-height:36px; }
+ .chat-page .cooking-activity__body { padding:8px 18px 22px; }
+}
 /* Historic content should not animate again when changing a view. */
 .message,.conversation-workspace { animation:none; }
 .chat-settings-layer { backdrop-filter:none; -webkit-backdrop-filter:none; }

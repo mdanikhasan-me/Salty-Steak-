@@ -29,6 +29,7 @@ _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 VERIFIED_INTEGRITY_STATES = frozenset(
     {
         "sha256_verified_at_import",
+        "sha256_verified_at_rebind",
         "sha256_and_tensor_payload_verified_at_rebuild",
     }
 )

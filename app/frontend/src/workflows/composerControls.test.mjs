@@ -39,16 +39,16 @@ test("composer menus are mutually exclusive and toggle closed", () => {
   assert.equal(toggleComposerMenu("plugins", "unknown"), null);
 });
 
-test("cooking exposes exactly Instant and Cooking with safe legacy migration", () => {
-  assert.deepEqual(COOKING_MODES.map((mode) => mode.id), ["instant", "cooking"]);
-  assert.deepEqual(COOKING_MODES.map((mode) => mode.label), ["Instant", "Cooking"]);
+test("response modes expose Blink, Cook and Lock In with safe legacy migration", () => {
+  assert.deepEqual(COOKING_MODES.map((mode) => mode.id), ["instant", "cooking", "lock_in"]);
+  assert.deepEqual(COOKING_MODES.map((mode) => mode.label), ["Blink", "Cook", "Lock In"]);
   assert.equal(normaliseCookingMode("COOKING"), "cooking");
   assert.equal(normaliseCookingMode("off"), "instant");
   assert.equal(normaliseCookingMode("auto"), "cooking");
   assert.equal(normaliseCookingMode("deep"), "cooking");
   assert.equal(normaliseCookingMode("unsupported"), "instant");
-  assert.equal(cookingModeLabel("instant"), "Instant");
-  assert.equal(cookingModeLabel("cooking"), "Cooking");
+  assert.equal(cookingModeLabel("instant"), "Blink");
+  assert.equal(cookingModeLabel("cooking"), "Cook");
 });
 
 test("computer authority is explicit, persisted, and defaults to Ask every time", () => {
@@ -75,6 +75,10 @@ test("generation presets are exact and bounded to the public contract", () => {
       ["128K", 131_072],
       ["192K", 196_608],
       ["262K", 262_144],
+      ["384K", 393_216],
+      ["512K", 524_288],
+      ["640K", 655_360],
+      ["800K", 800_000],
     ],
   );
   assert.deepEqual(MAXIMUM_OUTPUT_MODES.map((mode) => mode.id), ["automatic", "manual"]);

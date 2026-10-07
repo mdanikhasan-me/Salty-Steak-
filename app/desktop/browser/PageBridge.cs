@@ -20,6 +20,9 @@ internal static class PageBridge
   const registry = new Map();
   const handles = new WeakMap();
   let sequence = 0;
+  // getRandomValues is available on ordinary HTTP pages too; randomUUID is
+  // restricted to secure contexts and would break the bridge on those pages.
+  const documentId = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16)).join('-');
 
 
 
@@ -36,6 +39,11 @@ internal static class PageBridge
     }
     if (node.labels && node.labels.length) {
       return (node.labels[0].innerText || '').trim();
+    }
+    if (node.tagName?.toLowerCase() === 'input'
+        && ['submit', 'button', 'reset'].includes(String(node.type).toLowerCase())) {
+      const label = String(node.value || '').trim();
+      if (label) return label.slice(0, 160);
     }
     const title = node.getAttribute?.('title');
     if (title) return title.trim();
@@ -83,6 +91,8 @@ internal static class PageBridge
     const typeable = ['text', 'search', 'email', 'url', 'tel', 'password', 'number'];
     return typeable.includes(type) && !node.disabled && !node.readOnly;
   };
+  const enabled = (node) => !node.disabled && !node.matches(':disabled')
+    && !node.closest('[inert],[aria-disabled="true"]');
 
   const describe = (node, handle) => {
     const rect = node.getBoundingClientRect?.() || { x: 0, y: 0, width: 0, height: 0 };
@@ -92,7 +102,7 @@ internal static class PageBridge
       role: role(node),
       name: accessibleName(node),
       visible: visible(node),
-      enabled: !node.disabled,
+      enabled: enabled(node),
       editable: editable(node),
       bounds: {
         x: Math.round(rect.x), y: Math.round(rect.y),
@@ -112,7 +122,7 @@ internal static class PageBridge
   const register = (node) => {
     const existing = handles.get(node);
     if (existing && registry.get(existing) === node && node.isConnected) return existing;
-    const handle = 'web-el-' + (++sequence);
+    const handle = 'web-el-' + documentId + '-' + (++sequence);
     registry.set(handle, node);
     handles.set(node, handle);
     return handle;
@@ -177,7 +187,7 @@ internal static class PageBridge
         if (opts.role && role(node) !== opts.role) continue;
         if (opts.editable === true && !editable(node)) continue;
         if (opts.visible !== false && !visible(node)) continue;
-        if (opts.enabled === true && node.disabled) continue;
+        if (opts.enabled === true && !enabled(node)) continue;
         if (wanted) {
           const name = accessibleName(node).toLowerCase();
           if (opts.exact ? name !== wanted : !name.includes(wanted)) continue;
@@ -192,19 +202,62 @@ internal static class PageBridge
 
     read: (options) => {
       const opts = options || {};
-      const limit = Math.min(Math.max(opts.limit || 60, 1), 200);
-      const nodes = Array.from(document.querySelectorAll(INTERESTING))
-        .filter(visible)
-        .slice(0, limit);
+      const integer = (value, fallback, max) => Number.isFinite(Number(value))
+        ? Math.min(max, Math.max(0, Math.floor(Number(value)))) : fallback;
+      const limit = Math.max(1, integer(opts.limit ?? 30, 30, 40));
+      const allNodes = Array.from(document.querySelectorAll(INTERESTING)).filter(visible);
+      const offset = integer(opts.offset ?? 0, 0, allNodes.length);
+      const nodes = allNodes.slice(offset, offset + limit);
+      const text = (document.body?.innerText || '').trim();
+      const textOffset = integer(opts.text_offset ?? 0, 0, text.length);
+      const textLimit = Math.max(1, integer(opts.text_limit ?? 4000, 4000, 8000));
+      const textEnd = Math.min(text.length, textOffset + textLimit);
+      const tableRows = [];
+      for (const table of Array.from(document.querySelectorAll('table')).slice(0, 100)) {
+        let headers = [];
+        for (const row of Array.from(table.rows)) {
+          const cells = Array.from(row.cells);
+          if (cells.length < 2 || cells.some(cell => cell.querySelector('table'))) continue;
+          const values = cells.map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim());
+          const years = values.filter(value => /^(19|20)\d{2}$/.test(value)).length;
+          if (cells.every(cell => cell.tagName === 'TH') || (!headers.length && years >= 3)) {
+            headers = values; continue;
+          }
+          const line = headers.length === values.length
+            ? values.map((value, index) => `${headers[index]}: ${value}`).join(' | ')
+            : values.join(' | ');
+          if (line.length <= 2000) tableRows.push(line);
+        }
+      }
+      const tableOffset = integer(opts.table_offset ?? 0, 0, tableRows.length);
+      const tableEnd = Math.min(tableRows.length, tableOffset + 40);
       return {
         url: location.href,
         title: document.title,
         heading: (document.querySelector('h1')?.innerText || '').trim().slice(0, 200),
 
 
-        summary: (document.body?.innerText || '').trim().slice(0, opts.text_limit || 2000),
+        summary: text.slice(textOffset, textEnd),
+        text_offset: textOffset,
+        text_length: text.length,
+        table_rows: tableRows.slice(tableOffset, tableEnd),
+        total_table_rows: tableRows.length,
+        next_table_offset: tableEnd < tableRows.length ? tableEnd : null,
+        next_text_offset: textEnd < text.length ? textEnd : null,
         controls: nodes.map((node) => describe(node, register(node))),
-        control_count: nodes.length
+        control_count: nodes.length,
+        total_control_count: allNodes.length,
+        search_forms: Array.from(document.forms).slice(0, 8).map(form => ({
+          action: form.getAttribute('action') || '', method: (form.method || 'get').toLowerCase(),
+          inputs: Array.from(form.elements).filter(e => e.name &&
+            (!['checkbox', 'radio'].includes(e.type) || e.checked)).map(e => ({
+              name: e.name, type: e.tagName.toLowerCase() === 'select' ? 'select' : e.type,
+              value: e.type === 'password' || /token|secret|password|csrf|session|authorization/i.test(e.name)
+                ? '' : String(e.value || ''), label: accessibleName(e)
+            })).slice(0, 40)
+        })),
+        offset,
+        next_offset: offset + nodes.length < allNodes.length ? offset + nodes.length : null
       };
     },
 
@@ -244,14 +297,32 @@ internal static class PageBridge
     act: (handle, action, payload) => {
       const node = resolve(handle);
       const data = payload || {};
+      if (data.name && accessibleName(node) !== String(data.name)) {
+        throw { kind: 'stale_element', message: 'The control name changed; query the page again' };
+      }
+      if (action !== 'scroll' && (!visible(node) || !enabled(node))) {
+        throw { kind: 'not_interactable', message: 'The control is hidden, disabled or inert' };
+      }
       if (action === 'click') {
         node.scrollIntoView({ block: 'center' });
+        const bounds = node.getBoundingClientRect();
+        const hit = document.elementFromPoint(bounds.x + bounds.width/2, bounds.y + bounds.height/2);
+        if (!hit || (hit !== node && !node.contains(hit))) {
+          throw { kind: 'obscured_element', message: 'Another element covers this control; inspect the page before acting' };
+        }
         node.click();
       } else if (action === 'set_value') {
         if (!editable(node) && node.tagName.toLowerCase() !== 'select') {
           throw { kind: 'not_editable', message: 'That element cannot be typed into' };
         }
         node.focus();
+        if (node.isContentEditable) {
+          node.textContent = String(data.value ?? '');
+        } else if (node.tagName.toLowerCase() === 'select') {
+          const option = Array.from(node.options).find(option => option.value === String(data.value ?? '') && !option.disabled);
+          if (!option) throw { kind: 'invalid_option', message: 'No enabled option has that value' };
+          node.value = option.value;
+        } else {
         const setter = Object.getOwnPropertyDescriptor(
           node.tagName.toLowerCase() === 'textarea'
             ? window.HTMLTextAreaElement.prototype
@@ -262,11 +333,16 @@ internal static class PageBridge
 
         if (setter) { setter.call(node, String(data.value ?? '')); }
         else { node.value = String(data.value ?? ''); }
+        }
         node.dispatchEvent(new Event('input', { bubbles: true }));
         node.dispatchEvent(new Event('change', { bubbles: true }));
       } else if (action === 'select') {
+        if (node.tagName.toLowerCase() !== 'select') throw { kind: 'invalid_request', message: 'That control is not a select field' };
+        const option = Array.from(node.options).find(option => option.value === String(data.value ?? '') && !option.disabled);
+        if (!option) throw { kind: 'invalid_option', message: 'No enabled option has that value' };
         node.focus();
-        node.value = String(data.value ?? '');
+        node.value = option.value;
+        node.dispatchEvent(new Event('input', { bubbles: true }));
         node.dispatchEvent(new Event('change', { bubbles: true }));
       } else if (action === 'focus') {
         node.focus();
@@ -275,7 +351,9 @@ internal static class PageBridge
       } else if (action === 'submit') {
         const form = node.form || node.closest('form');
         if (!form) throw { kind: 'no_form', message: 'That element is not inside a form' };
-        form.submit();
+        if (!form.checkValidity()) throw { kind: 'invalid_form', message: 'Required fields or validation rules are not satisfied' };
+        const submitter = node.matches('button[type="submit"],button:not([type]),input[type="submit"]') ? node : undefined;
+        form.requestSubmit(submitter);
       } else {
         throw { kind: 'invalid_request', message: 'Unknown action ' + action };
       }

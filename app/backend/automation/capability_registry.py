@@ -32,6 +32,7 @@ FILE_OPERATIONS = frozenset(
         "exists",
         "search",
         "read",
+        "write",
         "create_directory",
         "copy",
         "move",
@@ -148,6 +149,9 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "recursive": "boolean",
             "destination": "absolute_path",
             "permanent": "boolean",
+            "content": "string",
+            "overwrite": "boolean",
+            "expected_sha256": "string",
         },
         required_arguments=("operation", "path"),
         operations=tuple(sorted(FILE_OPERATIONS)),
@@ -158,17 +162,20 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
         model_instructions=(
             "files.manage — Look at and change files and folders by path. Use this "
             "for anything about files: listing, finding, reading, copying, moving, "
-            "renaming, deleting, making a folder.\n"
+            "renaming, deleting, making a folder, writing a UTF-8 text file.\n"
             "  It reports which paths matched, which it changed, and which it left "
             "alone, so you can confirm the right ones were affected.\n"
             '  Arguments: {"operation": "list|search|read|stat|exists|copy|move|'
-            'rename|delete|create_directory", "path": "C:\\\\absolute\\\\path", '
+            'rename|delete|create_directory|write", "path": "C:\\\\absolute\\\\path", '
             '"paths": ["C:\\\\exact\\\\observed.log"], "pattern": "*.log", '
             '"recursive": false, "destination": "C:\\\\absolute\\\\path", '
             '"permanent": false}\n'
             "  path is an absolute folder or file. pattern selects inside a folder; "
             "paths is an exact observed batch for copy, move, or delete. Deletes go "
-            "to the Recycle Bin unless permanent is true."
+            "to the Recycle Bin unless permanent is true. For write, supply content; "
+            "the parent folder must exist. Creating a file uses overwrite=false. "
+            "Replacing a file requires overwrite=true and its expected_sha256 from "
+            "a prior read to avoid overwriting a concurrent change. Max content 1 MiB."
         ),
         output_types={
             "status": "string",
@@ -177,6 +184,9 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "entries": "array[path_metadata]",
             "exists": "boolean",
             "content": "bounded_text",
+            "sha256": "string",
+            "readback_verified": "boolean",
+            "change": "bounded_file_diff",
             "truncated": "boolean",
             "matched_paths": "array[absolute_path]",
             "affected_paths": "array[absolute_path]",
@@ -190,6 +200,9 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "entries",
             "exists",
             "content",
+            "sha256",
+            "readback_verified",
+            "change",
             "truncated",
             "matched_paths",
             "affected_paths",
@@ -505,6 +518,7 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
         affordance="read and operate web pages in a browser",
         argument_types={
             "command": "string",
+            "tab": "string",
             "url": "url",
             "element": "string",
             "role": "string",
@@ -519,6 +533,10 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "enabled": "boolean",
             "limit": "integer",
             "text_limit": "integer",
+            "offset": "integer",
+            "text_offset": "integer",
+            "table_offset": "integer",
+            "wait_timeout_ms": "integer",
         },
         required_arguments=("command",),
         operations=tuple(sorted(BROWSER_COMMANDS)),
@@ -530,18 +548,30 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "browser.control — Read and operate web pages structurally in a browser "
             "session Salty Steak owns. Use this for anything on the web: it reads "
             "the page as elements rather than pixels.\n"
-            "  This session is OFF-SCREEN: the user cannot see it. Call "
-            '"show_window" to bring it onto their monitor whenever the point of the '
+            "  This session can be shown in the app's browser pane. Call "
+            '"show_window" to present it whenever the point of the '
             "task is for them to watch or use the page, and whenever they ask to "
             "see something. Playing a video they cannot see is not playing it.\n"
-            '  Arguments: {"command": "open_url"|"read_page"|"query"|"get_element"|'
+            '  Arguments: {"command": "open_url"|"read_page"|"query"|"wait_for"|"get_element"|'
             '"click"|"set_value"|"select"|"submit"|"scroll"|"back"|"forward"|'
             '"reload"|"get_page"|"show_window"|"hide_window"|"get_media"|'
-            '"play_media"|"pause_media", ...}\n'
-            '  open_url takes "url". query finds elements by "role" (button, link, '
+            '"play_media"|"pause_media"|"capture_preview"|"list_tabs"|"get_session_state", ...}\n'
+            '  open_url takes "url". wait_for waits up to wait_timeout_ms (maximum 10000) for a '
+            'matching visible enabled control, then returns fresh handles or timed_out=true. '
+            'Use it for delayed page controls rather than repeatedly planning an empty query. '
+            'query finds elements by "role" (button, link, '
             'textbox, checkbox), "name", "text", "href", or "editable": true, and '
             'returns an "element" handle for each match. Pass that handle to click '
-            "or set_value. read_page gives a summary plus the visible controls."
+            "or set_value. read_page returns bounded text plus up to 40 controls. "
+            "Continue with text_offset=next_text_offset for more text or "
+            "offset=next_offset for more controls, using the same tab. A null next "
+            "offset means that part is finished; a partial read is not the whole page. "
+            "text_limit is at most 8000. Use query to find a specific element directly. "
+            "After an action, inspect after_state for the actual result. An action_dispatched flag "
+            "does not prove the task succeeded. If observation_error is present, read_page again; "
+            "do not repeat a potentially completed click. Element handles expire on navigation. "
+            "For visual design or appearance, capture_preview captures the owned tab "
+            "and returns its visual analysis when available. DOM text alone cannot prove appearance."
         ),
         agent_rules=(
             "- For anything on a website, use browser.control. Find elements with "
@@ -549,7 +579,7 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "screenshot.\n"
             "- If query reports ambiguous with several matches, refine it with more "
             "of the name or surrounding text rather than picking one.\n"
-            "- The browser session is off-screen. If the user asked to watch, play, "
+            "- If the user asked to watch, play, "
             "read or see anything, call show_window so it is actually in front of "
             "them, and say that you have done so.\n"
             "- For audio or video, inspect get_media and use the returned element "
@@ -565,9 +595,20 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "summary": "bounded_text|null",
             "controls": "array[web_element]",
             "control_count": "integer|null",
+            "total_control_count": "integer|null",
+            "offset": "integer|null",
+            "next_offset": "integer|null",
+            "text_offset": "integer|null",
+            "text_length": "integer|null",
+            "table_rows": "array[bounded_text]",
+            "total_table_rows": "integer|null",
+            "next_table_offset": "integer|null",
+            "next_text_offset": "integer|null",
             "matches": "array[web_element]",
             "count": "integer|null",
             "ambiguous": "boolean|null",
+            "timed_out": "boolean|null",
+            "waited_ms": "integer|null",
             "element": "web_element|null",
             "media": "array[media_element]",
             "tabs": "array[browser_tab]",
@@ -575,7 +616,11 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "active": "string|null",
             "active_tab": "string|null",
             "visible": "boolean|null",
+            "artifact": "object|null",
             "failure_kind": "string|null",
+            "action_dispatched": "boolean|null",
+            "after_state": "object|null",
+            "observation_error": "string|null",
             "error": "string|object|null",
         },
         observation_fields=(
@@ -586,17 +631,32 @@ CAPABILITY_REGISTRY: dict[str, CapabilityDescriptor] = {
             "summary",
             "controls",
             "control_count",
+            "total_control_count",
+            "offset",
+            "next_offset",
+            "text_offset",
+            "text_length",
+            "table_rows",
+            "total_table_rows",
+            "next_table_offset",
+            "next_text_offset",
             "matches",
             "count",
             "ambiguous",
+            "timed_out",
+            "waited_ms",
             "element",
             "media",
             "tabs",
             "tab",
             "active",
             "active_tab",
+            "artifact",
             "visible",
             "failure_kind",
+            "action_dispatched",
+            "after_state",
+            "observation_error",
             "error",
         ),
         supported_observations=(

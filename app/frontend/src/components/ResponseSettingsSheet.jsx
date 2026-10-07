@@ -194,6 +194,13 @@ export function ResponseSettingsSheet({
               <ChevronDown aria-hidden="true" />
             </summary>
             <div className="response-settings-sheet__advanced-body">
+              <label className="response-settings-sheet__preset">
+                <span>Cook reasoning budget</span>
+                <select aria-label="Cook reasoning budget" value={settings.cooking_reasoning_tokens ?? 1024} onChange={event=>update({cooking_reasoning_tokens:Number(event.currentTarget.value)})}>
+                  {[256,512,1024,2048,4096,8192].map(tokens=><option key={tokens} value={tokens}>{tokens.toLocaleString()} tokens{tokens===1024 ? " · Balanced" : ""}</option>)}
+                </select>
+                <small>Thinking allowance for Cook. Lock In uses 8,192 tokens. Your answer keeps its full Max tokens allowance.</small>
+              </label>
               <NumericSetting label="Temperature" value={settings.temperature} min={0} max={2} step={0.05} onChange={(event) => updateNumber("temperature", 0, 2, event)} />
               <NumericSetting label="Top P" value={settings.top_p} min={0.05} max={1} step={0.05} onChange={(event) => updateNumber("top_p", 0.05, 1, event)} />
               <NumericSetting label="Top K" value={settings.top_k} min={0} max={200} step={1} onChange={(event) => updateNumber("top_k", 0, 200, event)} />

@@ -10,7 +10,7 @@ test("model reasoning opens in the dedicated Cooking activity pane", async () =>
 
   assert.match(page, /chat-page--activity-open/);
   assert.match(page, /<CookingActivityPanel/);
-  assert.match(page, /<CookingStatus[\s\S]*busy/);
+  assert.match(page, /<LiveProgress[\s\S]*onOpenActivity/);
   assert.match(message, /Cooking paused before the final answer/);
   assert.match(message, /: "Cooked"/);
   assert.match(message, /savedActivity/);
@@ -41,7 +41,7 @@ test("model reasoning opens in the dedicated Cooking activity pane", async () =>
   assert.match(panel, /Activity journal/);
   assert.match(panel, /"Researching"/);
   assert.match(panel, /"Research activity"/);
-  assert.match(panel, /Technical details/);
+  assert.match(panel, /Event log/);
   assert.match(panel, /Raw local trace \(developer\)/);
   assert.match(panel, /reasoningVisibility === "raw_local"/);
   assert.match(panel, /activityEntryTelemetry/);
@@ -50,16 +50,17 @@ test("model reasoning opens in the dedicated Cooking activity pane", async () =>
   assert.match(panel, /preview\?\.tail_text/);
   assert.match(panel, /generation_preview/);
   assert.match(panel, /token_count/);
-  for (const metric of ["Input", "Output", "Output limit", "Elapsed"]) {
+  for (const metric of ["Input", "Output limit", "Elapsed"]) {
     assert.match(panel, new RegExp(`label: \\"${metric}\\"`));
   }
   assert.match(panel, /formatTokenCount/);
+  assert.match(panel, /"Reasoning" : "Output"/);
   assert.match(page, /cooking-activity-backdrop/);
   assert.match(page, /const closeCookingActivity = useCallback/);
   assert.match(page, /onClick=\{showAgentActivity/);
   assert.match(page, /: closeCookingActivity\}/);
   assert.match(page, /onClose=\{closeCookingActivity\}/);
-  assert.match(page, /className="message-generating__instant"/);
+  assert.match(page, /activityOpen=\{cookingActivityMessageId === "active"\}/);
   assert.doesNotMatch(page, /activeReasoningMode === "cooking"\s*\n\s*: Boolean/);
   assert.match(
     page,
@@ -113,9 +114,9 @@ test("Cooking activity uses factual backend-driven stages and one reduced-motion
   assert.match(styles, /\.activity-phrase[\s\S]*?animation: salty-activity-sweep/);
   assert.match(styles, /prefers-reduced-motion: reduce[\s\S]*?\.activity-phrase[\s\S]*?animation: none/);
   assert.doesNotMatch(styles, /@keyframes salty-activity-sweep[\s\S]*?opacity\s*:/);
-  assert.match(page, /cookingActivityMessageId === "active"[\s\S]*?activity-phrase activity-phrase--response/);
+  assert.match(page, /onOpenActivity=\{\(event\) => toggleCookingActivity\("active", event\)\}/);
   assert.doesNotMatch(panel, /cooking-activity__live" role="status"/);
-  assert.match(panel, /active \? stage : summary.label/);
+  assert.match(panel, /!active \? <div className="activity-overview__status"/);
 });
 
 test("response Activity is event-driven and never starts from a fixed 14-step script", async () => {

@@ -10,6 +10,9 @@ import { formatDuration } from "../workflows/formatters.js";
 import { activitySummary } from "../workflows/responseActivitySummary.mjs";
 import { completionState } from "../workflows/responseProvenance.mjs";
 import { CookingGlyph, CookingStatus } from "./CookingStatus.jsx";
+import { LiveProgress } from "./LiveProgress.jsx";
+import { VerificationReport } from "./VerificationReport.jsx";
+import { useModalFocusTrap } from "../hooks/useModalFocusTrap.js";
 
 export function CookingActivityPanel({
   message,
@@ -20,6 +23,7 @@ export function CookingActivityPanel({
   onStop,
   stopBusy = false,
 }) {
+  const drawerRef = useModalFocusTrap({ active: true, onClose, initialFocusSelector: '[aria-label="Close cooking activity"]' });
   const preview = active
     ? (operation?.result?.generation_preview || operation?.progress?.generation_preview || null)
     : null;
@@ -69,21 +73,42 @@ export function CookingActivityPanel({
   const completion = completionState(details);
   const summary = activitySummary(journal, { active, stopped: ["stopped","interrupted","cancelled"].includes(operation?.state) || completion === "stopped" || cookingIncomplete, failed: operation?.state === "failed" || completion === "failed" });
   return (
-    <aside id="cooking-activity-panel" className="cooking-activity" aria-label={panelLabel}>
+    <aside ref={drawerRef} id="cooking-activity-panel" className="cooking-activity" role="dialog" aria-modal="true" tabIndex={-1} aria-label={panelLabel}>
       <header className="cooking-activity__header"><div><strong>Activity</strong><span>{summary.state === "running" ? "In progress" : summary.state === "failed" ? "Needs attention" : summary.state === "stopped" ? "Stopped" : durationSeconds === null ? "This response" : `Finished in ${formatDuration(durationSeconds)}`}</span></div><button type="button" aria-label="Close cooking activity" onClick={onClose}><X aria-hidden="true" /></button></header>
       <div className="cooking-activity__body">
         <section className="activity-overview">
-          <div className="activity-overview__status" data-state={summary.state}>{summary.state === "failed" ? <CircleAlert aria-hidden="true" /> : summary.state === "running" ? <CookingGlyph /> : summary.state === "stopped" ? <Square aria-hidden="true" /> : <Check aria-hidden="true" />}<span>{active ? stage : summary.label}</span></div>
+          {!active ? <div className="activity-overview__status" data-state={summary.state}>{summary.state === "failed" ? <CircleAlert aria-hidden="true" /> : summary.state === "stopped" ? <Square aria-hidden="true" /> : <Check aria-hidden="true" />}<span>{summary.label}</span></div> : null}
           {summary.failure ? <p role="alert">{summary.failure}</p> : null}
+          {active ? <LiveProgress operation={operation} compact /> : null}
           {cookingIncomplete ? <p>The response stopped before a final answer was ready.</p> : null}
           {active && onStop ? <div className="activity-overview__actions"><button type="button" onClick={onStop} disabled={stopBusy}><Square aria-hidden="true" />{stopBusy ? "Stopping\u2026" : "Stop response"}</button></div> : null}
         </section>
-        {summary.steps.length ? <ol className="activity-history" aria-label="Progress summary">{summary.steps.map((entry) => <li key={entry.id}>{entry.state === "failed" ? <CircleAlert /> : entry.state === "completed" ? <Check /> : <ChevronRight />}<div><strong>{entry.label}</strong><small>{entry.state === "completed" ? "Complete" : entry.state === "failed" ? "Failed" : entry.state === "running" ? "In progress" : entry.state === "skipped" ? "Not needed" : "Planned"}</small></div></li>)}</ol> : null}
+        <ActivityMetrics items={activity} />
+        <VerificationReport report={details.lock_in_verification || liveDetails.lock_in_verification}/>
+        <ResponseStages entries={journal} />
         {sources.length ? <section className="cooking-activity__research"><h3 className="cooking-activity__section-title"><Globe2 />Sources</h3>{sources.map((source,index) => { const url = typeof source === "string" ? source : source.url; return url && /^https?:\/\//i.test(url) ? <a className="activity-source" key={url+index} href={url} target="_blank" rel="noreferrer">{source.title || new URL(url).hostname}</a> : null; })}</section> : null}
-        <details className="activity-diagnostics"><summary>Technical details &middot; {journal.length} events</summary><ActivityMetrics items={activity} /><ActivityJournal entries={journal} active={false} />{reasoning ? <RawTrace text={reasoning} /> : null}</details>
+        <details className="activity-diagnostics activity-event-log"><summary>Event log <span>{journal.length}</span></summary>
+          <ActivityJournal entries={journal} active={false} />
+          {reasoning ? <RawTrace text={reasoning} /> : null}</details>
       </div>
     </aside>
   );
+}
+
+function ResponseStages({ entries }) {
+  const stages = [
+    {id:"prefill", label:"Reading the request"},
+    {id:"reasoning", label:"Reasoning"},
+    {id:"cooking-answer", fallback:"drafting", label:"Writing the answer"},
+  ].map(stage => ({...stage, entry:entries.find(entry => entry.id === stage.id)
+    || entries.find(entry => entry.id === stage.fallback)})).filter(stage => stage.entry);
+  if (!stages.length) return null;
+  return <section className="response-stages" aria-label="Response stages"><h3>Progress</h3>
+    <ol>{stages.map(({id,label,entry}) => <li key={id} data-state={entry.state}>
+      <span className="response-stages__icon" aria-hidden="true">{entry.state === "completed" ? <Check/> : entry.state === "failed" ? <CircleAlert/> : <ChevronRight/>}</span>
+      <span>{label}</span>{["running", "failed"].includes(entry.state) ? <small>{entry.state === "running" ? "In progress" : "Failed"}</small> : null}
+    </li>)}</ol>
+  </section>;
 }
 
 function ActivityJournal({ entries, active = false }) {
@@ -163,6 +188,11 @@ function RawTrace({ text, active = false }) {
 }
 
 function finiteDurationSeconds(details) {
+  const turnMilliseconds = details?.turn_duration_ms;
+  if (turnMilliseconds !== null && turnMilliseconds !== undefined && turnMilliseconds !== "") {
+    const milliseconds = Number(turnMilliseconds);
+    if (Number.isFinite(milliseconds) && milliseconds >= 0) return milliseconds / 1000;
+  }
   const secondsValue = details?.generation_duration_seconds;
   if (secondsValue !== null && secondsValue !== undefined && secondsValue !== "") {
     const seconds = Number(secondsValue);
@@ -212,29 +242,38 @@ function ActivityMetrics({ items }) {
 
 function activityTelemetry(operation, details) {
   const sources = [operation, operation?.progress, operation?.result, details].filter(Boolean);
+  const verification = operation?.result?.lock_in_verification || operation?.progress?.lock_in_verification;
+  const checking = ["checking", "planning", "reviewing", "repairing", "testing"].includes(verification?.status);
+  const previews = [operation?.result?.research_progress?.generation_preview,
+    operation?.result?.generation_preview, operation?.progress?.generation_preview].filter(Boolean);
+  const preview = previews.find(item => ["reasoning", "output"].includes(item.kind));
   const inputTokens = firstFinite(sources, ["input_context_tokens", "prompt_tokens"]);
-  const previewTokens = firstFinite(
-    [
-      operation?.result?.generation_preview,
-      operation?.progress?.generation_preview,
-    ].filter(Boolean),
-    ["token_count"],
-  );
-  const outputTokens = previewTokens ?? firstFinite(
+  const previewTokens = preview ? firstFinite([preview], ["stream_token_count", "token_count"]) : null;
+  const outputTokens = checking ? firstFinite([verification], ["token_count"]) : previewTokens ?? firstFinite(
     sources,
     [
-      "total_streamed_output_tokens",
       "visible_output_tokens",
       "generated_output_tokens",
       "output_tokens",
     ],
   );
+  const totalTokens = checking ? null : firstFinite(preview ? [preview] : [], ["token_count"])
+    ?? firstFinite(sources, ["total_streamed_output_tokens"]);
   const outputLimit = firstFinite(sources, ["maximum_output_tokens", "max_output_tokens"]);
-  const elapsedSeconds = firstFinite(sources, ["elapsed_seconds", "generation_duration_seconds"])
+  const speed = firstFinite(checking ? [verification] : [
+    operation?.result?.research_progress?.generation_preview,
+    operation?.result?.generation_preview,
+    operation?.progress?.generation_preview,
+    details,
+  ].filter(Boolean), ["decode_tokens_per_second"]);
+  const elapsedSeconds = millisecondsToSeconds(firstFinite(sources, ["turn_duration_ms"]))
+    ?? firstFinite(sources, ["elapsed_seconds", "generation_duration_seconds"])
     ?? millisecondsToSeconds(firstFinite(sources, ["generation_duration_ms"]));
   return [
     inputTokens === null ? null : { label: "Input", value: formatTokenCount(inputTokens) },
-    outputTokens === null ? null : { label: "Output", value: formatTokenCount(outputTokens) },
+    speed === null ? null : { label: "Generation speed", value: `${speed.toFixed(2)} tokens/s` },
+    outputTokens === null ? null : { label: checking ? ({planning:"Test planning",reviewing:"Review",repairing:"Revision"})[verification.status] || "Verification" : preview?.kind === "reasoning" ? "Reasoning" : "Output", value: formatTokenCount(outputTokens) },
+    totalTokens !== null && totalTokens !== outputTokens ? { label: "Total generated", value: formatTokenCount(totalTokens) } : null,
     outputTokens !== null || outputLimit === null
       ? null
       : { label: "Output limit", value: formatTokenCount(outputLimit) },

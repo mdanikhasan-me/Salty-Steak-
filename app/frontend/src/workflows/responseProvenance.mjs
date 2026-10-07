@@ -103,6 +103,11 @@ export function completionState(details) {
 
 export function completionLabel(details) {
   const state = completionState(details);
+  if (details?.response_mode === "lock_in" && ["done", "cooked"].includes(state)) {
+    const checked = details?.lock_in_verification?.status === "passed";
+    const elapsed = formatElapsed(turnDuration(details));
+    return `Lock In · ${checked ? "checks passed" : "reviewed"}${elapsed ? ` · ${elapsed}` : ""}`;
+  }
   const word = COMPLETION_WORDS[state];
   if (!word) return "";
   if (state === "rendering") return word;

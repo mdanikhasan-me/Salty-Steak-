@@ -203,7 +203,7 @@ export function AppShell({ page, aboutFrom = "chat", onNavigate, children }) {
             <button className="icon-button app-menu-button" type="button" title={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} aria-controls="workspace-sidebar" onClick={() => changeSidebar({ type: "toggle" })}><SidebarGlyph aria-hidden="true" /></button>
           </div>
           <div className="workspace-heading">
-            <span className="workspace-context">{trainingMode ? (TRAINING_DESTINATIONS.find((item) => item.id === page)?.label || "Models & training") : workspaceMode === "code" ? "Code workspace" : workspaceMode === "agent" ? "Agent workspace" : "Workspace"}</span>
+            <span className="workspace-context">{trainingMode ? (TRAINING_DESTINATIONS.find((item) => item.id === page)?.label || "Models & training") : workspaceMode === "code" ? "Coding" : workspaceMode === "agent" ? "Sawlper · Co-work" : "Chat"}</span>
             {trainingMode ? (
               <nav className="workspace-return" aria-label="Primary workspace"><button type="button" onClick={() => onNavigate("chat")}><MessageCircle aria-hidden="true" /><span>Chat</span></button><span>Models & training</span></nav>
             ) : (

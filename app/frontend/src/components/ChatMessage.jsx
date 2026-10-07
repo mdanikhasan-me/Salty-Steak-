@@ -24,6 +24,7 @@ import {
 } from "../workflows/hostActions.mjs";
 import { CookingStatus } from "./CookingStatus.jsx";
 import { AgentTimeline } from "./AgentTimeline.jsx";
+import { ActionTimeline } from './ActionTimeline.jsx';
 import { executionEvents, timelineFor } from "../workflows/agentTimeline.mjs";
 import { HostActionProposal } from "./HostActionProposal.jsx";
 import { RichText } from "./RichText.jsx";
@@ -34,6 +35,7 @@ import "../styles/generated-image-recovery.css";
 
 export function ChatMessage({
   message,
+  workspaceMode = 'chat',
   copied,
   onCopy,
   retryEligible,
@@ -59,12 +61,6 @@ export function ChatMessage({
   const agentEvents = assistant
     ? executionEvents(timelineFor({ messageDetails: details }))
     : [];
-  const artifactSource = (artifact) =>
-    artifact?.path
-      ? `/api/chat/image-artifacts/${encodeURIComponent(
-          String(details?.generated_image?.id || ""),
-        )}`
-      : "";
   const duration = assistant ? thoughtDuration(details) : null;
   const reasoningMode = assistant ? messageReasoningMode(details) : "";
   const actionProposal = assistant ? hostActionProposalForMessage(message) : null;
@@ -158,10 +154,11 @@ export function ChatMessage({
             <time dateTime={message.created_at}>{messageTime(message.created_at)}</time>
           ) : null}
         </header>
-        {agentEvents.length ? (
+        <ActionTimeline details={details || {}} workspaceMode={workspaceMode}/>
+        {workspaceMode === 'chat' && agentEvents.length && !details?.image_sha256 ? (
           <AgentTimeline
             events={agentEvents}
-            artifactSource={artifactSource}
+            artifactSource={null}
 
 
             {...(({ sites, pages, marks }) => ({

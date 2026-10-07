@@ -490,11 +490,16 @@ def effect_key(capability: str, arguments: Mapping[str, Any]) -> str | None:
             return None
         lowered = text.casefold()
         if lowered.startswith(("http://", "https://")):
-            from urllib.parse import urlsplit
+            from urllib.parse import urlsplit, urlunsplit
 
-            host = (urlsplit(lowered).hostname or "").removeprefix("www.")
-            path = urlsplit(lowered).path.rstrip("/")
-            return f"visit:{host}{path}" if host else None
+            parsed = urlsplit(text)
+            # Only the scheme and host are case insensitive. Query strings,
+            # fragments and path case can identify entirely different pages.
+            authority = parsed.netloc.lower()
+            path = "" if parsed.path == "/" else parsed.path
+            destination = urlunsplit((parsed.scheme.lower(), authority, path,
+                                      parsed.query, parsed.fragment))
+            return f"visit:{destination}" if parsed.hostname else None
         return None
 
     if capability == "application.launch":
@@ -511,20 +516,9 @@ def effect_key(capability: str, arguments: Mapping[str, Any]) -> str | None:
 
 
 
-    if capability == "ui.automation":
-        command = str(arguments.get("command") or "").casefold()
-        if command in {"invoke", "select", "toggle"}:
-            element = str(arguments.get("element") or "").strip().casefold()
-            name = str(arguments.get("name") or "").strip().casefold()
-            if element or name:
-                return f"uia:{command}:{element}:{name}"
-    if capability == "browser.control":
-        command = str(arguments.get("command") or "").casefold()
-        if command in {"click", "select"}:
-            element = str(arguments.get("element") or "").strip().casefold()
-            name = str(arguments.get("name") or "").strip().casefold()
-            if element or name:
-                return f"browser:{command}:{element}:{name}"
+    # Clicking the same control can advance a wizard, increment a value or
+    # reverse a toggle. Repeated observations, not control identity, detect
+    # stagnation for these operations.
     return None
 
 
@@ -1063,7 +1057,9 @@ def summarise_observation(
     observation: dict[str, Any] = {"action": action, "status": status}
     if result.get("audit_record_id"):
         observation["audit_record_id"] = str(result["audit_record_id"])
-    if action == SCREEN_CAPTURE_CAPABILITY:
+    if action == SCREEN_CAPTURE_CAPABILITY or (
+        action == BROWSER_CAPABILITY and result.get("command") == "capture_preview"
+    ):
         artifact = dict(result.get("artifact") or {})
         observation.update(
             {
@@ -1152,7 +1148,11 @@ def summarise_observation(
             if action == SCREEN_CAPTURE_CAPABILITY and field_name == "artifact":
                 continue
             if field_name in result and field_name not in observation:
-                if action == UI_AUTOMATION_CAPABILITY and field_name == "nodes":
+                if action == BROWSER_CAPABILITY and field_name == "summary":
+                    # Browser text is explicitly paginated. Do not secretly clip
+                    # it again, leaving next_text_offset beyond unread evidence.
+                    observation[field_name] = str(redact(result[field_name]) or "")[:8000]
+                elif action == UI_AUTOMATION_CAPABILITY and field_name == "nodes":
                     observation[field_name] = [
                         _bounded_observation_value(item)
                         for item in list(result[field_name] or [])[
@@ -1163,6 +1163,10 @@ def summarise_observation(
                     observation[field_name] = _bounded_observation_value(
                         result[field_name]
                     )
+    if action == FILES_CAPABILITY and isinstance(observation.get('change'), dict):
+        original = (result.get('change') or {}).get('diff')
+        if original != observation['change'].get('diff'):
+            observation['change']['truncated'] = True
     return observation
 
 
@@ -1253,6 +1257,7 @@ class AgentLoop:
         self._effects: set[str] = set()
 
         self._idle = 0
+        self._completion_retries = 0
         self._step_started = self._clock()
         self._discord_inspector_failed = False
         self._service_route_repairs = 0
@@ -1304,6 +1309,13 @@ class AgentLoop:
 
         if self.established:
             system_prompt = f"{system_prompt}\n{self.established}"
+        # The native runtime may evict older user/assistant turns to fit a
+        # growing tool transcript. Keep the exact task in retained context;
+        # observations must not silently outlive the goal and its constraints.
+        system_prompt += (
+            "\n\nCurrent user task (retain its constraints throughout this mission):\n"
+            + task
+        )
         transcript: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": task},
@@ -1317,6 +1329,7 @@ class AgentLoop:
 
         for iteration in range(self.total_step_count + 1, self.max_iterations + 1):
             self.task.current_step = iteration
+            self._compact_transcript(transcript, system_prompt=system_prompt, task=task)
 
             if self._stopped():
                 return self._cancelled()
@@ -1371,6 +1384,40 @@ class AgentLoop:
             parse_failures = 0
 
             if action["action"] == RESPOND_ACTION:
+                probe = getattr(self.task, "completion_probe", None)
+                if probe is not None:
+                    if self._stopped():
+                        return self._cancelled()
+                    try:
+                        verified, evidence = probe({
+                            "kind": "action", "status": "completed",
+                            "answer": str(action["answer"]), "steps": list(self.steps),
+                            "capability": self.steps[-1]["action"] if self.steps else "",
+                        })
+                    except TaskCancelled:
+                        return self._cancelled()
+                    except Exception as error:
+                        verified, evidence = None, {"error": str(error)[:500]}
+                    if self._stopped():
+                        return self._cancelled()
+                    if verified is not True:
+                        self._completion_retries += 1
+                        self.task.record_event("goal_not_verified", evidence=evidence)
+                        if self._completion_retries >= 3:
+                            return self._finish(
+                                "failed",
+                                "The task is incomplete: the requested result could not be verified. "
+                                + self._what_was_achieved(),
+                            )
+                        transcript.append({"role": "assistant", "content": json.dumps(action, default=str)})
+                        transcript.append({
+                            "role": "user",
+                            "content": "The requested result is not yet verified. Continue with the remaining actions "
+                            "or a fresh observation. Do not claim completion. Verification: "
+                            + json.dumps(evidence, default=str)[:4000],
+                        })
+                        self._publish_progress()
+                        continue
                 self._record(iteration, action, {"status": "completed"})
                 return self._finish("completed", str(action["answer"]))
 
@@ -1434,7 +1481,11 @@ class AgentLoop:
 
 
 
-                    return self._finish("completed", self._what_was_achieved())
+                    return self._finish(
+                        "failed",
+                        "The task is incomplete: repeated actions made no further "
+                        "progress. " + self._what_was_achieved(),
+                    )
                 continue
 
 
@@ -1693,7 +1744,7 @@ class AgentLoop:
         return self._finish("exhausted", summary)
 
     def _what_was_achieved(self) -> str:
-        """What the task actually did, for a task that has finished doing it."""
+        """Report completed actions without claiming the entire task succeeded."""
 
         done = [
             str(step.get("reason") or step.get("action") or "")
@@ -1701,8 +1752,8 @@ class AgentLoop:
             if step.get("status") == "succeeded" and step.get("action") != "respond"
         ]
         if not done:
-            return "There was nothing left to do — this was already the case."
-        return "Done. " + "; ".join(done)
+            return "No successful actions were recorded."
+        return "Actions performed: " + "; ".join(done)
 
     @staticmethod
     def _compact_screenshots(transcript: list[dict[str, str]]) -> None:
@@ -1763,7 +1814,7 @@ class AgentLoop:
                 "mission_checkpoint": {
                     "completed_decisions": self.total_step_count,
                     "world_state": self.task.world_state.briefing(),
-                    "recent_steps": self.steps[-RECENT_CHECKPOINT_STEPS:],
+                    "recent_steps": _bounded_observation_value(self.steps[-RECENT_CHECKPOINT_STEPS:]),
                     "note": (
                         "Earlier calls remain in the durable automation audit. "
                         "Continue from these observed facts without repeating work."
@@ -1771,15 +1822,35 @@ class AgentLoop:
                 }
             }
         )
-        transcript[:] = [
+        retained = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": task},
             {
                 "role": "user",
                 "content": json.dumps(checkpoint, sort_keys=True, default=str),
             },
-            *recent,
         ]
+        # Enforce the advertised bound rather than retaining an arbitrarily
+        # large recent tail. Keep newest evidence first, in original order,
+        # and explicitly mark a partial message rather than hiding the loss.
+        remaining = MAX_TRANSCRIPT_CHARACTERS - sum(len(m["content"]) for m in retained)
+        if remaining < MAX_TRANSCRIPT_CHARACTERS // 2:
+            retained[2]["content"] = json.dumps({"mission_checkpoint": {
+                "completed_decisions": self.total_step_count,
+                "note": "Detailed earlier calls remain in the durable automation audit.",
+            }})
+            remaining = MAX_TRANSCRIPT_CHARACTERS - sum(len(m["content"]) for m in retained)
+        tail = []
+        marker = "\n[Earlier context omitted; reread specific evidence if needed.]"
+        for message in reversed(recent):
+            content = str(message.get("content") or "")
+            if len(content) > remaining:
+                if not tail and remaining > len(marker):
+                    tail.append({**message, "content": content[:remaining-len(marker)] + marker})
+                break
+            tail.append(message)
+            remaining -= len(content)
+        transcript[:] = [*retained, *reversed(tail)]
         self.task.metrics.context_compactions += 1
         self.task.record_event(
             "context_compacted",

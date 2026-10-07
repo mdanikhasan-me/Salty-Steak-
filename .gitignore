@@ -18,10 +18,10 @@ workspace/
 models/
 backups/
 scratchpad/
-tests/
+tests/*
+!tests/*.py
 tools/
 docs/internal/
-app/**/*.test.mjs
 *.gguf
 *.safetensors
 *.onnx

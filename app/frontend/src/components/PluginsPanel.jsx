@@ -27,6 +27,7 @@ export function PluginsPanel({
   onConnect,
   onManage,
   onAddMcpServer,
+  onOpenBrowser,
 }) {
   const [section, setSection] = useState("services");
   const interactive = !loading && !error;
@@ -49,6 +50,12 @@ export function PluginsPanel({
         <button type="button" aria-pressed={section === "computer"} onClick={() => setSection("computer")}>Computer access</button>
       </div>
       {section === "services" ? <div className="plugins-list" role="list">
+        <div className="service-browser-access">
+          <strong>Use your email in the browser</strong>
+          <p>Open your mailbox in Sawlper’s browser and sign in yourself. These shortcuts do not connect an API or send mail.</p>
+          <div><button type="button" className="plugin-action" onClick={() => onOpenBrowser?.("https://mail.google.com/")} disabled={!onOpenBrowser}>Open Gmail</button>
+          <button type="button" className="plugin-action" onClick={() => onOpenBrowser?.("https://outlook.live.com/mail/")} disabled={!onOpenBrowser}>Open Outlook</button></div>
+        </div>
         {CONNECTOR_DEFINITIONS.map((definition) => {
           const connector = normaliseConnector(connections[definition.id]);
           const presentation = connectorPresentation(connector, busyId === definition.id);
@@ -106,6 +113,7 @@ export function PluginsPanel({
         adapter={automationAdapter}
         proposedInvocation={proposedInvocation}
         onAnalyzeCapture={onAnalyzeCapture}
+        onOpenBrowser={onOpenBrowser}
       />}
 
       <p className="plugins-panel__footnote">

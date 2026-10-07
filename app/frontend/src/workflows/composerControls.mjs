@@ -37,15 +37,19 @@ export function computerAuthorityLabel(value) {
 export const COOKING_MODES = Object.freeze([
   Object.freeze({
     id: "instant",
-    label: "Instant",
-    controlLabel: "Instant",
+    label: "Blink",
+    controlLabel: "Blink",
     description: "Direct answers; with Research on, run focused research for up to five minutes.",
   }),
   Object.freeze({
     id: "cooking",
-    controlLabel: "Cooking",
-    label: "Cooking",
+    controlLabel: "Cook",
+    label: "Cook",
     description: "Deliberate answers; with Research on, validate iteratively with a hard four-hour ceiling.",
+  }),
+  Object.freeze({
+    id: "lock_in", controlLabel: "Lock In", label: "Lock In",
+    description: "Maximum thinking, local builds and tests using installed tools, and up to two repairs. Runs generated code on this computer.",
   }),
 ]);
 
@@ -59,6 +63,10 @@ export const CONTEXT_WINDOW_PRESETS = Object.freeze([
   Object.freeze({ tokens: 131_072, label: "128K" }),
   Object.freeze({ tokens: 196_608, label: "192K" }),
   Object.freeze({ tokens: 262_144, label: "262K" }),
+  Object.freeze({ tokens: 393_216, label: "384K" }),
+  Object.freeze({ tokens: 524_288, label: "512K" }),
+  Object.freeze({ tokens: 655_360, label: "640K" }),
+  Object.freeze({ tokens: 800_000, label: "800K" }),
 ]);
 
 export const MAXIMUM_OUTPUT_MODES = Object.freeze([
@@ -85,14 +93,16 @@ export function toggleComposerMenu(currentMenu, requestedMenu) {
 export function normaliseCookingMode(value) {
   const candidate = String(value || "").trim().toLowerCase();
   if (COOKING_MODES.some((mode) => mode.id === candidate)) return candidate;
-  if (candidate === "off") return "instant";
+  if (candidate === "off" || candidate === "blink") return "instant";
+  if (candidate === "cook") return "cooking";
+  if (candidate === "lock in") return "lock_in";
   if (candidate === "auto" || candidate === "deep") return "cooking";
   return "instant";
 }
 
 export function cookingModeLabel(value) {
   const selected = COOKING_MODES.find((mode) => mode.id === normaliseCookingMode(value));
-  return selected?.controlLabel || "Instant";
+  return selected?.controlLabel || "Blink";
 }
 
 export function normaliseReasoningVisibility(value) {
@@ -126,7 +136,7 @@ export function contextWindowForMaximumOutput(value, currentContext = 32_768) {
   const outputTokens = normaliseMaximumOutputTokens(value);
   const selectedContext = normaliseContextWindowTokens(currentContext);
   if (outputTokens < selectedContext) return selectedContext;
-  const preferredContext = Math.min(262_144, outputTokens * 2);
+  const preferredContext = Math.min(800_000, outputTokens * 2);
   return CONTEXT_WINDOW_PRESETS.find((preset) => preset.tokens >= preferredContext)?.tokens
     ?? CONTEXT_WINDOW_PRESETS.at(-1).tokens;
 }
@@ -141,6 +151,7 @@ const GENERATION_SETTING_KEYS = Object.freeze([
   "repetition_penalty",
   "seed",
   "reasoning_mode",
+  "cooking_reasoning_tokens",
   "resource_mode",
   "reasoning_visibility",
   "web_search_enabled",
@@ -206,6 +217,8 @@ export function normaliseGenerationSettingsSnapshot(value, defaults = {}) {
       : 8_192;
   }
   settings.reasoning_mode = normaliseCookingMode(merged.reasoning_mode);
+  const reasoningBudget = Number(merged.cooking_reasoning_tokens ?? 1024);
+  settings.cooking_reasoning_tokens = Number.isInteger(reasoningBudget) && reasoningBudget >= 256 && reasoningBudget <= 8192 ? reasoningBudget : 1024;
   settings.resource_mode = merged.resource_mode === "turtle" ? "turtle" : "normal";
   settings.reasoning_visibility = normaliseReasoningVisibility(
     merged.reasoning_visibility,

@@ -294,7 +294,7 @@ class Application:
                     ],
                     timeout_seconds=900,
                     device="CUDA0",
-                    gpu_layers=24,
+                    gpu_layers=16,
                     mmproj_offload=False,
                     require_staged_manifest=True,
                 )
@@ -374,9 +374,15 @@ class Application:
     ) -> SaltyNativeWorkerRuntime | None:
         if bundle is None:
             return None
-        native_library_directory = (
-            self.paths.workspace / "runtime" / "salty-native-steak20" / "bin"
-        )
+        family = str(bundle.get("runtime_family") or "").strip()
+        if family == "salty_native_steak35":
+            native_library_directory = (
+                self.paths.workspace / "runtime" / "salty-native-steak35" / "bin"
+            )
+        else:
+            native_library_directory = (
+                self.paths.workspace / "runtime" / "salty-native-steak20" / "bin"
+            )
         declared_adapters = [
             companion
             for companion in bundle.get("companion_artifacts", [])
@@ -410,7 +416,7 @@ class Application:
             companion.get("current_size_matches") for companion in declared_adapters
         ) and specialist_layout_ready
         if not (
-            bundle.get("runtime_family") == "salty_native_steak20"
+            bundle.get("runtime_family") in {"salty_native_steak20", "salty_native_steak35"}
             and bundle.get("current_size_matches")
             and adapters_ready
             and native_library_directory.is_dir()
@@ -5261,6 +5267,92 @@ class Application:
 
     def automation_status(self) -> dict[str, Any]:
         return self.automation.status()
+
+    def browser_preview_content(self, audit_id: str) -> BinaryFileResponse:
+        """Serve only a granted browser capture recorded by the local broker."""
+        enabled = any(
+            item.get("capability") == "browser.control" and item.get("effective_enabled")
+            for item in self.automation.status().get("capabilities", [])
+        )
+        if not enabled:
+            raise PermissionError("Browser access is not enabled")
+        record = next((item for item in self.automation.audit_records(limit=500)
+                       if item.get("id") == audit_id), None)
+        result = (record or {}).get("result") or {}
+        if (not record or record.get("event") != "invoke"
+                or record.get("capability") != "browser.control"
+                or record.get("outcome") != "succeeded"
+                or result.get("command") != "capture_preview"):
+            raise PermissionError("This is not an authorized browser preview")
+        artifact = result.get("artifact") or {}
+        root = (self.automation.artifact_root / "browser-previews").resolve()
+        path = Path(str(artifact.get("path") or "")).resolve()
+        if root not in path.parents or path.suffix.lower() != ".png":
+            raise PermissionError("Browser preview path is outside its artifact folder")
+        if not path.is_file():
+            raise FileNotFoundError("This preview has expired; refresh the browser")
+        if sha256_file(path) != artifact.get("sha256"):
+            raise PermissionError("Browser preview changed after capture")
+        return BinaryFileResponse(path, "image/png", path.name, artifact["sha256"])
+
+    def action_preview_content(self, audit_id: str) -> BinaryFileResponse:
+        """Serve a recorded capture by audit ID; never accept a client file path."""
+        record = self.automation.audit_record(audit_id)
+        result = (record or {}).get('result') or {}
+        capability = (record or {}).get('capability')
+        if (not record or record.get('event') != 'invoke' or record.get('outcome') != 'succeeded'
+                or capability not in {'screen.capture','browser.control'}
+                or (capability == 'browser.control' and result.get('command') != 'capture_preview')):
+            raise PermissionError('This action has no recorded image preview')
+        enabled = any(item.get('capability') == capability and item.get('effective_enabled')
+                      for item in self.automation.status().get('capabilities', []))
+        if not enabled:
+            raise PermissionError('Access to this capture is not enabled')
+        artifact = result.get('artifact') or {}
+        folder = 'screenshots' if capability == 'screen.capture' else 'browser-previews'
+        root = (self.automation.artifact_root / folder).resolve()
+        path = Path(str(artifact.get('path') or '')).resolve()
+        media = {'.png':'image/png', '.bmp':'image/bmp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg'}
+        if root not in path.parents or path.suffix.lower() not in media:
+            raise PermissionError('Capture is outside its recorded artifact folder')
+        if not path.is_file():
+            raise FileNotFoundError('This saved capture is no longer available')
+        if sha256_file(path) != artifact.get('sha256'):
+            raise PermissionError('Capture changed after the action was recorded')
+        return BinaryFileResponse(path, media[path.suffix.lower()], path.name, artifact['sha256'])
+
+    def vision_preview_content(self, conversation_id: str, input_id: str) -> BinaryFileResponse:
+        self.get_conversation(conversation_id)
+        path, metadata = self.vision_inputs.preview(input_id, conversation_id)
+        return BinaryFileResponse(path, str(metadata['media_type']), path.name, metadata['sha256'])
+
+    def dock_browser_surface(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Native-only placement of the existing browser inside our own window."""
+        import ctypes
+        from ctypes import wintypes
+        if os.name != "nt":
+            raise RuntimeError("The embedded browser requires the Windows desktop app")
+        handle = int(request.get("parent_window") or 0)
+        pid = wintypes.DWORD()
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId(wintypes.HWND(handle), ctypes.byref(pid))
+        if not handle or pid.value != os.getpid():
+            raise PermissionError("The browser can only be embedded in this application window")
+        visible = request.get("visible") is True
+        enabled = any(item.get("capability") == "browser.control" and item.get("effective_enabled")
+                      for item in self.automation.status().get("capabilities", []))
+        if visible and not enabled:
+            raise PermissionError("Enable browser access before opening the browser")
+        client = self.automation._browser_client
+        if client is None:
+            raise RuntimeError("The browser host is unavailable")
+        bounds = {key: int(request.get(key) or 0) for key in ("x", "y", "width", "height")}
+        if visible and (not 80 <= bounds["width"] <= 16384 or not 80 <= bounds["height"] <= 16384
+                        or not 0 <= bounds["x"] <= 16384 or not 0 <= bounds["y"] <= 16384):
+            raise ValueError("Invalid browser pane bounds")
+        return client.call("dock_surface", {"parent_window": handle, "parent_pid": os.getpid(),
+                                            "visible": visible, **bounds})
 
     def grant_automation(self, request: Mapping[str, Any]) -> dict[str, Any]:
         return self.automation.grant(request)

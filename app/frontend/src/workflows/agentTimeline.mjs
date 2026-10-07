@@ -34,6 +34,7 @@ export function eventState(event) {
   if (status === "already_satisfied") return "skipped";
   if (status === "failed" || status === "revoked") return "failed";
   if (status === "blocked" || status === "needs_review") return "waiting";
+  if (status === 'running' || status === 'queued') return 'running';
   if (!status) return "running";
   return "completed";
 }
@@ -141,6 +142,7 @@ export function eventsFromPlanNodes(nodes) {
 export function timelineFor({ liveDetails, messageDetails }) {
   const live = liveDetails?.agent_events;
   if (Array.isArray(live) && live.length) return live;
+  if (Array.isArray(liveDetails?.agent_task?.steps)) return liveDetails.agent_task.steps;
   const orchestration = messageDetails?.orchestration || {};
   if (Array.isArray(orchestration.steps) && orchestration.steps.length) {
     return orchestration.steps;

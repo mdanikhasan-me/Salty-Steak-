@@ -33,6 +33,7 @@ BROWSER_READ_COMMANDS = frozenset(
         "get_page",
         "read_page",
         "query",
+        "wait_for",
         "find_element",
         "get_element",
 
@@ -43,6 +44,7 @@ BROWSER_READ_COMMANDS = frozenset(
 
         "get_session_state",
         "get_media",
+        "capture_preview",
     }
 )
 
@@ -147,6 +149,8 @@ class BrowserClient:
             command.extend(["--profile", str(self.profile_directory)])
         if self.visible:
             command.append("--visible")
+        if os.environ.get("SALTY_BROWSER_EMBEDDED") == "1":
+            command.append("--embedded")
         try:
             self._process = subprocess.Popen(
                 command,
@@ -198,7 +202,7 @@ class BrowserClient:
         *,
         should_stop: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
-        if command not in BROWSER_COMMANDS:
+        if command not in BROWSER_COMMANDS and command != "dock_surface":
             raise BrowserError(
                 f"Unknown browser command: {command!r}", kind="invalid_request"
             )

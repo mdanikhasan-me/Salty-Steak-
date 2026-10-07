@@ -35,15 +35,17 @@ import {
 import { api, asList } from "../api/client.js";
 import { ChatMessage } from "../components/ChatMessage.jsx";
 import { LiveResponse } from "../components/LiveResponse.jsx";
+import { ActionTimeline } from '../components/ActionTimeline.jsx';
 import { AgentActivityPanel } from "../components/AgentActivityPanel.jsx";
 import { ConversationSidebar } from "../components/ConversationSidebar.jsx";
 import { ResponseDetails } from "../components/ResponseDetails.jsx";
 import { externalLinkFromEvent } from "../workflows/externalLinks.mjs";
 import { CookingActivityPanel } from "../components/CookingActivityPanel.jsx";
+import { LiveProgress } from "../components/LiveProgress.jsx";
 import { ResearchProgress } from "../components/ResearchProgress.jsx";
-import { CookingStatus } from "../components/CookingStatus.jsx";
 import { PluginConnectionDialog } from "../components/PluginConnectionDialog.jsx";
 import { PluginsPanel } from "../components/PluginsPanel.jsx";
+import { BrowserPanel } from "../components/BrowserPanel.jsx";
 import { MemoryPanel } from "../components/MemoryPanel.jsx";
 import { ResponseSettingsSheet } from "../components/ResponseSettingsSheet.jsx";
 import { ResponseModeControl } from "../components/ResponseModeControl.jsx";
@@ -358,6 +360,9 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     });
   }, []);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [browserInitialUrl, setBrowserInitialUrl] = useState("");
+  const autoBrowserTaskRef = useRef(null);
   const [settingsView, setSettingsView] = useState("response");
   const [attachments, setAttachments] = useState(freshDraft.attachments || []);
   const [pluginState, setPluginState] = useState(sharedPlugins.value);
@@ -1636,7 +1641,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
     const href = externalLinkFromEvent(event);
     if (!href) return;
     event.preventDefault();
-    api.openExternal(href).catch((error) => reportError(error, "open-link"));
+      setBrowserInitialUrl(href); setBrowserOpen(true);
   }, [reportError]);
 
   async function renameConversationTo(item, title) {
@@ -1977,6 +1982,15 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   const agentActivity = dismissedAgentTask === agentActivityKey
     ? null
     : liveAgentTask || finishedAgentTask || null;
+  useEffect(() => {
+    if (!liveAgentTask || autoBrowserTaskRef.current === agentActivityKey) return;
+    const usesBrowser = liveAgentTask.current_capability === "browser.control"
+      || liveAgentTask.steps?.some(step => step.action === "browser.control");
+    if (usesBrowser) {
+      autoBrowserTaskRef.current = agentActivityKey;
+      setBrowserInitialUrl(""); setBrowserOpen(true);
+    }
+  }, [agentActivityKey, liveAgentTask]);
   const showAgentActivity = Boolean(agentActivity) && (agentRunning || !cookingActivityOpen);
   const showCookingActivity = cookingActivityOpen && !agentRunning;
   const activityWorkspaceOpen = showAgentActivity || showCookingActivity;
@@ -2124,7 +2138,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
   return (
     <div data-workspace-mode={workspaceMode} className={`chat-page ${sidebarOpen ? "chat-page--sidebar-open" : ""} ${
       activityWorkspaceOpen ? "chat-page--activity-open" : ""
-    } ${responseDetailsFor ? "chat-page--details-open" : ""}`}>
+    } ${responseDetailsFor ? "chat-page--details-open" : ""} ${browserOpen ? "chat-page--browser-open" : ""}`}>
       {sidebarOpen ? (
         <button
           type="button"
@@ -2196,6 +2210,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                 <ChatMessage
                   key={message.id}
                   message={message}
+                  workspaceMode={workspaceMode}
                   copied={copiedId === message.id}
                   onCopy={() => copyMessage(message)}
                   retryEligible={message.id === retryableUserMessageId}
@@ -2225,43 +2240,14 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     <header className="message__header">
                       <strong className="message__author">Salty Steak</strong>
                     </header>
-                    <div className="message-generating__status">
-                      {activeReasoningMode === "cooking" ? (
-                      <CookingStatus
-                        label={activeCookingLabel(activeGeneration?.phase, activeReasoningMode)}
-                        busy={cookingActivityMessageId !== "active"}
-                        active={cookingActivityMessageId === "active"}
-                        controls="cooking-activity-panel"
-                        onClick={(event) => toggleCookingActivity("active", event)}
-                      />
-                      ) : (
-                        <button
-                          type="button"
-                          className="message-generating__instant"
-                          aria-expanded={cookingActivityMessageId === "active"}
-                          aria-controls="cooking-activity-panel"
-                          onClick={(event) => toggleCookingActivity("active", event)}
-                        >
-                          <span
-                            className={cookingActivityMessageId === "active"
-                              ? undefined
-                              : "activity-phrase activity-phrase--response"}
-                            aria-hidden={cookingActivityMessageId === "active" ? undefined : "true"}
-                          >
-                            Responding
-                          </span>
-                          {cookingActivityMessageId !== "active" ? (
-                            <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-                              Responding
-                            </span>
-                          ) : null}
-                        </button>
-                      )}
-                    </div>
-
-
-
+                    <LiveProgress
+                      key={`progress-${activeGeneration?.id}`}
+                      operation={activeGeneration}
+                      activityOpen={cookingActivityMessageId === "active"}
+                      onOpenActivity={(event) => toggleCookingActivity("active", event)}
+                    />
                     {!agentRunning ? <LiveResponse key={activeGeneration?.id} operation={activeGeneration} /> : null}
+                    <ActionTimeline details={activeGeneration?.result || activeGeneration?.progress || {}} live workspaceMode={workspaceMode}/>
                     <ResearchProgress
                       details={
                         activeGeneration?.result || activeGeneration?.details
@@ -2408,10 +2394,10 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     aria-label="Web research mode"
                     title={
                       researchMode
-                        ? cookingMode === "cooking"
-                          ? "Cooking Research: iterative validation in the background, with a hard four-hour ceiling"
-                          : "Instant Research: focused multi-source research for up to five minutes"
-                        : "Research depth is off; Salty Steak may still run a bounded verification when a current claim needs it"
+                        ? cookingMode !== "instant"
+                          ? "Cook / Lock In Research: iterative validation in the background, with a hard four-hour ceiling"
+                          : "Blink Research: focused multi-source research for up to five minutes"
+                        : "Searches when your request needs the web. Turn on Research for a dedicated search."
                     }
                     onClick={() => setResearchMode((current) => !current)}
                   >
@@ -2419,7 +2405,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     <span>Research</span>
                   </button>
                 </div>
-                <div className="composer-control composer-control--authority">
+                {agentMode ? <div className="composer-control composer-control--authority">
                   <button
                     ref={(element) => composerMenuTriggerRefs.current.set("authority", element)}
                     type="button"
@@ -2457,7 +2443,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                             ? Check
                             : mode.id === "full_access" ? ShieldCheck : ShieldQuestion}
                           label={mode.label}
-                          description={mode.id === "full_access" ? "Run actions without asking" : "Ask before each action"}
+                          description={mode.id === "full_access" ? "Run authorized local actions" : "Ask before destructive changes"}
                           selected={mode.id === generationSettings.computer_authority_mode}
                           radio
                           onSelect={() => {
@@ -2469,6 +2455,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     </ComposerPopover>
                   ) : null}
                 </div>
+                : null}
                 <div className="composer-control composer-control--plugins">
                   <button
                     ref={(element) => composerMenuTriggerRefs.current.set("plugins", element)}
@@ -2552,6 +2539,10 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                           </p>
                         ) : null}
                       </div>
+                      <button type="button" role="menuitem" className="plugin-picker__manage"
+                        onClick={() => { closeComposerMenu(); setBrowserInitialUrl(""); setBrowserOpen(true); }}>
+                        <span>Open browser</span><Globe aria-hidden="true" />
+                      </button>
                       <button
                         type="button"
                         role="menuitem"
@@ -2605,7 +2596,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
                     aria-haspopup="dialog"
                     aria-expanded={composerMenu === "cooking"}
                     aria-controls="composer-cooking-menu"
-                    aria-label={`Cooking mode: ${cookingModeLabel(cookingMode)}`}
+                    aria-label={`Response mode: ${cookingModeLabel(cookingMode)}`}
                     title="Choose how much time to spend reasoning"
                     onClick={(event) => openComposerMenu("cooking", event)}
                   >
@@ -2651,8 +2642,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
           {readiness.key !== "no_version" ? (
             <p className="composer__hint">
               {selectedConversationBusy
-                ? activeGeneration?.phase ||
-                  (selectedImageGenerating ? "Generating image" : "Generating response")
+                ? (selectedImageGenerating ? "Generating image" : "You can stop this response at any time")
                 : readiness.key === "preparing"
                 ? "Your message will wait until the local model is ready."
                 : readiness.key === "unavailable"
@@ -2717,6 +2707,9 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
         </>
       ) : null}
 
+      {browserOpen ? <BrowserPanel key={browserInitialUrl} initialUrl={browserInitialUrl} onClose={() => setBrowserOpen(false)} onPermissions={() => {
+        setBrowserOpen(false); openSettings("plugins");
+      }} /> : null}
       {inspectorOpen && !showAbout ? (
         <div
           className="chat-settings-layer"
@@ -2732,6 +2725,7 @@ function ChatWorkspace({ onNavigate, showAbout = false, onCloseAbout, workspaceM
           : settingsView === "plugins" ? (
             <PluginsSettingsSheet embedded active={false} title="Connections" onClose={() => setInspectorOpen(false)}>
               <PluginsPanel
+                onOpenBrowser={(url = "") => { setInspectorOpen(false); setBrowserInitialUrl(url); setBrowserOpen(true); }}
                 connections={pluginConnections}
                 automationAdapter={AUTOMATION_ADAPTER}
                 proposedInvocation={selectedActionProposal}
@@ -3191,6 +3185,8 @@ function getReadiness(status) {
       "preparing_salty_potato",
       "native_runtime_cold",
       "ready_cold_load",
+      "r42_adaptive_runtime_accepted",
+      "adaptive_runtime_accepted",
       "",
     ].includes(
       explicit,

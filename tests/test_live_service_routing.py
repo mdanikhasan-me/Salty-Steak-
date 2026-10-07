@@ -134,6 +134,46 @@ def _send(app, text: str, *, settings=None):
     return conversation["id"], messages
 
 
+@pytest.mark.parametrize('change_profile',[False,True])
+def test_internal_review_deadline_recovery_commits_unchanged_model_answer(application,tmp_path,monkeypatch,change_profile):
+    from app.backend.chat.runners import LiveRunners
+    _wire(application,tmp_path,'A recovered answer.')
+    application.chat.model_bundle['runtime_family']='salty_native_steak35'
+    runtime=application.chat.model_bundle_runtime
+    original_generate=runtime.generate;original_describe=runtime.describe
+    state={'reloaded':False}
+    def describe():
+        result=original_describe()
+        if state['reloaded']:result['runtime_id']='91000000-0000-4000-8000-000000000100'
+        return result
+    runtime.describe=describe;runtime.warmup=describe
+    def generate(**kwargs):
+        response=original_generate(**kwargs)
+        if kwargs['messages'][0]['content']=='Timeout probe':
+            state['reloaded']=True;response.cancelled=True;response.text='';response.finish_reason='cancelled'
+        return response
+    runtime.generate=generate
+    def research(self,**kwargs):
+        self.generate_research_review([{'role':'system','content':'Timeout probe'}],time_budget_seconds=0)
+        answer=self.generate_with_preview([{'role':'system','content':'Answer probe'}],lambda _:None)
+        if change_profile:
+            with application.database.transaction() as connection:
+                connection.execute("UPDATE active_chat_runtime SET profile_id='another-profile' WHERE singleton=1")
+        return {'answer':answer,'status':'completed','sources':[],'claims':[]}
+    monkeypatch.setattr(LiveRunners,'run_research',research)
+    if change_profile:
+        conversation=application.create_conversation()
+        operation=application.chat.start_message(conversation['id'],'Search the public web for a report.')
+        result=application.operations.wait(operation['id'],timeout=20)
+        assert result['state']=='failed'
+        assert 'active model bundle changed' in str(result['error'])
+        return
+    _,messages=_send(application,'Search the public web for a report.')
+    assert messages[-1]['content']=='A recovered answer.'
+    recovery=messages[-1]['technical_details']['runtime_recovery']
+    assert recovery['runtime_id'].endswith('099') and recovery['recovered_runtime_id'].endswith('100')
+
+
 # ------------------------------------------------- routing through the path
 
 
@@ -324,16 +364,34 @@ def test_explicit_research_control_reaches_research_even_when_model_answers_norm
     assert "Verified with public sources" in messages[-1]["content"]
 
 
-def test_research_off_still_offers_bounded_automatic_verification_when_reachable(
+def test_plain_language_web_request_reaches_research_with_toggle_off(application, tmp_path, monkeypatch):
+    from app.backend.chat.runners import LiveRunners
+    _wire(application, tmp_path, "A memory-only answer.")
+    calls=[]
+    def research(self, *, decision, request):
+        calls.append((decision, request, self.research_profile))
+        return {"answer":"Retrieved the requested public report.","status":"completed","sources":[],"claims":[]}
+    monkeypatch.setattr(LiveRunners,"run_research",research)
+    _,messages=_send(application,"Search the public web for the original observatory yearbook.",
+                     settings={"research_available":False,"web_search_enabled":False})
+    assert len(calls)==1
+    assert calls[0][2]=='instant'
+    assert 'Retrieved the requested' in messages[-1]['content']
+    assert messages[-1]['technical_details']['web_intent_source']=='explicit_user_request'
+
+
+def test_research_off_never_offers_web_even_when_runtime_is_available(
     application, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured = _wire(application, tmp_path, "A plain answer.")
     monkeypatch.setattr(application.chat, "_research_runtime_available", lambda: True)
+    searches: list[str] = []
+    monkeypatch.setattr(application.chat.web_search, "search", lambda query, limit=6: searches.append(query) or [])
 
     _conversation_id, messages = _send(
         application,
         "What is the current CUDA release?",
-        settings={"research_available": False, "web_search_enabled": False},
+        settings={"research_available": False, "web_search_enabled": True},
     )
 
     system_text = " ".join(
@@ -341,10 +399,389 @@ def test_research_off_still_offers_bounded_automatic_verification_when_reachable
         for message in captured["messages"]
         if message["role"] == "system"
     )
-    assert '"research"' in system_text
+    assert '"research"' not in system_text
+    assert searches == []
     details = messages[1]["technical_details"]
     assert details["research_profile"] == "verification"
-    assert details["web_search"]["state"] == "automatic_verification"
+    assert details["web_search"]["state"] == "off"
+
+
+def test_learned_research_prediction_becomes_a_direct_answer_when_research_is_off(
+    application, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _wire(application, tmp_path, "A Python list can be changed in place.")
+    monkeypatch.setattr(
+        application.chat,
+        "_learned_route_decision",
+        lambda *_args, **_kwargs: ("research", {"route": "research"}),
+    )
+    searches: list[str] = []
+    monkeypatch.setattr(
+        application.chat.web_search,
+        "search",
+        lambda query, limit=6: searches.append(query) or [],
+    )
+
+    _, messages = _send(application, "Explain a Python list.")
+
+    assert searches == []
+    assert messages[1]["content"] == "A Python list can be changed in place."
+    controller = messages[1]["technical_details"]["learned_route_controller"]
+    assert controller["route_correction"] == "research_control_off"
+
+
+def test_steak35_without_routing_adapter_classifies_a_direct_chat_turn(
+    application, tmp_path: Path
+) -> None:
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+
+    def reply(kwargs):
+        messages = kwargs.get("messages") or []
+        if messages and messages[0].get("content") == ROUTE_SYSTEM:
+            return "A"
+        return "Python lists can be changed in place."
+
+    captured = _wire(application, tmp_path, reply)
+    application.chat.model_bundle["runtime_family"] = "salty_native_steak35"
+
+    _, messages = _send(application, "Explain Python lists.")
+
+    assert len(captured["calls"]) >= 2
+    assert messages[1]["content"] == "Python lists can be changed in place."
+    controller = messages[1]["technical_details"]["learned_route_controller"]
+    assert controller["controller"] == "base_model_constrained_route_classifier"
+    assert controller["route"] == "respond"
+
+
+def test_steak35_cooking_can_finish_reasoning_and_answer_without_forced_repair(
+    application, tmp_path: Path
+) -> None:
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+
+    def reply(kwargs):
+        messages = kwargs.get("messages") or []
+        if messages and messages[0].get("content") == ROUTE_SYSTEM:
+            return "A"
+        if kwargs.get("reasoning_mode") == "cooking":
+            assert kwargs["maximum_output_tokens"] == 1024
+            return (
+                "<think>List contents may be changed in place.</think>"
+                "A Python list is mutable: you can change its contents in place."
+            )
+        return "A Python list is mutable: you can change its contents in place."
+
+    captured = _wire(application, tmp_path, reply)
+    application.chat.model_bundle["runtime_family"] = "salty_native_steak35"
+
+    _, messages = _send(
+        application,
+        "Explain why Python lists are mutable.",
+        settings={"reasoning_mode": "cooking", "maximum_output_mode": "automatic"},
+    )
+
+    assert "mutable" in messages[1]["content"]
+    assert "<think>" not in messages[1]["content"]
+    assert any(call and call[0].get("content") == ROUTE_SYSTEM for call in captured["calls"])
+    assert len(captured["calls"]) == 2
+    assert messages[1]["technical_details"]["direct_response_recovery"] is None
+
+
+@pytest.mark.parametrize('mode',['instant','cooking'])
+@pytest.mark.parametrize('workspace',['chat','code'])
+def test_short_prompt_can_produce_a_complete_long_answer(application,tmp_path,mode,workspace):
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+    long_answer='\n'.join(f'{i}. This is a complete section of the requested guide.' for i in range(1,151))
+    answer_limits=[]
+    def reply(kwargs):
+        if kwargs['messages'][0].get('content')==ROUTE_SYSTEM:return 'A'
+        answer_limits.append(kwargs['maximum_output_tokens'])
+        if kwargs.get('reasoning_mode')=='cooking':
+            assert kwargs['maximum_output_tokens']==1024
+            return '<think>Prepare all sections.</think>'
+        assert kwargs['maximum_output_tokens']==16384
+        assert '</think>' not in kwargs.get('stop_sequences',[])
+        return long_answer
+    _wire(application,tmp_path,reply)
+    application.chat.model_bundle['runtime_family']='salty_native_steak35'
+    conversation=application.create_conversation(workspace)
+    op=application.chat.start_message(conversation['id'],'Write a comprehensive guide.',generation_settings={
+        'workspace_mode':workspace,'reasoning_mode':mode,'maximum_output_mode':'automatic',
+        'context_window_tokens':32768})
+    completed=application.operations.wait(op['id'],timeout=20)
+    assert completed['state']=='completed', completed
+    answer=application.get_conversation(conversation['id'])['messages'][-1]
+    assert answer['content']==long_answer
+    assert answer_limits==([1024,16384] if mode=='cooking' else [16384])
+
+
+def test_cancelled_cooking_does_not_start_an_answer_or_repair(application,tmp_path):
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+    captured=_wire(application,tmp_path,lambda kwargs:'A' if kwargs['messages'][0].get('content')==ROUTE_SYSTEM else '<think>unfinished')
+    application.chat.model_bundle['runtime_family']='salty_native_steak35'
+    original=application.chat.model_bundle_runtime.generate
+    def generate(**kwargs):
+        result=original(**kwargs)
+        if kwargs.get('reasoning_mode')=='cooking':result.cancelled=True
+        return result
+    application.chat.model_bundle_runtime.generate=generate
+    conv=application.create_conversation('chat')
+    op=application.chat.start_message(conv['id'],'Write a report.',generation_settings={'reasoning_mode':'cooking'})
+    done=application.operations.wait(op['id'],timeout=20)
+    assert done['state']=='interrupted'
+    assert len(captured['calls'])==2
+    assert not any(m['role']=='assistant' for m in application.get_conversation(conv['id'])['messages'])
+
+
+def test_empty_cooking_phase_starts_answer_without_extra_memo(application,tmp_path):
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+    def reply(kwargs):
+        if kwargs['messages'][0].get('content')==ROUTE_SYSTEM:return 'A'
+        return '<think></think>' if kwargs.get('reasoning_mode')=='cooking' else 'A complete answer.'
+    captured=_wire(application,tmp_path,reply)
+    application.chat.model_bundle['runtime_family']='salty_native_steak35'
+    _,messages=_send(application,'Explain it.',settings={'reasoning_mode':'cooking'})
+    assert len(captured['calls'])==3
+    assert messages[-1]['content']=='A complete answer.'
+    assert messages[-1]['technical_details']['native_cooking_budget']['answer_pass_started'] is True
+    assert messages[-1]['technical_details']['direct_response_recovery'] is None
+    assert all(e['state']!='running' for e in messages[-1]['technical_details']['activity_journal'] if e['id']=='cooking-answer')
+
+
+def test_lock_in_uses_max_reasoning_then_checks_repairs_and_rechecks(application,tmp_path,monkeypatch):
+    from app.backend.chat import output_checks
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+    seen=[]
+    def check(text,**kwargs):
+        seen.append(text)
+        return {'status':'passed' if 'fixed' in text else 'failed','issues':[] if 'fixed' in text else ['broken start button'],'scope':'scripted browser check'}
+    monkeypatch.setattr(output_checks,'check_output',check)
+    def reply(kwargs):
+        first=kwargs['messages'][0].get('content','')
+        if first==ROUTE_SYSTEM:return 'A'
+        if first.startswith('Review the supplied answer'):return '{"needs_revision":false,"issues":[]}'
+        if first.startswith('Revise the draft'):return 'The fixed answer.'
+        if kwargs.get('reasoning_mode')=='cooking':
+            assert kwargs['maximum_output_tokens']==8192
+            return '<think>Check the implementation carefully.</think>'
+        return 'The broken answer.'
+    _wire(application,tmp_path,reply);application.chat.model_bundle['runtime_family']='salty_native_steak35'
+    _,messages=_send(application,'Create a working example.',settings={'reasoning_mode':'lock_in','context_window_tokens':32768})
+    answer=messages[-1]
+    assert answer['content']=='The fixed answer.'
+    assert seen==['The broken answer.','The fixed answer.']
+    assert answer['technical_details']['lock_in_verification']['repairs']==1
+    assert answer['technical_details']['response_mode']=='lock_in'
+
+
+def test_lock_in_reports_unverified_when_no_execution_check_exists(application,tmp_path,monkeypatch):
+    from app.backend.chat import output_checks
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+    monkeypatch.setattr(output_checks,'check_output',lambda *a,**k:{'status':'unverified','issues':[],'scope':'No execution check for prose.'})
+    def reply(kwargs):
+        first=kwargs['messages'][0].get('content','')
+        if first==ROUTE_SYSTEM:return 'A'
+        if first.startswith('Review the supplied answer'):return '{"needs_revision":false,"issues":[]}'
+        return '<think>Consider it.</think>' if kwargs.get('reasoning_mode')=='cooking' else 'A useful explanation.'
+    _wire(application,tmp_path,reply);application.chat.model_bundle['runtime_family']='salty_native_steak35'
+    _,messages=_send(application,'Explain this.',settings={'reasoning_mode':'lock_in'})
+    assert 'not fully runtime-verified' in messages[-1]['content']
+    assert messages[-1]['technical_details']['lock_in_verification']['status']=='unverified'
+
+
+def test_lock_in_research_review_keeps_sources_and_never_generates_a_code_test_plan(application,tmp_path,monkeypatch):
+    from app.backend.chat.runners import LiveRunners
+    from app.backend.chat import output_checks
+    def no_code(*args, **kwargs):
+        raise AssertionError('Research must not enter code checks')
+    monkeypatch.setattr(output_checks, 'check_output', no_code)
+    bad = 'Buy this product for 35000 BDT: [item](https://shop.example/item).'
+    good = 'No offer under 35000 BDT was confirmed. The observed offer was exactly 35000 BDT.'
+    observations = [{'product':'SSD','price':'35000','price_display':'35000 BDT',
+        'currency_code':'BDT','stock':'in_stock','url':'https://shop.example/item'}]
+    monkeypatch.setattr(LiveRunners, 'run_research', lambda self,**kwargs: {
+        'answer':bad,'status':'completed','claims':[],'observations':observations,
+        'sources':[{'url':'https://shop.example/item','validation':'validated'}],
+        'evidence_limits':{},'research':{'evidence_sufficient':True}})
+    reviews=[]
+    def reply(kwargs):
+        first=kwargs['messages'][0]['content']
+        packet=json.loads(kwargs['messages'][-1]['content'])
+        if first.startswith('Review this research answer'):
+            reviews.append(packet)
+            assert packet['retrieved_evidence']['verified_products'][0]['price']=='35000 BDT'
+            return json.dumps({'needs_revision':packet['answer']==bad,
+                'issues':['Equal to the limit is not under the limit.'] if packet['answer']==bad else []})
+        if first.startswith("Answer the user's question"):
+            assert packet['evidence']['question']=='Find an SSD under 35000 BDT from local shops only.'
+            assert 'Do not create code' in first
+            return good
+        raise AssertionError('Unexpected generation '+first[:150])
+    _wire(application,tmp_path,reply)
+    application.chat.model_bundle['runtime_family']='salty_native_steak35'
+    _,messages=_send(application,'Find an SSD under 35000 BDT from local shops only.',
+        settings={'reasoning_mode':'lock_in','context_window_tokens':32768})
+    answer=messages[-1]
+    assert answer['content']==good
+    assert len(reviews)==2
+    assert answer['technical_details']['lock_in_verification']['kind']=='research'
+    assert answer['technical_details']['lock_in_verification']['repairs']==1
+    assert answer['technical_details']['orchestration']['answer']==good
+
+
+def test_lock_in_runs_real_terminal_tests_repairs_and_retests(application,tmp_path):
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+    from app.backend.chat.code_verification import PLAN_INSTRUCTION
+    broken='```python\ndef add(a,b): return a-b\n```'
+    fixed='```python\ndef add(a,b): return a+b\n```'
+    plan={'requirements':['add positive and negative numbers'],
+          'sources':[{'block':0,'path':'calculator.py'}],
+          'test_files':[{'path':'_checks/test_calc.py','content':
+              "import sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(__file__).resolve().parents[1]))\nfrom calculator import add\nassert add(2,3)==5\nassert add(-2,1)==-1\nprint('CHECKS_OK')\n"}],
+          'checks':[{'name':'addition assertions','kind':'test','argv':['python','_checks/test_calc.py'],
+                     'requirements':[0],'stdout_contains':['CHECKS_OK']}],'limitations':[]}
+    def reply(kwargs):
+        first=kwargs['messages'][0].get('content','')
+        if first==ROUTE_SYSTEM:return 'A'
+        if first==PLAN_INSTRUCTION:
+            kwargs['on_preview']({'kind':'output','tail_text':'private test plan','token_count':31,'character_count':17,'decode_tokens_per_second':1.5})
+            current=application.database.fetch_one("SELECT result_json FROM operations WHERE state='running' ORDER BY created_at DESC LIMIT 1")
+            progress=json.loads(current['result_json'])['lock_in_verification']
+            assert progress['status']=='planning' and progress['token_count']==31
+            assert 'private test plan' not in json.dumps(progress)
+            return json.dumps(plan)
+        if first.startswith('Review the supplied answer'):
+            kwargs['on_preview']({'kind':'output','tail_text':'private critique','token_count':15,'character_count':16})
+            return '{"needs_revision":false,"issues":[]}'
+        if first.startswith('Revise the draft'):
+            assert 'AssertionError' in kwargs['messages'][-1]['content']
+            return fixed
+        if kwargs.get('reasoning_mode')=='cooking':return '<think>Test the arithmetic.</think>'
+        return broken
+    _wire(application,tmp_path,reply);application.chat.model_bundle['runtime_family']='salty_native_steak35'
+    _,messages=_send(application,'Write add(a,b) in Python.',settings={'reasoning_mode':'lock_in'})
+    answer=messages[-1];report=answer['technical_details']['lock_in_verification']
+    assert answer['content']==fixed
+    assert report['status']=='passed' and report['repairs']==1
+    assert report['attempts'][0]['checks'][0]['exit_code']!=0
+    assert report['attempts'][1]['checks'][0]['exit_code']==0
+    assert report['attempts'][0]['artifact_sha256']!=report['attempts'][1]['artifact_sha256']
+    assert report['checks'][0]['audit_record_id']
+    assert Path(report['work_directory'],'_evidence/result.json').is_file()
+
+
+def test_cooking_activity_ends_reasoning_before_answer_and_preserves_prefill_time(application, tmp_path, monkeypatch):
+    import time
+    from app.backend.chat import service
+    from app.backend.training.route_dataset import ROUTE_SYSTEM
+
+    clock = time.monotonic
+    offset = [0.0]
+    monkeypatch.setattr(service, 'time', SimpleNamespace(
+        monotonic=lambda: clock() + offset[0], perf_counter=time.perf_counter, sleep=time.sleep,
+    ))
+
+    def reply(kwargs):
+        if kwargs['messages'][0].get('content') == ROUTE_SYSTEM:
+            return 'A'
+        preview = kwargs['on_preview']
+        if kwargs.get('reasoning_mode') == 'cooking':
+            offset[0] += 10
+            preview({'kind': 'reasoning', 'tail_text': 'Consider inputs.', 'token_count': 2, 'character_count': 16})
+            offset[0] += 20
+            return '<think>Consider inputs.</think>'
+        # The second pass has a long prefill; the reasoning stage has already ended.
+        offset[0] += 40
+        preview({'kind': 'output', 'tail_text': 'A complete answer.', 'token_count': 3, 'character_count': 18})
+        offset[0] += 30
+        return 'A complete answer.'
+
+    _wire(application, tmp_path, reply)
+    application.chat.model_bundle['runtime_family'] = 'salty_native_steak35'
+    _, messages = _send(application, 'Explain it.', settings={'reasoning_mode': 'cooking'})
+    entries = {item['id']: item for item in messages[-1]['technical_details']['activity_journal']}
+    assert 9_000 <= entries['prefill']['updated_elapsed_ms'] < 15_000
+    assert 29_000 <= entries['reasoning']['updated_elapsed_ms'] < 35_000
+    assert entries['reasoning']['updated_elapsed_ms'] <= entries['cooking-answer']['started_elapsed_ms']
+    assert entries['cooking-answer']['updated_elapsed_ms'] >= 99_000
+
+
+@pytest.mark.parametrize('callback',['generate_with_preview','generate_structured','generate_structured_with_preview','generate_final_with_preview'])
+def test_runner_answers_keep_selected_limit_and_report_truncation(application,tmp_path,monkeypatch,callback):
+    from app.backend.chat.runners import LiveRunners
+    long_answer='This answer continues across many sections. '*100
+    seen=[]
+    def reply(kwargs):
+        if kwargs['messages'][0]['content']=='Answer producer probe':
+            seen.append(kwargs['maximum_output_tokens'])
+            assert kwargs['maximum_output_tokens']==16384
+            if callback.startswith('generate_structured'):
+                assert kwargs['maximum_output_mode'] == 'automatic'
+                return json.dumps({'action':'respond','answer':long_answer})
+            return long_answer
+        return '{}'
+    _wire(application,tmp_path,reply)
+    application.chat.model_bundle['runtime_family']='salty_native_steak35'
+    original=application.chat.model_bundle_runtime.generate
+    def generate(**kwargs):
+        result=original(**kwargs)
+        if kwargs['messages'][0]['content']=='Answer producer probe':result.finish_reason='maximum_output'
+        return result
+    application.chat.model_bundle_runtime.generate=generate
+    def research(self,**kwargs):
+        args = ([{'role':'system','content':'Answer producer probe'}],)
+        text=getattr(self,callback)(*args) if callback=='generate_structured' else getattr(self,callback)(*args,lambda _:None)
+        if callback.startswith('generate_structured'):
+            text=json.loads(text)['answer']
+        return {'answer':text,'status':'completed','sources':[],'claims':[]}
+    monkeypatch.setattr(LiveRunners,'run_research',research)
+    _,messages=_send(application,'Write a complete report.',settings={'context_window_tokens':32768,
+        'maximum_output_mode':'automatic','research_available':True,'research_command':True})
+    details=messages[-1]['technical_details']
+    assert seen==[16384]
+    assert details['finish_reason']=='maximum_output'
+    assert details['turn_completion']=='partial'
+    assert details['answer_generation']['maximum_output_tokens']==16384
+
+
+@pytest.mark.parametrize('limit',[64,32768])
+def test_final_recovery_respects_manual_limit_and_never_hides_truncation(application,tmp_path,limit):
+    seen=[]
+    def reply(kwargs):
+        if any('previous draft failed visible-output validation' in m.get('content','') for m in kwargs['messages']):
+            seen.append(kwargs['maximum_output_tokens'])
+            return 'A recovered answer that has not finished yet.'
+        return '<think>The draft is still unfinished.'
+    _wire(application,tmp_path,reply,image_ready=False)
+    application.chat.model_bundle_runtime.profile.context_limit=131072
+    original=application.chat.model_bundle_runtime.generate
+    def generate(**kwargs):
+        result=original(**kwargs);result.finish_reason='maximum_output';return result
+    application.chat.model_bundle_runtime.generate=generate
+    _,messages=_send(application,'Write a detailed report.',settings={'context_window_tokens':131072,
+        'maximum_output_mode':'manual','maximum_output_tokens':limit})
+    details=messages[-1]['technical_details']
+    assert seen==[limit]
+    assert details['finish_reason']=='maximum_output'
+    assert details['turn_completion']=='partial'
+
+
+@pytest.mark.parametrize('repair_finish',['maximum_output','end_of_generation'])
+def test_routing_prose_repair_reports_its_own_completion(application,tmp_path,repair_finish):
+    def reply(kwargs):
+        if kwargs['messages'][0].get('content','').startswith('Your previous reply was JSON'):
+            return 'The requested explanation is complete.'
+        return '{"unexpected_protocol":"unfinished"}'
+    _wire(application,tmp_path,reply,image_ready=False)
+    original=application.chat.model_bundle_runtime.generate
+    def generate(**kwargs):
+        result=original(**kwargs)
+        result.finish_reason=repair_finish if result.text.startswith('The requested') else 'maximum_output'
+        return result
+    application.chat.model_bundle_runtime.generate=generate
+    _,messages=_send(application,'Explain the topic.')
+    details=messages[-1]['technical_details']
+    assert details['finish_reason']==repair_finish
+    assert details['turn_completion']==('partial' if repair_finish=='maximum_output' else 'done')
 
 
 def test_the_routing_instruction_is_absent_when_nothing_is_reachable(

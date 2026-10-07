@@ -39,6 +39,8 @@ def test_assistant_identity_guess_is_not_an_eligible_source():
 def test_ordinary_public_request_does_not_need_personal_reference_resolution():
     assert not needs_personal_query("Show me the latest Python release")
     assert needs_personal_query("Find domains using my name")
+    assert not needs_personal_query("My man, search the web for this report")
+    assert not needs_personal_query("Research for me the early observatory measurements")
 
 
 def test_unresolved_pronoun_cannot_be_sent_as_a_personal_name():
@@ -61,7 +63,11 @@ def test_forced_and_learned_research_clarify_missing_personal_subject_before_dis
         reply_text="", request="Search my name online",
         history=[{"role": "user", "content": "Search my name online"}],
         conversation_id="fixture", message_id="fixture",
-        generation_settings={"research_forced": forced, "learned_route": "research"},
+        generation_settings={
+            "research_forced": forced,
+            "research_available": True,
+            "learned_route": "research",
+        },
         context=SimpleNamespace(),
     )
     assert outcome.content == "Which name should I look up?"

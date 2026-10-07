@@ -700,7 +700,42 @@ class AutomationBroker:
                             processes.append(process)
         for process in processes:
             _terminate_process(process)
+        if BROWSER_CAPABILITY in capabilities and self._browser_client is not None:
+            self._browser_client.close()
         return self.status()
+
+    def invoke_verification_terminal(self, argv, working_directory, *, should_stop,
+                                     timeout_seconds=60, lock_in_selected=False):
+        """Narrow per-turn authority from selecting Lock In; no persistent grant.
+
+        The generated project lives below the broker's verification artifact root.
+        This is local code execution, not a filesystem sandbox or elevation grant.
+        """
+        from .verification_terminal import run_check
+
+        self._require_open()
+        if lock_in_selected is not True:
+            raise PermissionError("Generated-code execution requires Lock In selection")
+        directory = Path(working_directory).resolve()
+        root = (self.artifact_root / "code-verification").resolve()
+        if not directory.is_relative_to(root) or directory == root:
+            raise PermissionError("Verification must run in its generated project directory")
+        audit_id = self._start_audit(event="invoke", capability=TERMINAL_CAPABILITY,
+            request={"purpose":"lock_in_verification", "argv":list(argv),
+                     "working_directory":str(directory), "authority_source":"lock_in_selection",
+                     "timeout_seconds":timeout_seconds, "elevated":False})
+        try:
+            result = run_check(argv, directory, should_stop=lambda: self._closed or should_stop(),
+                               timeout_seconds=timeout_seconds)
+            result["audit_record_id"] = audit_id
+            outcome = ("revoked" if result["status"] == "cancelled" else "timed_out"
+                       if result["status"] == "timed_out" else "succeeded"
+                       if result["status"] == "completed" and result.get("exit_code") == 0 else "failed")
+            self._finish_audit(audit_id, outcome=outcome, result=result)
+            return result
+        except BaseException as error:
+            self._finish_audit(audit_id, outcome="failed", error={"type":type(error).__name__,"message":str(error)})
+            raise
 
     def invoke(self, request: Mapping[str, Any]) -> dict[str, Any]:
         self._require_open()
@@ -1001,6 +1036,11 @@ class AutomationBroker:
         )
         return [self._public_audit(row) for row in rows]
 
+    def audit_record(self, audit_id: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one(
+            'SELECT * FROM automation_audit_records WHERE id = ?', (str(audit_id),))
+        return self._public_audit(row) if row else None
+
     def close(self) -> None:
         for client in (self._uia_client, getattr(self, "_browser_client", None)):
             if client is not None:
@@ -1044,7 +1084,7 @@ class AutomationBroker:
             raise ValueError(
                 f"Files operation must be one of: {', '.join(sorted(FILE_OPERATIONS))}"
             )
-        target = _existing_path(arguments.get("path"), must_exist=operation != "create_directory")
+        target = _existing_path(arguments.get("path"), must_exist=operation not in {"create_directory", "write"})
         pattern = str(arguments.get("pattern") or "").strip()
         recursive = bool(arguments.get("recursive"))
         explicit_paths = arguments.get("paths")
@@ -1094,15 +1134,64 @@ class AutomationBroker:
         if operation == "read":
             if not target.is_file():
                 raise ValueError(f"Not a file: {target}")
-            text = target.read_text(encoding="utf-8", errors="replace")
+            data = target.read_bytes()
+            text = data.decode("utf-8", errors="replace")
             record.update(
                 {
                     "content": text[:MAX_FILE_READ_CHARACTERS],
+                    "sha256": hashlib.sha256(data).hexdigest(),
                     "truncated": len(text) > MAX_FILE_READ_CHARACTERS,
                     "mutating": False,
                     "status": "succeeded",
                 }
             )
+            return record
+
+        if operation == "write":
+            content = arguments.get("content")
+            overwrite = arguments.get("overwrite", False)
+            if not isinstance(content, str) or not isinstance(overwrite, bool):
+                raise ValueError("File write requires text content and boolean overwrite")
+            payload = content.encode("utf-8")
+            if len(payload) > 1024 * 1024:
+                raise ValueError("File write exceeds the 1 MiB limit")
+            if pattern or recursive or explicit_paths is not None:
+                raise ValueError("File write requires one exact file path")
+            if not target.parent.is_dir() or target.is_dir():
+                raise ValueError("File write requires an existing parent directory and a file destination")
+            existed = target.exists()
+            before = None
+            if existed:
+                if not overwrite:
+                    raise FileExistsError("File exists; read it before requesting overwrite")
+                expected = arguments.get("expected_sha256")
+                if not isinstance(expected, str) or not expected or sha256_file(target) != expected:
+                    raise ValueError("File changed or expected_sha256 is missing; read it again before writing")
+                if target.stat().st_size <= 1024 * 1024:
+                    before = target.read_text(encoding='utf-8', errors='replace')
+                atomic_write_bytes(target, payload)
+            else:
+                with target.open("xb") as handle:
+                    handle.write(payload)
+            digest = hashlib.sha256(payload).hexdigest()
+            verified = sha256_file(target) == digest
+            record.update({"status":"succeeded" if verified else "failed", "mutating":True,
+                "affected_paths":[str(target)], "created":not existed, "size_bytes":len(payload),
+                "sha256":digest, "readback_verified":verified,
+                "content":content[:MAX_FILE_READ_CHARACTERS], "truncated":len(content)>MAX_FILE_READ_CHARACTERS})
+            if verified and (before is not None or not existed):
+                import difflib
+                old_lines = (before or '').splitlines()
+                new_lines = content.splitlines()
+                # Bound diff CPU/output for minified or unusually large files.
+                if len(old_lines) + len(new_lines) <= 10000:
+                    lines = list(difflib.unified_diff(old_lines, new_lines,
+                        fromfile=str(target), tofile=str(target), lineterm=''))
+                    diff = '\n'.join(lines)
+                    record['change'] = {'path':str(target), 'created':not existed,
+                        'added':sum(line.startswith('+') and not line.startswith('+++') for line in lines),
+                        'removed':sum(line.startswith('-') and not line.startswith('---') for line in lines),
+                        'diff':diff[:24000], 'truncated':len(diff)>24000}
             return record
 
 
@@ -1794,6 +1883,34 @@ class AutomationBroker:
 
         try:
             result = self._browser_client.call(command, payload)
+            if command == "capture_preview":
+                encoded = result.pop("png_base64", None)
+                if not isinstance(encoded, str) or len(encoded) > 12_000_000:
+                    raise BrowserError("The browser preview exceeded its size limit.")
+                try:
+                    png = base64.b64decode(encoded, validate=True)
+                except ValueError as error:
+                    raise BrowserError("The browser preview was not a valid PNG.") from error
+                if len(png) > 8_388_608 or len(png) < 24 or png[:8] != b"\x89PNG\r\n\x1a\n":
+                    raise BrowserError("The browser preview was not a bounded PNG.")
+                width, height = struct.unpack(">II", png[16:24])
+                if not 0 < width <= 1280 or not 0 < height <= 900:
+                    raise BrowserError("The browser preview dimensions exceeded their limit.")
+                destination = self.artifact_root / "browser-previews" / f"preview-{new_id()}.png"
+                ensure_within(destination, self.artifact_root)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_bytes(destination, png)
+                previews = sorted(destination.parent.glob("preview-*.png"), key=lambda path: path.stat().st_mtime_ns, reverse=True)
+                for previous in previews[24:]:
+                    try:
+                        previous.unlink()
+                    except OSError:
+                        pass
+                result.update(width=width, height=height, artifact={
+                    "path": str(destination), "mime_type": "image/png", "format": "PNG",
+                    "width": width, "height": height, "size_bytes": len(png),
+                    "sha256": sha256_file(destination),
+                })
         except BrowserError as error:
             return {
                 "schema": AUTOMATION_SCHEMA,

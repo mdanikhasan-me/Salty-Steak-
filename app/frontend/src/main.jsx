@@ -7,6 +7,8 @@ import "./styles/global.css";
 import "./styles/approved-workspace.css";
 import "./styles/workspace-polish.css";
 import "./styles/charming-palette.css";
+import "./styles/response-experience.css";
+import './styles/work-activity.css';
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 

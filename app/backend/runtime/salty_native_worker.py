@@ -217,14 +217,22 @@ class SaltyNativeWorkerRuntime:
             "warmup_generated_tokens": self._warmup_generated_tokens,
             "runtime_id": None,
             "worker_pid": None,
-            "runtime_family": "salty_native_steak20",
+            "runtime_family": (
+                "salty_native_steak35"
+                if "steak35" in str(self.library_directory).casefold()
+                else "salty_native_steak20"
+            ),
             "engine": "app_owned_private_native_worker",
             "profile": asdict(self.profile),
             "source_sha256": self.source_sha256,
             "verified_source_sha256": None,
             "model_path": str(self.model_path),
             "adapters": [dict(value) for value in self.adapters],
-            "architectural_context_limit": 262_144,
+            "architectural_context_limit": (
+                800_000
+                if "steak35" in str(self.library_directory).casefold()
+                else 262_144
+            ),
             "configured_context_limit": self.profile.context_limit,
             "resident_context_limit": self.profile.initial_context_limit,
             "allocated_context_limit": None,
@@ -415,6 +423,8 @@ class SaltyNativeWorkerRuntime:
             )
             process.stdin.flush()
             deadline = time.monotonic() + timeout
+            streaming = command in {"generate", "generate_identity"}
+            progress_tokens = {"prefill": 0, "decode": 0}
             cancellation_requested = False
             cancellation_deadline: float | None = None
             while time.monotonic() < deadline:
@@ -461,8 +471,21 @@ class SaltyNativeWorkerRuntime:
 
 
                     continue
+                if streaming and response.get("event") == "generation_progress":
+                    progress = response.get("generation_progress") or {}
+                    count = progress.get("token_count")
+                    phase = progress.get("phase")
+                    if phase in progress_tokens and isinstance(count, int) and count > progress_tokens[phase]:
+                        progress_tokens[phase] = count
+                        deadline = time.monotonic() + timeout
+                    continue
                 if response.get("event") == "generation_preview":
                     preview = response.get("generation_preview")
+                    if streaming and isinstance(preview, dict):
+                        count = preview.get("token_count")
+                        if isinstance(count, int) and count > progress_tokens["decode"]:
+                            progress_tokens["decode"] = count
+                            deadline = time.monotonic() + timeout
                     if on_preview is not None and isinstance(preview, dict):
                         try:
                             on_preview(dict(preview))
@@ -477,6 +500,9 @@ class SaltyNativeWorkerRuntime:
                         str(error.get("message") or "The private native worker failed")
                     )
                 return response.get("result")
+            if streaming:
+                self._terminate_process_locked()
+                raise TimeoutError(f"The private native worker made no progress for {timeout:g} seconds during {command}")
             raise TimeoutError(f"The private native worker timed out during {command}")
 
     def load(self) -> dict[str, Any]:
@@ -925,10 +951,12 @@ def _serve() -> int:
                 )
                 last_preview_at = 0.0
                 last_preview_tokens = -1
+                decode_progress: dict[str, Any] = {}
 
                 def emit_preview(piece: str, *, force: bool = False) -> None:
                     nonlocal last_preview_at, last_preview_tokens
                     current_preview = preview.feed(piece) if piece else preview.snapshot()
+                    current_preview.update(decode_progress)
                     if current_preview["token_count"] <= 0:
                         return
                     now = time.monotonic()
@@ -944,6 +972,15 @@ def _serve() -> int:
                     sys.stdout.write(json.dumps(event, separators=(",", ":")) + "\n")
                     sys.stdout.flush()
 
+                def emit_progress(progress: dict[str, Any]) -> None:
+                    if progress.get("phase") == "decode":
+                        decode_progress.update({key: value for key, value in progress.items() if key != "phase"})
+                    sys.stdout.write(json.dumps({
+                        "id": request_id, "event": "generation_progress",
+                        "generation_progress": progress,
+                    }, separators=(",", ":")) + "\n")
+                    sys.stdout.flush()
+
                 with _CancellationWatcher(cancellation_path) as cancellation:
                     generation_method = (
                         runtime.generate_identity
@@ -954,11 +991,12 @@ def _serve() -> int:
                         **payload,
                         should_stop=cancellation.requested.is_set,
                         on_text=emit_preview,
+                        on_progress=emit_progress,
                     )
 
 
 
-                if preview.token_count != last_preview_tokens:
+                if decode_progress.get("token_count", preview.token_count) != last_preview_tokens:
                     emit_preview("", force=True)
                 result = asdict(generation)
             elif command == "classify_route":

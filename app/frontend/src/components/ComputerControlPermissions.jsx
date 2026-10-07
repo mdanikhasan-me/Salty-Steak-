@@ -1,5 +1,6 @@
 import { AppWindow, Layers, Monitor, MousePointerClick, Terminal, Folder, Globe, MessageCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import "../styles/computer-tools.css";
 import {
   COMPUTER_CONTROL_CAPABILITIES,
   automationResultSummary,
@@ -30,6 +31,7 @@ const ICONS = {
 const MANUAL_CONTROLS = new Set(["terminal.execute", "screen.capture", "input.control", "application.launch", "window.control"]);
 
 export function ComputerControlPermissions({
+  onOpenBrowser,
   adapter = null,
   onAnalyzeCapture = null,
   proposedInvocation = null,
@@ -135,7 +137,8 @@ export function ComputerControlPermissions({
   }
 
   function beginGrant(item) {
-    if (!item.available || item.granted) return;
+    const refreshingStaleGrant = item.granted && item.actionLabel === "Refresh access";
+    if (!item.available || (item.granted && !refreshingStaleGrant)) return;
     setError("");
     setInvocationReview(null);
     setTerminalDraft(null);
@@ -290,7 +293,7 @@ export function ComputerControlPermissions({
         <PermissionReview
           title={`Grant ${grantReview.capability.name} access?`}
           summary={grantScopeSummary(grantReview)}
-          note="The grant persists locally until you revoke it. It never authorizes an action without another confirmation."
+          note="This grant stays on this computer until you revoke it. Actions follow the Ask or Full access mode selected beside the composer."
           confirmLabel="Grant access"
           busy={busyId === grantReview.capability.id}
           onCancel={() => setGrantReview(null)}
@@ -510,14 +513,25 @@ export function ComputerControlPermissions({
     <section ref={sectionRef} className="computer-control-permissions" aria-labelledby="computer-control-title">
       <header className="plugin-section-label">
         <strong id="computer-control-title">Computer access</strong>
-        <span>Every grant and every command or capture requires your explicit confirmation.</span>
+        <span>Choose what Sawlper can use. Local actions follow your task; Ask requests approval for destructive changes.</span>
       </header>
       {loading ? <p className="automation-permission-notice" role="status">Checking the local broker...</p> : null}
-      <div className="plugins-list" role="list">
-        {status.capabilities.map((item) => {
+      {[
+        { id: "browser", title: "Browser" },
+        { id: "computer", title: "Computer" },
+        { id: "terminal_files", title: "Terminal and files" },
+      ].map((group) => {
+        const capabilities = status.capabilities.filter((item) => item.group === group.id);
+        if (!capabilities.length) return null;
+        return <section className="computer-tool-group" key={group.id} aria-label={group.title}>
+          <h3>{group.title}</h3>
+          {group.id === "browser" && onOpenBrowser ? <button type="button" className="plugin-action" onClick={() => onOpenBrowser()}>Open browser</button> : null}
+          <div className="plugins-list" role="list">
+        {capabilities.map((item) => {
           const Icon = ICONS[item.uiId] || AppWindow;
           const busy = busyId === item.id;
-          const actionDisabled = busy || !item.available || (item.granted && !item.effectiveEnabled);
+          const refreshingStaleGrant = item.granted && item.actionLabel === "Refresh access";
+          const actionDisabled = busy || !item.available || (item.granted && !item.effectiveEnabled && !refreshingStaleGrant);
           return (
             <div className="plugin-row" role="listitem" key={item.id} aria-busy={busy || undefined}>
               <span className={`plugin-row__icon plugin-row__icon--${item.uiId}`} aria-hidden="true">
@@ -545,12 +559,12 @@ export function ComputerControlPermissions({
                     Revoke
                   </button>
                 ) : null}
-                {item.granted && item.effectiveEnabled && !MANUAL_CONTROLS.has(item.id) ? <span className="automation-agent-availability">Available in Agent</span> : <button
+                {item.granted && item.effectiveEnabled && !MANUAL_CONTROLS.has(item.id) ? <span className="automation-agent-availability">Available in Sawlper</span> : <button
                   type="button"
                   className="plugin-action"
                   disabled={actionDisabled}
                   title={actionDisabled ? item.detail : undefined}
-                  onClick={() => (item.granted ? beginInvocation(item) : beginGrant(item))}
+                  onClick={() => (item.granted && item.effectiveEnabled ? beginInvocation(item) : beginGrant(item))}
                 >
                   {busy ? (
                     <span className="activity-phrase activity-phrase--compact" role="status" aria-live="polite" aria-atomic="true">
@@ -563,7 +577,43 @@ export function ComputerControlPermissions({
             </div>
           );
         })}
-      </div>
+          </div>
+        </section>;
+      })}
+      {status.capabilities.some((item) => item.group === "app_integrations") ? (
+        <details className="computer-tool-integrations">
+          <summary>App integrations</summary>
+          <p>Optional tools for specific apps.</p>
+          <div className="plugins-list" role="list">
+            {status.capabilities.filter((item) => item.group === "app_integrations").map((item) => {
+              const Icon = ICONS[item.uiId] || AppWindow;
+              const busy = busyId === item.id;
+              const refreshingStaleGrant = item.granted && item.actionLabel === "Refresh access";
+              const actionDisabled = busy || !item.available || (item.granted && !item.effectiveEnabled && !refreshingStaleGrant);
+              return (
+                <div className="plugin-row" role="listitem" key={item.id} aria-busy={busy || undefined}>
+                  <span className={`plugin-row__icon plugin-row__icon--${item.uiId}`} aria-hidden="true"><Icon /></span>
+                  <div className="plugin-row__copy">
+                    <div className="plugin-row__title-line">
+                      <strong>{item.name}</strong>
+                      <span className={`plugin-state plugin-state--${item.stateTone}`}><i aria-hidden="true" />{item.stateLabel}</span>
+                    </div>
+                    <p>{item.description}</p>
+                    <small>{item.detail}</small>
+                  </div>
+                  <div className="plugin-row__action automation-actions">
+                    {item.granted ? <button type="button" className="plugin-action plugin-action--quiet" disabled={busy} onClick={() => revoke(item)}>Revoke</button> : null}
+                    {item.granted && item.effectiveEnabled && !MANUAL_CONTROLS.has(item.id) ? <span className="automation-agent-availability">Available in Sawlper</span> : <button type="button" className="plugin-action" disabled={actionDisabled} title={actionDisabled ? item.detail : undefined} onClick={() => (item.granted && item.effectiveEnabled ? beginInvocation(item) : beginGrant(item))}>
+                      {busy ? <span className="activity-phrase activity-phrase--compact" role="status" aria-live="polite" aria-atomic="true">Working…</span> : item.actionLabel}
+                    </button>}
+                  </div>
+                  {activeReviewCapability === item.id ? <div className="automation-inline-review">{activeReview}</div> : null}
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      ) : null}
 
       {lastResult ? (
         <div>

@@ -1,0 +1,56 @@
+.browser-panel-backdrop{position:fixed;inset:0;z-index:180;background:#0006;display:flex;align-items:center;justify-content:center;padding:24px}
+.browser-panel{width:min(1100px,96vw);height:min(850px,93vh);display:flex;flex-direction:column;overflow:hidden;border:1px solid #ffffff15;border-radius:18px;background:#202120;color:#e8e8e5;box-shadow:0 22px 80px #0006}
+.browser-panel button{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:7px;background:transparent;color:inherit;padding:8px;cursor:pointer;white-space:nowrap}
+.browser-panel button:hover{background:#ffffff0c}.browser-panel button:disabled{opacity:.4;cursor:default}.browser-panel button:focus-visible,.browser-panel input:focus-visible{outline:2px solid #a7bad2;outline-offset:2px}
+.browser-panel__header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #ffffff0a}.browser-panel__header>div{display:flex;align-items:center;gap:10px}.browser-panel__header span{color:#a7aaa5;font-size:12px;margin-left:8px}
+.browser-panel__tabs{display:flex;gap:4px;padding:9px 12px 0;overflow-x:auto;flex-shrink:0}.browser-panel__tab{display:flex;border-radius:8px 8px 0 0;background:#ffffff05;max-width:240px}.browser-panel__tab button[role=tab]{max-width:205px;overflow:hidden;text-overflow:ellipsis;display:block;font-size:12px}.browser-panel__tab:has([aria-selected=true]){background:#343634}
+.browser-panel__address{display:flex;align-items:center;gap:5px;padding:10px 12px}.browser-panel__address input{flex:1;min-width:0;background:#171817;border:1px solid #ffffff0d;border-radius:8px;padding:9px 12px;color:inherit;font-size:13px}
+.browser-panel__viewport{flex:1;min-height:120px;overflow:auto;background:#101110;display:flex;align-items:flex-start;justify-content:center}.browser-panel__viewport img{display:block;width:100%;height:100%;object-fit:contain;object-position:top center}.browser-panel__footer{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;color:#b5b8b2;font-size:12px}.browser-panel__footer button{color:#e8e8e5;background:#ffffff08}
+.browser-panel__note{margin:0;padding:0 18px 12px;color:#949b92;font-size:11px;line-height:1.5}.browser-panel__error{margin:0;padding:10px 18px;background:#602b252e;color:#f0b5a7;font-size:13px}.browser-panel__empty{display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:45px;text-align:center;color:#aab0a7}.browser-panel__empty h3,.browser-panel__empty p{margin:0}.browser-panel__empty button{background:#ffffff10}
+@media(max-width:600px){.browser-panel-backdrop{padding:8px}.browser-panel{height:94vh;width:100%}.browser-panel__header span{display:none}.browser-panel__header{padding:12px}.browser-panel__note{font-size:10px}}
+.browser-panel__text{white-space:pre-wrap;overflow-wrap:anywhere;align-self:stretch;width:100%;margin:0;padding:24px;font:14px/1.7 system-ui;color:#d9ded6}
+.browser-panel__footer>div{display:flex;gap:6px}
+.browser-panel-dock{grid-column:3;grid-row:1;min-width:0;min-height:0;padding:8px 10px 12px 0;z-index:20;display:flex}
+.chat-page.chat-page--browser-open{grid-template-columns:0 minmax(360px,1fr) minmax(400px,48%)}
+.chat-page.chat-page--browser-open.chat-page--sidebar-open{grid-template-columns:var(--sidebar-width,220px) minmax(350px,1fr) minmax(400px,46%)}
+.browser-panel-dock .browser-panel{width:100%;height:100%;max-height:none;border-radius:14px;box-shadow:none}
+.browser-panel-dock .browser-panel__header{padding:12px}.browser-panel-dock .browser-panel__header span{display:none}
+.browser-panel-dock .browser-panel__address{gap:2px;padding:8px}.browser-panel-dock .browser-panel__address button{padding:7px}
+.browser-panel-dock .browser-panel__viewport{position:relative;overflow:hidden}.browser-panel-dock .browser-panel__text{overflow:auto;height:100%}
+.chat-page--browser-open .conversation-workspace>.composer{width:calc(100% - 28px)}
+.chat-page--browser-open .message-scroll{padding-inline:20px}.chat-page--browser-open .message-list{width:100%}
+@media(max-width:1100px){.chat-page.chat-page--browser-open.chat-page--sidebar-open{grid-template-columns:0 minmax(330px,1fr) minmax(400px,52%)}.chat-page--browser-open .chat-sidebar{display:none}}
+@media(max-width:760px){.chat-page.chat-page--browser-open,.chat-page.chat-page--browser-open.chat-page--sidebar-open{grid-template-columns:0 minmax(0,1fr) 0}.browser-panel-dock{position:fixed;inset:48px 8px 8px;padding:0;z-index:80}}
+/* Compact split-pane layout informed by Claude's conversation/artifact view. */
+.chat-page.chat-page--browser-open{--browser-pane-width:clamp(380px,42vw,620px);grid-template-columns:0 minmax(340px,1fr) var(--browser-pane-width);transition:none}
+.chat-page.chat-page--browser-open.chat-page--sidebar-open{grid-template-columns:var(--sidebar-width,224px) minmax(340px,1fr) var(--browser-pane-width)}
+.browser-panel-dock{position:relative;padding:0;z-index:20}
+.browser-panel-dock .browser-panel{border:0;border-left:1px solid #ffffff12;border-radius:0;background:#1b1c1b;font-family:inherit;box-shadow:none}
+.browser-panel-dock .browser-panel__header{height:40px;min-height:40px;padding:0 10px;gap:10px;border-bottom:1px solid #ffffff0b;justify-content:flex-start}
+.browser-panel__header>strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500;color:#c9ccc6}
+.browser-panel .browser-panel__view-switch{gap:1px;border:1px solid #ffffff0b;border-radius:7px;padding:2px;display:flex}
+.browser-panel__view-switch button{width:25px;height:25px;padding:4px;border-radius:4px;color:#8e958a}
+.browser-panel__view-switch button[aria-pressed=true]{background:#ffffff0b;color:#e1e4dc}
+.browser-panel .browser-panel__header-actions{gap:2px;display:flex}.browser-panel__header-actions button{height:28px;width:28px;padding:5px;color:#a4aa9e}
+.browser-panel-dock .browser-panel__address{height:36px;min-height:36px;padding:3px 8px;gap:2px;border-bottom:1px solid #ffffff09;background:#1b1c1b}
+.browser-panel__address input{border:0;background:#ffffff05;padding:4px 8px;height:25px;border-radius:5px;font-size:11px;line-height:17px}
+.browser-panel-dock .browser-panel__address button{height:25px;width:25px;padding:4px;color:#a4aa9e}
+.browser-panel__tabs{padding:3px 7px 0;gap:2px;height:30px;min-height:30px;background:#1b1c1b}
+.browser-panel__tabs--single{display:none}.browser-panel__tab button[role=tab]{font-size:11px;padding:5px 8px;max-width:170px}.browser-panel__tab>button:last-child{padding:4px}
+.browser-panel__viewport{background:#151615}.browser-panel__text{padding:18px;font-size:13px}
+.browser-panel__divider{position:absolute;left:-4px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:2;touch-action:none}
+.browser-panel__divider:after{content:'';position:absolute;left:3px;top:0;bottom:0;width:2px;background:transparent}
+.browser-panel__divider:hover:after,.browser-panel__divider:focus-visible:after{background:#ffffff30}.browser-panel__divider:focus-visible{outline:none}
+.chat-page--browser-open .conversation-workspace>.composer{max-width:660px;width:calc(100% - 40px)}
+.chat-page--browser-open .message-list{max-width:660px}.chat-page--browser-open .chat-welcome h1{font-size:22px}
+.chat-page--browser-open .conversation-workspace--empty{padding-bottom:0;justify-content:flex-start}
+.chat-page--browser-open .conversation-workspace--empty .message-scroll{flex:1;display:flex;align-items:center;padding:24px}
+.chat-page--browser-open .conversation-workspace--empty>.composer{margin-bottom:18px}
+@media(max-width:1100px){.chat-page.chat-page--browser-open.chat-page--sidebar-open{grid-template-columns:0 minmax(330px,1fr) var(--browser-pane-width)}.chat-page--browser-open .chat-sidebar{display:none}}
+@media(max-width:760px){.chat-page.chat-page--browser-open,.chat-page.chat-page--browser-open.chat-page--sidebar-open{grid-template-columns:0 minmax(0,1fr) 0}.browser-panel-dock{position:fixed;inset:48px 0 0;padding:0;z-index:80}.browser-panel__divider{display:none}}
+.chat-page--browser-open .conversation-workspace{container-type:inline-size;container-name:browser-chat}
+.chat-page--browser-open .composer__tools{gap:3px}
+.chat-page--browser-open .composer-control--authority{flex-shrink:0}
+.chat-page--browser-open .composer-tool,.chat-page--browser-open .composer-tool>span{white-space:nowrap}
+@container browser-chat (max-width:640px){.chat-page--browser-open .composer-control--research .composer-tool>span,.chat-page--browser-open .composer-control--plugins .composer-tool>span{display:none}}
+@container browser-chat (max-width:520px){.chat-page--browser-open .composer-control--authority .composer-tool>span{display:none}}

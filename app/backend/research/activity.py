@@ -177,6 +177,7 @@ def research_progress_snapshot(
         "question": str(report.get("question") or ""),
         "profile": str(report.get("profile") or "verification"),
         "hard_ceiling_seconds": _seconds(report.get("hard_ceiling_seconds")),
+        "coverage_required": bool(report.get('coverage_required')),
         "elapsed_seconds": _seconds(
             report.get("elapsed_seconds")
             if report.get("elapsed_seconds") is not None
@@ -304,8 +305,11 @@ def build_research_activity_journal(snapshot: Mapping[str, Any]) -> list[dict[st
             kind="thinking",
             label=_past(final, "Set the depth and hard ceiling", "Set the depth and hard ceiling"),
             detail=(
+                (f"{profile} research has a {ceiling} source-retrieval budget, plus up to three bounded evidence reviews and answer generation."
+                if snapshot.get('coverage_required') else
                 f"{profile} research has a {ceiling} hard ceiling and may stop earlier "
                 "only when its evidence gate is satisfied."
+                )
             ),
             state="completed",
         ),

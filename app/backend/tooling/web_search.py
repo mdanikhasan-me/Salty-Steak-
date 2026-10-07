@@ -34,6 +34,10 @@ BROWSER_USER_AGENT = (
 MAX_QUERY_CHARS = 500
 MAX_RESULTS = 24
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+SEARCH_CHALLENGE_SIGNALS = (
+    'anomaly-modal', 'anomaly.js', 'unfortunately, bots use duckduckgo too',
+    'complete the following challenge', 'verify you are human',
+)
 _SEARCH_INTENT = re.compile(
     r"\b(?:search|browse|look\s*up|find\s+(?:online|on\s+the\s+web)|research|"
     r"latest|current|today|tonight|this\s+week|news|weather|price|stock|score|"
@@ -93,8 +97,11 @@ class WebSearchClient:
             payload = response.read(MAX_RESPONSE_BYTES + 1)
         if len(payload) > MAX_RESPONSE_BYTES:
             raise RuntimeError("The web-search response exceeded the safe size limit")
+        document = payload.decode("utf-8", errors="replace")
         parser = _WebIndexResultParser()
-        parser.feed(payload.decode("utf-8", errors="replace"))
+        parser.feed(document)
+        if not parser.results and any(signal in document.casefold() for signal in SEARCH_CHALLENGE_SIGNALS):
+            raise RuntimeError("The web-search provider returned a verification challenge")
         results: list[dict[str, str]] = []
         seen: set[str] = set()
         for item in parser.results:

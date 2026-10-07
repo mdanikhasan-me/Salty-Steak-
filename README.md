@@ -302,3 +302,9 @@ The [Salty Steak Source-Available License](LICENSE) permits viewing the source a
 Third-party dependencies keep their own licenses. No rights are granted to private model weights, checkpoints, datasets, tokenizers, runtimes, or other artifacts not included in this repository.
 
 <p align="center"><sub>Built and maintained by MD Anik Hasan (Sawlper).</sub></p>
+# Personal assistant roadmap
+
+The current priorities, data-preservation requirements, version-control approach,
+and future fine-tuning/self-improvement direction are recorded in
+[the personal assistant roadmap](docs/PERSONAL_ASSISTANT_ROADMAP.md).
+

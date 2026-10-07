@@ -4,34 +4,39 @@ export const COMPUTER_CONTROL_CAPABILITIES = Object.freeze([
   Object.freeze({
     id: "terminal.execute",
     uiId: "terminal",
-    name: "Terminal",
-    description: "Run one reviewed argv command inside the granted project directory.",
+    group: "terminal_files",
+    name: "Run a command",
+    description: "Run a command from the project folder.",
     invokeLabel: "Run command",
   }),
   Object.freeze({
     id: "files.manage",
     uiId: "files",
-    name: "Files and folders",
-    description: "Inspect and manage files under paths you explicitly authorize.",
+    group: "terminal_files",
+    name: "Manage files and folders",
+    description: "Work with files in the folders you allow.",
     invokeLabel: "Inspect files",
   }),
   Object.freeze({
     id: "screen.capture",
     uiId: "screen_capture",
-    name: "Screen capture",
-    description: "Capture the primary screen to an app-owned local artifact.",
+    group: "computer",
+    name: "See the screen",
+    description: "Take a screenshot saved on this computer.",
     invokeLabel: "Capture now",
   }),
   Object.freeze({
     id: "input.control",
     uiId: "input_control",
-    name: "Mouse and keyboard",
-    description: "Move and click the pointer and send keystrokes to whichever window has focus.",
+    group: "computer",
+    name: "Use mouse and keyboard",
+    description: "Control whichever window is currently active.",
     invokeLabel: "Send input",
   }),
   Object.freeze({
     id: "application.launch",
     uiId: "application_launch",
+    group: "computer",
     name: "Open apps and links",
     description: "Start an installed application or open a web link with its default handler.",
     invokeLabel: "Open now",
@@ -39,28 +44,32 @@ export const COMPUTER_CONTROL_CAPABILITIES = Object.freeze([
   Object.freeze({
     id: "browser.control",
     uiId: "browser_control",
-    name: "Web pages",
-    description: "Read and operate web pages in a browser session Salty Steak owns, separate from your own browser.",
+    group: "browser",
+    name: "Use the browser",
+    description: "Read and use pages in a browser window opened by Salty Steak.",
     invokeLabel: "Read page",
   }),
   Object.freeze({
     id: "ui.automation",
     uiId: "ui_automation",
-    name: "Application controls",
-    description: "Read and operate buttons, text boxes and menus inside apps through Windows accessibility.",
+    group: "computer",
+    name: "Use app controls",
+    description: "Read and operate buttons, text fields, and menus in apps.",
     invokeLabel: "Inspect window",
   }),
   Object.freeze({
     id: "window.control",
     uiId: "window_control",
-    name: "Windows and focus",
-    description: "List open windows and bring one to the front or close it by its title.",
+    group: "computer",
+    name: "Manage windows",
+    description: "Find, focus, or close an open window by its title.",
     invokeLabel: "List windows",
   }),
   Object.freeze({
     id: "discord.inspect",
     uiId: "discord_inspect",
-    name: "Discord inspection",
+    group: "app_integrations",
+    name: "Inspect Discord",
     description: "Inventory and read the currently signed-in Discord desktop session through bounded native controls.",
     invokeLabel: "Inspect Discord",
   }),
@@ -395,7 +404,9 @@ function normaliseCapability(value, definition) {
   const effectiveEnabled = Boolean(
     value.effective_enabled === true && granted && platformSupported && constraintValid,
   );
-  const available = platformSupported && constraintValid && runtimeAvailable;
+  // A stale persisted scope can be repaired by granting again with the current
+  // installation's scope. It does not make the underlying tool unavailable.
+  const available = platformSupported && runtimeAvailable;
   let stateLabel = "Not granted";
   let stateTone = "quiet";
   let actionLabel = "Review access";
@@ -416,7 +427,7 @@ function normaliseCapability(value, definition) {
   } else if (!constraintValid) {
     stateLabel = "Needs attention";
     stateTone = "error";
-    actionLabel = "Unavailable";
+    actionLabel = "Refresh access";
     detail = String(value.constraint_error || "Persisted scope is invalid.");
   } else if (granted && !effectiveEnabled) {
     stateLabel = "Needs attention";

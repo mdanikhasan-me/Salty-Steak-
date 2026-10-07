@@ -38,6 +38,42 @@ def test_percentage_is_not_a_software_release():
     assert _status_fallback_answer('What is the latest Python release?', [finding]) == ''
 
 
+def test_requested_documentation_survives_a_verbose_secondary_source():
+    records = [
+        {'claim':f'c{i}', 'text':f'Python list mutability supports operation number {i}.',
+         'evidence':[{'url':'https://secondary.example/python', 'domain':'secondary.example',
+                      'title':'Python lists'}]}
+        for i in range(12)
+    ]
+    records.append({'claim':'official','text':'Lists are mutable sequences.',
+                    'evidence':[{'url':'https://docs.python.org/3/library/stdtypes.html',
+                                 'domain':'docs.python.org','title':'Python documentation'}]})
+    chosen = _select_finaliser_findings('What does Python documentation say about list mutability?',records)
+    assert any(record['claim']=='official' for record in chosen)
+
+
+def test_publisher_diversity_cannot_displace_requested_measurements():
+    primary={'url':'https://paper.example/study','domain':'paper.example','title':'Instrument calibration'}
+    records=[
+        {'claim':'time','text':'The instrument calibration time constant is 36 seconds.','evidence':[primary]},
+        {'claim':'sensitivity','text':'The instrument sensitivity was 10.7 volts per millimeter in January 1911 and 13.0 in May 1914, measured by fortnightly scale tests.','evidence':[primary]},
+    ]
+    records += [{'claim':f'other{i}','text':'The instrument is in an observatory with historical records.',
+        'evidence':[{'url':f'https://publisher{i}.example','domain':f'publisher{i}.example'}]} for i in range(12)]
+    selected=_select_finaliser_findings('What was the instrument sensitivity in January 1911 and May 1914, its time constant and calibration method?',records)
+    assert {'time','sensitivity'} <= {r['claim'] for r in selected}
+
+
+def test_citations_do_not_add_a_read_page_absent_from_answer_evidence():
+    evidence={'url':'https://docs.example/lists','title':'List documentation','validation':'validated'}
+    unrelated={'url':'https://news.example/unrelated','title':'Python list mutability news','validation':'validated'}
+    answer=_attach_validated_citations('Lists can change.',
+        [{'text':'Lists can change.','evidence':[evidence]}],
+        sources=[unrelated,evidence],question='Python list mutability')
+    assert 'docs.example/lists' in answer
+    assert 'news.example/unrelated' not in answer
+
+
 def test_non_release_numbers_and_unvalidated_claims_are_not_release_evidence():
     assert _status_fallback_answer('Latest Python version?', [{'text': 'Score 3.14 out of 5.'}]) == ''
     assert _status_fallback_answer('Latest Python version?', [{'text': 'Python 9.9 is released.', 'validated': False}]) == ''

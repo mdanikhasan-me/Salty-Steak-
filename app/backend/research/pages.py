@@ -197,7 +197,8 @@ def variant_values(text: str) -> set[str]:
 
 IN_STOCK = re.compile(
     r"\b(?:in\s?stock|available\s+now|ready\s+to\s+ship|"
-    r"schema\.org/InStock|\"InStock\"|>InStock<)\b",
+    r"schema\.org/InStock|\"InStock\"|>InStock<|"
+    r"(?:stock(?:\s+status)?|availability|condition)\s*:?\s*available)\b",
     re.IGNORECASE,
 )
 OUT_OF_STOCK = re.compile(

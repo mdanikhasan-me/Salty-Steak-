@@ -333,6 +333,7 @@ internal sealed class EmbeddedBackend : IDisposable
                 os.environ["VIRTUAL_ENV"] = virtual_environment
                 os.environ["SALTY_POTATO_WORKSPACE"] = workspace
                 os.environ["SALTY_POTATO_BUILD_ID"] = build_id
+                os.environ["SALTY_BROWSER_EMBEDDED"] = "1"
                 from app.backend.server import start_server
                 server_handle = start_server(
                     project_root=project_root,
@@ -649,6 +650,9 @@ internal sealed class MainWindow : Form
     private CompanionPreferences companionPreferences = new();
     private bool reducedMotion;
     private bool companionWorking;
+    private Panel? embeddedBrowserPanel;
+    private readonly SemaphoreSlim browserSurfaceGate = new(1, 1);
+    private int browserSurfaceRevision;
     private readonly string companionPreferencesPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Salty Steak", "companion.json");
 
     public MainWindow(string projectRoot, string applicationUrl, Action interfaceReady)
@@ -861,6 +865,11 @@ internal sealed class MainWindow : Form
                 var messageType = root.TryGetProperty("type", out var type)
                     ? type.GetString()
                     : null;
+                if (messageType == "browser_surface")
+                {
+                    _ = UpdateBrowserSurfaceAsync(root.Clone());
+                    return;
+                }
                 if (messageType == "companion_work") {
                     companionWorking = root.TryGetProperty("active", out var working) && working.ValueKind == JsonValueKind.True;
                     companion?.ApplyWorkState(companionWorking);
@@ -939,6 +948,52 @@ internal sealed class MainWindow : Form
                 Close();
             });
         };
+    }
+
+    private async Task UpdateBrowserSurfaceAsync(JsonElement message)
+    {
+        var revision = ++browserSurfaceRevision;
+        var visible = message.TryGetProperty("visible", out var shown) && shown.ValueKind == JsonValueKind.True;
+        if (!visible && embeddedBrowserPanel is null) return;
+        if (!visible) embeddedBrowserPanel!.Visible = false;
+        await browserSurfaceGate.WaitAsync();
+        try
+        {
+            if (revision != browserSurfaceRevision || IsDisposed) return;
+            if (embeddedBrowserPanel is null)
+            {
+                embeddedBrowserPanel = new Panel { BackColor = Color.FromArgb(16, 17, 16), Visible = false };
+                Controls.Add(embeddedBrowserPanel);
+            }
+            if (visible)
+            {
+                var scale = DeviceDpi / 96.0 * browser.ZoomFactor;
+                int Read(string key) => (int)Math.Round(message.GetProperty(key).GetDouble() * scale);
+                var rectangle = new Rectangle(browser.Left + Read("x"), browser.Top + Read("y"), Read("width"), Read("height"));
+                rectangle = Rectangle.Intersect(ClientRectangle, rectangle);
+                if (rectangle.Width < 80 || rectangle.Height < 80) throw new InvalidOperationException("Browser pane is too small.");
+                embeddedBrowserPanel.Bounds = rectangle;
+                embeddedBrowserPanel.BringToFront();
+            }
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var body = JsonSerializer.Serialize(new {
+                parent_window = embeddedBrowserPanel.Handle.ToInt64(), visible,
+                x = 0, y = 0, width = embeddedBrowserPanel.Width, height = embeddedBrowserPanel.Height,
+            });
+            using var content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var response = await client.PostAsync(new Uri(applicationUri, "/api/automation/browser/surface"), content);
+            if (!response.IsSuccessStatusCode) throw new InvalidOperationException("The browser surface could not be attached.");
+            if (revision != browserSurfaceRevision || IsDisposed) return;
+            embeddedBrowserPanel.Visible = visible;
+            browser.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "browser_surface_state", embedded = visible }));
+        }
+        catch (Exception error)
+        {
+            if (embeddedBrowserPanel is not null) embeddedBrowserPanel.Visible = false;
+            DesktopDiagnostics.Write(projectRoot, "browser_surface_failed", error);
+            browser.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "browser_surface_state", embedded = false, error = error.Message }));
+        }
+        finally { browserSurfaceGate.Release(); }
     }
 
     private bool IsApplicationAddress(string address)

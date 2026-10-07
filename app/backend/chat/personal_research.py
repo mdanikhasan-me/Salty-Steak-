@@ -8,7 +8,8 @@ from collections.abc import Callable, Mapping, Sequence
 
 
 def needs_personal_query(request: str) -> bool:
-    return bool(re.search(r"\b(?:my|our)\s+\w+|\b(?:search|research|look\s+up)\s+(?:for\s+)?me\b", request, re.I))
+    return bool(re.search(r"\b(?:my|our)\s+(?:name|full name|identity|profile|website|company|business|address|email|account|organisation|organization|school|university)\b"
+                         r"|\b(?:search|look\s+up|find)\s+me\s+(?:online|on\s+the\s+(?:web|internet))\b", request, re.I))
 
 
 def ground_personal_query(

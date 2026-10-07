@@ -127,7 +127,7 @@ def classify(capability: str, arguments: Mapping[str, Any]) -> str:
     mutating = command in _mutating_commands()
     if capability == "files.manage":
         operation = str(arguments.get("operation") or "").strip().casefold()
-        if operation in {"copy", "move", "rename", "create_directory"}:
+        if operation in {"copy", "move", "rename", "create_directory", "write"}:
             risk = _raise(risk, RISK_WRITE_LOCAL)
         elif operation == "delete":
             risk = _raise(

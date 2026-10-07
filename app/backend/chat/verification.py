@@ -40,7 +40,7 @@ OUTWARD_KINDS = frozenset({"research", "action", "plan"})
 
 
 MUTATING_FILE_OPERATIONS = frozenset(
-    {"delete", "move", "rename", "copy", "create_directory"}
+    {"delete", "move", "rename", "copy", "create_directory", "write"}
 )
 
 
@@ -157,6 +157,32 @@ def _verify_research(
     if not observations and not claim_count:
         return False, {**gathered, "reason": "no_evidence_gathered"}
 
+    answer = str(orchestration.get("answer") or "").strip()
+    # Source retrieval is not proof that the final response met the request.
+    # A finalizer explicitly admitting that gap must never receive a success badge.
+    if _research_answer_reports_gap(answer):
+        return None, {**gathered, "reason": "answer_reports_missing_evidence"}
+    if (report or {}).get("evidence_sufficient") is False:
+        return None, {
+            **gathered, "reason": "research_evidence_not_sufficient",
+            "relevant_publishers": int((report or {}).get("status_target_publisher_count")
+                or (report or {}).get("relevant_publisher_count") or 0),
+        }
+
+    # Apply citation checks before the predicate path as well as the fallback.
+    # Visiting one requested page cannot validate an invented citation elsewhere.
+    if answer:
+        retrieved_urls = {
+            _research_url_key(str(source.get("url") or ""))
+            for source in (orchestration.get("sources") or [])
+            if isinstance(source, Mapping) and source.get("validation") == "validated"
+        }
+        cited_urls = {_research_url_key(url) for url in re.findall(r"https?://[^\s)\]]+", answer, re.I)}
+        unknown_urls = sorted(cited_urls - retrieved_urls)
+        if unknown_urls:
+            return False, {**gathered, "reason": "answer_cited_unvalidated_sources",
+                           "unvalidated_citations": unknown_urls[:10]}
+
     from .goal_state import verify_predicates
 
     if spec is not None and getattr(spec, "required", ()):
@@ -244,14 +270,27 @@ def _verify_research(
             "validated_publishers": len(source_publishers),
             "cited_publishers": len(cited_publishers),
         }
-    return True, {
+    return None, {
         **gathered,
-        "reason": "validated_research_answer",
+        "reason": "answer_coverage_not_verified",
+        "citations_checked": True,
         "validated_sources": len(sources),
         "validated_publishers": len(source_publishers),
         "citation_count": len(cited),
         "cited_publishers": len(cited_publishers),
     }
+
+
+def _research_answer_reports_gap(answer: str) -> bool:
+    text = re.sub(r"```[\s\S]*?```", "", answer)
+    text = " ".join(text.casefold().replace("’", "'").split())
+    return bool(re.search(
+        r"\b(?:findings|sources|results|evidence)\s+(?:do not|don't|does not|doesn't|cannot|can't)"
+        r"\s+(?:answer|address|support|establish|verify)\b"
+        r"|\bi\s+(?:could not|couldn't|cannot|can't|was unable to|am unable to)"
+        r"\s+(?:find|verify|confirm|produce a supported answer)\b",
+        text,
+    ))
 
 
 def _research_url_key(value: str) -> str:
@@ -365,6 +404,14 @@ def _verify_files(result: Mapping[str, Any]) -> tuple[bool | None, dict[str, Any
 
 
         return True, {"operation": operation, "read_only": True}
+
+    if operation == "write":
+        verified = result.get("readback_verified")
+        return (True if verified is True else False if verified is False else None), {
+            "operation": operation,
+            "readback_verified": verified,
+            "sha256": result.get("sha256"),
+        }
 
     after = result.get("after_state")
     if not isinstance(after, Mapping):

@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .ledger import Budget, ResearchLedger
+from .query import focused_search_query, requested_urls
 from .pages import (
     CATEGORY_LISTING,
     classify_page,
@@ -35,6 +37,8 @@ SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
 
 BOILERPLATE = (
+    "produced no results", "returned no results",
+    "search results 1..0", "no results for:", "search documentation search changelog",
     "cookie",
     "privacy policy",
     "terms of service",
@@ -49,8 +53,12 @@ MIN_STATEMENT_WORDS = 4
 MAX_STATEMENT_CHARACTERS = 300
 CHECKPOINT_SCHEMA = "salty-steak-research-checkpoint-v1"
 INVALID_PAGE_SIGNALS = (
+    "504 gateway", "504 gateway time-out", "504 gateway timeout", "502 bad gateway",
+    "gateway time-out", "service temporarily unavailable",
     "404 not found",
     "checking your browser",
+    "verifying your browser",
+    "verify you are human",
     "page not found",
     "invite invalid",
     "invite may be expired",
@@ -130,7 +138,9 @@ def _status_search_query(
     return f"{subject}{focus} latest current as of {as_of} {authority}"
 
 
-def statements_from_page(page: Mapping[str, Any], *, limit: int = 40) -> list[str]:
+def statements_from_page(
+    page: Mapping[str, Any], *, limit: int = 40, question: str = ""
+) -> list[str]:
     """Pull candidate statements out of a structured page reading.
 
     Works from the page summary the browser bridge already produces, so an
@@ -139,19 +149,58 @@ def statements_from_page(page: Mapping[str, Any], *, limit: int = 40) -> list[st
 
     text = str(page.get("summary") or page.get("text") or "")
     found: list[str] = []
-    for raw in SENTENCE.split(text):
+    # PDF/OCR lines and table rows often lack sentence punctuation. Keep their
+    # page context and split at line boundaries instead of dropping a whole page.
+    chunks = []
+    statement_limit = 900 if page.get('content_type') in {'text/markdown','text/x-markdown'} else MAX_STATEMENT_CHARACTERS
+    table_rows = set(str(row) for row in page.get('table_rows') or [])
+    if page.get("pages"):
+        from .passages import pdf_blocks
+        for item in page["pages"]:
+            for block in pdf_blocks(str(item.get("text") or "")):
+                for raw in SENTENCE.split(block):
+                    label = f"; printed label {item['printed_label']}" if item.get('printed_label') else ""
+                    chunks.append((raw, f" [PDF page {item.get('page')}{label}]"))
+    else:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        for index, line in enumerate(lines):
+            # Catalogue identifiers and their descriptions often occupy
+            # separate blocks. Keep the binding instead of discarding both
+            # as a short ID and an overlong page without sentence punctuation.
+            if re.match(r'^(?:ref(?:erence)?|record\s*(?:id|number)|catalogue\s*(?:id|number))\s*:', line, re.I):
+                if index+1 < len(lines) and not re.match(r'^ref(?:erence)?\s*:', lines[index+1], re.I):
+                    line += ' — ' + lines[index+1]
+            if line in table_rows or (page.get('table_rows_read') and ' | ' in line):
+                chunks.append((line,''))
+            elif page.get('content_type') in {'text/markdown','text/x-markdown'} and len(line)<=statement_limit:
+                chunks.append((line,''))
+            else:
+                chunks.extend((raw, '') for raw in SENTENCE.split(line))
+    for raw, page_reference in chunks:
         statement = " ".join(str(raw).split())
-        if len(statement) > MAX_STATEMENT_CHARACTERS:
+        row_limit = 2000 if raw in table_rows or (page.get('table_rows_read') and ' | ' in raw) else statement_limit
+        if len(statement) > row_limit:
             continue
         if len(statement.split()) < MIN_STATEMENT_WORDS:
             continue
         lowered = statement.casefold()
         if any(noise in lowered for noise in BOILERPLATE):
             continue
-        found.append(statement)
-        if len(found) >= limit:
+        found.append(statement + page_reference)
+        if not question and len(found) >= limit:
             break
-    return found
+    if question:
+        noise = {
+            "research", "what", "says", "about", "give", "concise", "answer",
+            "source", "sources", "link", "links", "documentation", "official",
+            "please", "using", "from", "with", "which", "that", "this",
+        }
+        def terms(value: str) -> set[str]:
+            return {word[:5] for word in re.findall(r"[^\W_]+", value.casefold())
+                    if len(word) >= 4 and word not in noise}
+        wanted = terms(re.sub(r'https?://\S+', ' ', question, flags=re.I))
+        found.sort(key=lambda value: len(wanted & terms(value)), reverse=True)
+    return found[:limit]
 
 
 def _host_of(url: str) -> str:
@@ -173,6 +222,8 @@ def validate_page(
 
     if not isinstance(page, Mapping):
         raise ValueError("The page reader returned no structured page")
+    if page.get('render_incomplete'):
+        raise ValueError('Rendered page remained too sparse after its bounded content wait')
     final_url = str(page.get("url") or requested_url).strip()
     parsed = urlsplit(final_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -181,13 +232,26 @@ def validate_page(
     text = str(page.get("summary") or page.get("text") or "").strip()
     if len(text) < 40:
         raise ValueError("The page returned too little readable content to validate")
-    failure_surface = f"{title}\n{text[:1200]}".casefold()
+    # An article explaining "404 Not Found" is readable evidence. Match an
+    # error banner, not an arbitrary mention in a title or document body.
+    title_banner = title.casefold().strip(' .!\u2026')
+    body_banner = text.casefold().lstrip()
     signal = next(
-        (value for value in INVALID_PAGE_SIGNALS if value in failure_surface),
+        (value for value in INVALID_PAGE_SIGNALS
+         if title_banner == value
+         or (len(text) < 2000 and re.match(
+             r'^' + re.escape(value) + r'(?:[.!:\n]|$)', body_banner))),
         "",
     )
+    if not signal and len(text) < 2000:
+        challenge = re.match(r'^(?:checking|verifying) your browser(?:\s*[|\-\u2013]|$)', title_banner)
+        if challenge and re.search(r'complete (?:the check|the verification)|security verification', body_banner):
+            signal = 'browser verification challenge'
     if signal:
         raise ValueError(f"The destination reported an invalid page: {signal}")
+    if re.match(r'^search(?:\s*[|\-\u2013]|$)', title, re.I) and re.search(
+            r'\byour query\b.{0,600}\b(?:produced|returned) no results\b', text, re.I | re.S):
+        raise ValueError('The destination returned an empty search page, not source evidence')
     return {
         **dict(page),
         "url": final_url,
@@ -208,8 +272,10 @@ class ResearchLoop:
         *,
         search: Callable[[str], Sequence[Mapping[str, Any]]],
         read: Callable[[str], Mapping[str, Any]],
+        search_site: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
         extract: Callable[[Mapping[str, Any]], Iterable[str]] = statements_from_page,
         follow_up: Callable[[ResearchLedger], str | None] | None = None,
+        assess_coverage: Callable[[ResearchLedger], Mapping[str, Any]] | None = None,
         budget: Budget | None = None,
         task: Any = None,
         on_progress: Callable[[Mapping[str, Any]], None] | None = None,
@@ -218,8 +284,12 @@ class ResearchLoop:
         self.ledger = ResearchLedger(question, budget=budget)
         self.search = search
         self.read = read
+        self.search_site = search_site
         self.extract = extract
         self.follow_up = follow_up
+        self.assess_coverage = assess_coverage
+        self._coverage_reviews = 0
+        self._coverage_signature = ''
         self.task = task
 
 
@@ -234,7 +304,10 @@ class ResearchLoop:
         self._checkpoint_completed = False
         self._attempted_urls: set[str] = set()
         self._validation_query_pending = False
+        self._pending_candidates: list[dict[str, Any]] = []
+        self._host_timeouts: dict[str, int] = {}
         self._restore_checkpoint()
+        self.ledger.coverage_required = assess_coverage is not None
 
     def run(self, initial_query: str | None = None) -> dict[str, Any]:
         if self._checkpoint_completed:
@@ -252,7 +325,7 @@ class ResearchLoop:
                 independent=False,
             )
         else:
-            query = str(initial_query or self.ledger.question)
+            query = focused_search_query(str(initial_query or self.ledger.question))
 
 
         ended = ""
@@ -265,14 +338,18 @@ class ResearchLoop:
             if self._stopped():
                 return {**self.ledger.report(), "stop_reason": "cancelled"}
 
-            recorded = self.ledger.record_query(query)
+            supplied = requested_urls(self.ledger.question)
+            direct_resume = bool(self.waves and self.waves[-1].get('source_origin') == 'user_urls'
+                                 and self.waves[-1].get('state') != 'done')
+            direct = bool(supplied and (not self.waves or direct_resume))
+            recorded = False if direct else self.ledger.record_query(query)
             resumable_wave = (
                 not recorded
                 and bool(self.waves)
                 and str(self.waves[-1].get("query") or "") == query
                 and str(self.waves[-1].get("state") or "") != "done"
-            )
-            if not recorded and not resumable_wave:
+            ) or direct_resume
+            if not recorded and not resumable_wave and not direct:
 
 
                 ended = "query_repeated"
@@ -281,12 +358,16 @@ class ResearchLoop:
                 wave = self.waves[-1]
                 wave["state"] = "searching"
             else:
-                self._event("research_query", query=query)
+                self._event('research_direct_sources' if direct else 'research_query', query=query)
                 wave = self._wave(query)
+                if direct:
+                    wave['source_origin'] = 'user_urls'
             self._save_checkpoint(next_query=query)
 
             try:
-                candidates = list(self.search(query) or [])
+                candidates = (list(self._pending_candidates) if resumable_wave and self._pending_candidates
+                              else [{'url':url,'title':'User-provided source'} for url in supplied] if direct
+                              else list(self.search(query) or []))
             except Exception as error:
                 wave["state"] = "failed"
                 wave["error"] = str(error)[:240]
@@ -294,6 +375,25 @@ class ResearchLoop:
                 self._publish("search_failed")
                 ended = "search_unavailable"
                 break
+
+            requested_types = set(re.findall(r"[a-z]+", self.ledger.question.casefold())) & {
+                "documentation", "manual", "specification", "reference",
+            }
+            question_words=set(re.findall(r'[a-z0-9]+',self.ledger.question.casefold()))
+            if question_words & {'original','official','primary'}:
+                # Prefer observed destinations whose host names the requested
+                # organisation/product over mirrors. This is ordering, not a
+                # declaration that a host or its claims have been verified.
+                candidates.sort(key=lambda item:bool(question_words &
+                    (set(_host_of(str(item.get('url') or '')).split('.'))-
+                     {'www','com','org','net','gov','edu','docs'})),reverse=True)
+            if requested_types:
+                candidates.sort(
+                    key=lambda item: bool(requested_types & set(re.findall(
+                        r"[a-z]+", str(item.get("title") or "").casefold()
+                    ))),
+                    reverse=True,
+                )
 
 
 
@@ -310,7 +410,9 @@ class ResearchLoop:
                     )
             self._publish("searching")
             opened = 0
-            for candidate in candidates:
+            opened_by_host: dict[str,int] = {}
+            initial_hosts={_host_of(str(item.get('url') or '')) for item in candidates}
+            for candidate_index, candidate in enumerate(candidates):
                 if self._stopped():
                     return {**self.ledger.report(), "stop_reason": "cancelled"}
                 if opened >= max(1, int(self.ledger.budget.max_sources_per_query)):
@@ -319,11 +421,20 @@ class ResearchLoop:
                     break
                 halt, halt_reason = self.ledger.should_stop()
                 # The final allowed query still owns its result-reading wave.
-                if halt and halt_reason != "query_budget":
+                if halt and halt_reason != "query_budget" and not (
+                    halt_reason == "evidence_sufficient" and candidate.get("_discovered_from")
+                ):
                     break
 
+                self._pending_candidates = list(candidates[candidate_index+1:])
+
                 url = str(candidate.get("url") or "")
+                candidate_host=_host_of(url)
+                if len(initial_hosts)>1 and opened_by_host.get(candidate_host,0)>=3:
+                    continue
                 normalised_url = url.split("#", 1)[0].rstrip("/")
+                if candidate.get('_site_search'):
+                    normalised_url += '::site-search:'+str(candidate['_site_search'].get('term'))
                 if not normalised_url or normalised_url in self._attempted_urls:
 
 
@@ -334,6 +445,10 @@ class ResearchLoop:
 
 
                 host = _host_of(url)
+                if self._host_timeouts.get(host, 0) >= 2:
+                    self.ledger.reject_source(url, 'Host repeatedly timed out during this search; other sources remain eligible.',
+                        title=str(candidate.get('title') or ''))
+                    continue
                 for site in wave["sites"]:
                     if site["host"] == host:
                         site["state"] = "reading"
@@ -342,8 +457,14 @@ class ResearchLoop:
                 self._publish("reading")
 
                 try:
-                    page = validate_page(self.read(url), url)
+                    if candidate.get('_site_search'):
+                        if self.search_site is None:continue
+                        page=validate_page(self.search_site(url,candidate['_site_search']),url)
+                    else:
+                        page = validate_page(self.read(url), url)
                 except Exception as error:
+                    if re.search(r'timed?\s*out|timeout|did not finish within', str(error), re.I):
+                        self._host_timeouts[host] = self._host_timeouts.get(host, 0) + 1
                     self.ledger.reject_source(
                         url,
                         str(error),
@@ -360,6 +481,33 @@ class ResearchLoop:
                     self._publish("validating")
                     self._save_checkpoint(next_query=query)
                     continue
+
+                from .discovery import relevant_links, catalogue_search_links, url_key
+                linked_sources = relevant_links(self.ledger.question, page,
+                    depth=int(candidate.get('_discovery_depth') or 0),
+                    attempted=list(self._attempted_urls))
+                search_forms = catalogue_search_links(self.ledger.question,page,
+                    depth=int(candidate.get('_discovery_depth') or 0))
+                # Read observed source links before trying a site's generic
+                # search box. Keep exact catalogue lookups ahead when needed.
+                from .query import requested_identifiers
+                discovered = (search_forms + linked_sources if requested_identifiers(self.ledger.question)
+                              else linked_sources + search_forms)
+                # Prioritize the newly discovered source within this wave.
+                # Appending after all search hits made it unreachable at the
+                # ordinary per-query page limit, even when it held the answer.
+                earlier = {url_key(str(item.get('url') or '')) for item in candidates[:candidate_index+1]}
+                discovered = [item for item in discovered if
+                    (item.get('_site_search') and self.search_site is not None) or url_key(item['url']) not in earlier]
+                discovered_keys = {url_key(item['url']) for item in discovered}
+                tail = [item for item in candidates[candidate_index+1:]
+                        if url_key(str(item.get('url') or '')) not in discovered_keys]
+                candidates[candidate_index+1:] = [*discovered, *tail]
+                self._pending_candidates = list(candidates[candidate_index+1:])
+                for link in discovered:
+                    wave['sites'].append({'host':_host_of(link['url']), 'url':link['url'],
+                        'title':link['title'], 'state':'found',
+                        'discovered_from':link['_discovered_from'], 'depth':link['_discovery_depth']})
 
                 source = self.ledger.add_source(
                     str(page.get("url") or url),
@@ -380,6 +528,7 @@ class ResearchLoop:
                     self._publish("validating")
                     self._save_checkpoint(next_query=query)
                     continue
+                opened_by_host[host]=opened_by_host.get(host,0)+1
 
 
 
@@ -387,7 +536,26 @@ class ResearchLoop:
 
                 page_type = classify_page(page)
                 source.page_type = page_type
-                statements = list(self.extract(page))
+                source.retrieval_details = {
+                    key: page[key] for key in (
+                        'retrieval', 'page_count', 'truncated', 'read_limit',
+                        'downloaded_bytes', 'document_bytes', 'range_requests',
+                        'extraction', 'representation_validator', 'hash_scope',
+                        'selected_ranges','selection','source_text_characters',
+                        'content_type','table_rows_read','scanned_text_characters',
+                        'page_text_characters','fallback_reason','render_wait_seconds',
+                    ) if key in page
+                }
+                if candidate.get('_discovered_from'):
+                    source.retrieval_details.update(discovered_from=candidate['_discovered_from'],
+                        discovery_depth=int(candidate['_discovery_depth']))
+                if page.get('pages'):
+                    source.retrieval_details['pages_read'] = [item['page'] for item in page['pages']]
+                statements = list(
+                    statements_from_page(page, question=self.ledger.question)
+                    if self.extract is statements_from_page
+                    else self.extract(page)
+                )
                 if page_type == CATEGORY_LISTING:
                     statements = [
                         f"[catalogue page, not one product] {statement}"
@@ -433,10 +601,50 @@ class ResearchLoop:
 
 
             wave["state"] = "done"
+            wave["unread_discovered_links"] = [str(item.get('url') or '')
+                for item in self._pending_candidates if item.get('_discovered_from')]
+            self._pending_candidates = []
             self._publish("comparing")
             self._save_checkpoint(next_query=query)
 
+            signature=json.dumps([(c.claim_id,tuple(c.sources),tuple(c.contradicts)) for c in self.ledger.relevant_claims],sort_keys=True)
+            if (self.assess_coverage is not None and self.ledger.claims
+                    and self.ledger.validation_rounds_completed >= self.ledger.budget.validation_rounds
+                    and signature!=self._coverage_signature
+                    and self._coverage_reviews<3 and not self._stopped()
+                    and self.ledger.elapsed_seconds-self.ledger.coverage_seconds < self.ledger.budget.max_seconds):
+                self._publish('assessing_coverage')
+                started=time.monotonic()
+                try:review=dict(self.assess_coverage(self.ledger))
+                finally:
+                    self.ledger.coverage_seconds+=time.monotonic()-started
+                    self._coverage_reviews+=1
+                self.ledger.coverage_assessment=review
+                self._coverage_signature=signature
+                self.ledger.open_questions=list(review.get('missing') or [])
+                self._save_checkpoint(next_query=query)
+
             if opened == 0:
+                coverage_query=(self.ledger.coverage_assessment or {}).get('query')
+                if self.ledger.evidence_sufficient:
+                    ended='evidence_sufficient';break
+                if direct:
+                    query = focused_search_query(self.ledger.question)
+                    self._next_query = query
+                    self._save_checkpoint(next_query=query)
+                    continue
+                if coverage_query and coverage_query.casefold() not in {q.casefold() for q in self.ledger.queries}:
+                    query=coverage_query;self._next_query=query
+                    self._save_checkpoint(next_query=query)
+                    continue
+                from .query import discovery_queries
+                alternate = next((q for q in discovery_queries(self.ledger.question)
+                                  if q not in self.ledger.queries), None)
+                if alternate:
+                    query=alternate
+                    self._next_query=query
+                    self._save_checkpoint(next_query=query)
+                    continue
                 if (
                     self.ledger.validation_rounds_completed
                     < self.ledger.budget.validation_rounds
@@ -458,6 +666,9 @@ class ResearchLoop:
                 ended = reason
                 break
 
+            if self.assess_coverage is not None and self._coverage_reviews>=3:
+                ended='coverage_review_limit';break
+
             if (
                 self.ledger.validation_rounds_completed
                 < self.ledger.budget.validation_rounds
@@ -465,7 +676,11 @@ class ResearchLoop:
                 nxt = self._validation_query()
                 self._validation_query_pending = True
             else:
-                nxt = self.follow_up(self.ledger) if self.follow_up else None
+                nxt = ((self.ledger.coverage_assessment or {}).get('query')
+                       if self.assess_coverage is not None else
+                       self.follow_up(self.ledger) if self.follow_up else None)
+            if not nxt and direct and not self.ledger.evidence_sufficient:
+                nxt = focused_search_query(self.ledger.question)
             if not nxt and not self.ledger.evidence_sufficient:
                 nxt = self._evidence_gap_query()
             if not nxt:
@@ -531,6 +746,9 @@ class ResearchLoop:
                     "question": self.ledger.question,
                     "profile": self.ledger.budget.profile,
                     "hard_ceiling_seconds": self.ledger.budget.max_seconds,
+                    "coverage_required": self.ledger.coverage_required,
+                    "coverage_seconds": round(self.ledger.coverage_seconds,3),
+                    "retrieval_seconds": round(max(0,self.ledger.elapsed_seconds-self.ledger.coverage_seconds),3),
                     "elapsed_seconds": round(self.ledger.elapsed_seconds, 2),
                     "source_count": len(self.ledger.sources),
                     "claim_count": len(self.ledger.claims),
@@ -552,6 +770,8 @@ class ResearchLoop:
                     "coverage_target": self.ledger.budget.coverage_target,
                     "query_count": len(self.ledger.queries),
                     "evidence_sufficient": self.ledger.evidence_sufficient,
+                    "coverage_assessment": self.ledger.coverage_assessment,
+                    "open_questions": list(self.ledger.open_questions),
                     "waves": [dict(wave, sites=list(wave["sites"])) for wave in self.waves],
                 }
             )
@@ -570,6 +790,9 @@ class ResearchLoop:
         """A focused independent check, not another broad duplicate search."""
 
         round_number = self.ledger.validation_rounds_completed + 1
+        from .query import discovery_queries
+        focused=next((q for q in discovery_queries(self.ledger.question) if q not in self.ledger.queries),None)
+        if focused:return focused
         if self.ledger.is_status_question:
             return _status_search_query(
                 self.ledger.question,
@@ -578,32 +801,31 @@ class ResearchLoop:
             )
         disputed = self.ledger.relevant_disputed_claims
         if disputed:
-            focus = disputed[0].text[:180]
+            focus = re.sub(r"\s*\[PDF page[^\]]*\]", "", disputed[0].text)[:110]
             return (
-                f'{focus} independent source verify contradiction '
-                f'cross-check {round_number}'
+                f'{focused_search_query(self.ledger.question)[:180]} {focus} verification'
             )
         unsupported = [
             claim
-            for claim in self.ledger.claims.values()
+            for claim in self.ledger.relevant_claims
             if self.ledger.independent_source_count(claim)
             < self.ledger.budget.min_independent_sources
         ]
         if unsupported:
             return (
-                f'{unsupported[0].text[:180]} independent source verification '
-                f'cross-check {round_number}'
+                f'{focused_search_query(self.ledger.question)} original publication'
             )
         return (
-            f'{self.ledger.question} independent primary source verification '
-            f'cross-check {round_number}'
+            f'{focused_search_query(self.ledger.question)} primary source'
         )
 
     def _evidence_gap_query(self) -> str | None:
         """Deterministic fallback when the model stops before the evidence does."""
 
         if not self.ledger.is_status_question:
-            return None
+            from .query import discovery_queries
+            return next((q for q in discovery_queries(self.ledger.question)
+                         if q not in self.ledger.queries), None)
         query = _status_search_query(
             self.ledger.question,
             independent=True,
@@ -630,6 +852,10 @@ class ResearchLoop:
             "ledger": self.ledger.checkpoint(),
             "waves": [dict(wave, sites=list(wave["sites"])) for wave in self.waves],
             "attempted_urls": sorted(self._attempted_urls),
+            "pending_candidates": self._pending_candidates,
+            "host_timeouts": self._host_timeouts,
+            "coverage_reviews": self._coverage_reviews,
+            "coverage_signature": self._coverage_signature,
         }
         try:
             self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -666,6 +892,11 @@ class ResearchLoop:
             self._attempted_urls = {
                 str(value) for value in payload.get("attempted_urls") or []
             }
+            self._pending_candidates = [dict(item) for item in payload.get('pending_candidates') or []
+                                        if isinstance(item, Mapping)]
+            self._host_timeouts = {str(k):int(v) for k,v in (payload.get('host_timeouts') or {}).items()}
+            self._coverage_reviews=max(0,int(payload.get('coverage_reviews') or 0))
+            self._coverage_signature=str(payload.get('coverage_signature') or '')
             self._next_query = str(
                 payload.get("next_query") or self.ledger.question
             )

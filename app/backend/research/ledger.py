@@ -224,17 +224,15 @@ def _version_parts(value: str) -> tuple[int, ...]:
 
 
 def _same_statement(left: str, right: str) -> bool:
-    left_versions, right_versions = _versions(left), _versions(right)
-    if left_versions and right_versions and left_versions.isdisjoint(right_versions):
-        return False
-    first, second = _words(left), _words(right)
-    overlap = len(first & second)
-    if similarity(left, right) >= DUPLICATE_THRESHOLD:
-        return True
-    if overlap < MIN_CONTAINED_WORDS or not first or not second:
-        return False
-    containment = overlap / min(len(first), len(second))
-    return containment >= CONTAINMENT_THRESHOLD
+    """Merge lexical duplicates only; retain unverified paraphrases separately.
+
+    Word overlap discards subject/object order, predicates and qualifications.
+    Those differences must survive for the answer model to compare them.
+    """
+    def ordered_words(value: str) -> list[str]:
+        return re.findall(r"[^\W_]+(?:[.'][^\W_]+)*", value.casefold())
+    first, second = ordered_words(left), ordered_words(right)
+    return bool(first) and first == second
 
 
 @dataclass
@@ -252,6 +250,7 @@ class Source:
     validation: str = "validated"
     content_sha256: str = ""
     content_characters: int = 0
+    retrieval_details: dict[str, Any] = field(default_factory=dict)
 
     @property
     def domain(self) -> str:
@@ -279,6 +278,7 @@ class Source:
             "independence_key": self.independence_key,
             "content_sha256": self.content_sha256,
             "content_characters": self.content_characters,
+            "retrieval_details": dict(self.retrieval_details),
         }
 
 
@@ -393,6 +393,9 @@ class ResearchLedger:
         self._barren = 0
         self._seen_urls: set[str] = set()
         self.validation_rounds_completed = 0
+        self.coverage_required = False
+        self.coverage_assessment: dict[str, Any] | None = None
+        self.coverage_seconds = 0.0
 
 
 
@@ -542,6 +545,9 @@ class ResearchLedger:
     def _conflicts(left: str, right: str) -> bool:
         """Whether two similar statements actually disagree."""
 
+        if _same_statement(left, right):
+            return False
+
         left_versions, right_versions = _versions(left), _versions(right)
         if left_versions and right_versions and left_versions != right_versions:
 
@@ -557,9 +563,29 @@ class ResearchLedger:
             return False
         left_numbers, right_numbers = _numbers(left), _numbers(right)
         if left_numbers and right_numbers and left_numbers != right_numbers:
-
-            return True
+            # Different numbers in related sentences often describe different
+            # fields, years or quantities. Only flag a numeric conflict when
+            # the surrounding assertion is the same.
+            def numeric_shape(value: str) -> str:
+                value=re.sub(r'\b\d+(?:[.,]\d+)*\b','<number>',value.casefold())
+                for word in NUMBER_WORDS:
+                    value=re.sub(r'\b'+re.escape(word)+r'\b','<number>',value)
+                return ' '.join(value.split()).rstrip('.;')
+            return numeric_shape(left)==numeric_shape(right)
         left_words, right_words = _words(left), _words(right)
+        for positive, negative in (
+            ({"allow", "allows", "allowed", "permit", "permits", "permitted"},
+             {"ban", "bans", "banned", "prohibit", "prohibits", "prohibited", "forbid", "forbids", "forbidden"}),
+            ({"enable", "enables", "enabled"}, {"disable", "disables", "disabled"}),
+        ):
+            left_polarity = (bool(left_words & positive), bool(left_words & negative))
+            right_polarity = (bool(right_words & positive), bool(right_words & negative))
+            if {left_polarity, right_polarity} == {(True, False), (False, True)}:
+                def assertion(value: str) -> list[str]:
+                    return [word for word in re.findall(r"[^\W_]+", value.casefold())
+                            if word not in positive | negative]
+                if assertion(left) == assertion(right):
+                    return True
         negated_left = bool(left_words & NEGATIONS)
         negated_right = bool(right_words & NEGATIONS)
         return negated_left != negated_right
@@ -596,7 +622,11 @@ class ResearchLedger:
     @property
     def is_status_question(self) -> bool:
         """Whether the question asks for a current/latest version status."""
-
+        # Stock status and current prices are not software release/version
+        # questions. That route adds irrelevant technical-release query terms
+        # and can stop before any usable offer has been observed.
+        if re.search(r"\b(?:prices?|stock|retailers?|shopping|buy)\b", self.question, re.I):
+            return False
         return bool(_words(self.question) & STATUS_QUESTION_WORDS)
 
     @property
@@ -613,7 +643,7 @@ class ResearchLedger:
         if not self.is_status_question:
             # This is a conservative lexical eligibility test, not proof that
             # the claim is true. Unrelated snippets must not meet coverage.
-            return not subject or bool(words & subject)
+            return not subject or len(words & subject) >= min(2, len(subject))
         subject_matches = len(words.intersection(subject))
         required_subject_matches = min(2, len(subject))
         if subject and subject_matches < required_subject_matches:
@@ -696,8 +726,17 @@ class ResearchLedger:
     @property
     def evidence_sufficient(self) -> bool:
         """Whether evidence relevant to the actual question meets the gate."""
-
+        from .query import requested_identifiers
+        identifiers=requested_identifiers(self.question)
+        if identifiers:
+            statements=[' '.join(c.text.casefold().split()) for c in self.claims.values()]
+            if any(not any(' '.join(identifier.casefold().split()) in text for text in statements)
+                   for identifier in identifiers):
+                return False
         required = max(2, int(self.budget.min_independent_sources))
+        if self.coverage_required:
+            review=self.coverage_assessment or {}
+            return bool(self.claims) and review.get('status')=='assessed' and review.get('sufficient') is True
         if self.is_status_question:
             return bool(self.relevant_claims) and len(
                 self.status_target_publishers
@@ -728,7 +767,7 @@ class ResearchLedger:
 
 
 
-        if self.elapsed_seconds >= self.budget.max_seconds:
+        if self.elapsed_seconds - self.coverage_seconds >= self.budget.max_seconds:
             return True, "time_budget"
         if (
             self.evidence_sufficient
@@ -801,6 +840,10 @@ class ResearchLedger:
             "status_target_publisher_count": len(self.status_target_publishers),
             "evidence_sufficient": self.evidence_sufficient,
             "open_questions": list(self.open_questions),
+            "coverage_assessment": self.coverage_assessment,
+            "coverage_required": self.coverage_required,
+            "coverage_seconds": round(self.coverage_seconds,3),
+            "retrieval_seconds": round(max(0,self.elapsed_seconds-self.coverage_seconds),3),
             "stopped": stop,
             "stop_reason": reason,
             "seconds": round(self.elapsed_seconds, 2),
@@ -825,6 +868,9 @@ class ResearchLedger:
 
         return {
             "schema": LEDGER_SCHEMA,
+            "coverage_assessment": self.coverage_assessment,
+            "coverage_required": self.coverage_required,
+            "coverage_seconds": self.coverage_seconds,
             "question": self.question,
             "budget": {
                 name: getattr(self.budget, name)
@@ -855,6 +901,10 @@ class ResearchLedger:
             }
         )
         ledger = cls(str(payload.get("question") or ""), budget=budget)
+        ledger.coverage_required = bool(payload.get('coverage_required'))
+        ledger.coverage_seconds=max(0,float(payload.get('coverage_seconds') or 0))
+        review=payload.get('coverage_assessment')
+        ledger.coverage_assessment = dict(review) if isinstance(review,Mapping) else None
         ledger.sources = {}
         for item in payload.get("sources") or []:
             if not isinstance(item, Mapping):
@@ -869,6 +919,7 @@ class ResearchLedger:
                 validation=str(item.get("validation") or "validated"),
                 content_sha256=str(item.get("content_sha256") or ""),
                 content_characters=max(0, int(item.get("content_characters") or 0)),
+                retrieval_details=dict(item.get("retrieval_details") or {}),
             )
             ledger.sources[source.source_id] = source
         ledger.claims = {}

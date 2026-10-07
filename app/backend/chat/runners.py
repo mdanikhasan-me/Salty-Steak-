@@ -16,6 +16,7 @@ go through the one inference path; there is no planner model.
 from __future__ import annotations
 
 import json
+import time
 import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -492,7 +493,11 @@ FINALISER_COMMERCE_RULES = (
     "has NOT been confirmed available and may never be called in stock, "
     "available, or the cheapest one currently in stock — say its availability "
     "was not confirmed. "
-    "Obey evidence_limits."
+    "Obey evidence_limits and every user constraint: budget, region, capacity, "
+    "condition and seller restrictions. 'Under' and 'less than' are strict: "
+    "an equal price does not qualify; 'up to' includes the limit. Keep rejected "
+    "offers separate from recommendations. If none qualify, say none were confirmed; "
+    "do not invent an offer or claim the whole market was exhausted."
 )
 
 
@@ -559,7 +564,28 @@ def finaliser_payload(
     return payload
 
 
-_MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", re.IGNORECASE)
+def research_review_evidence(question: str, report: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep source identities and answer evidence without replaying the ledger."""
+    observations = list(report.get("observations") or [])
+    claims = _select_finaliser_findings(question, list(report.get("claims") or []))[:8]
+    sources = {str(s.get("source") or s.get("id") or ""): s
+               for s in report.get("sources") or [] if isinstance(s, Mapping)}
+    findings = []
+    for claim in claims:
+        evidence = claim.get("evidence") or [sources[key] for key in claim.get("sources", [])
+                                            if isinstance(key, str) and key in sources]
+        findings.append({"text": str(claim.get("text") or "")[:700],
+            "sources": [s.get("url") for s in evidence if isinstance(s, Mapping)],
+            "disputed": bool(claim.get("disputed"))})
+    packet = finaliser_payload(question=question, observations=observations,
+        evidence_limits=report.get("evidence_limits") or _evidence_limits(observations),
+        findings=[] if _has_priced_evidence(observations) else findings)
+    packet['source_urls'] = [s.get('url') for s in report.get('sources') or [] if isinstance(s, Mapping)]
+    packet['scope'] = 'Bounded retrieved evidence; readable pages do not prove exhaustive coverage.'
+    return packet
+
+
+_MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\((https?://(?:[^\s()]|\([^()\s]*\))+)\)", re.IGNORECASE)
 _FOOTNOTE_DEFINITION = re.compile(
     r"(?m)^\[\^([^\]]+)\]:\s*(https?://\S+)\s*$",
     re.IGNORECASE,
@@ -595,6 +621,8 @@ _STATUS_FINDING_TERMS = frozenset(
 )
 _VERSION_TOKEN = re.compile(r"\b\d+(?:\.\d+){1,3}\b(?![\d.]|\s*(?:%|percent\b|per\s+cent\b))", re.I)
 _RESEARCH_BOILERPLATE = (
+    "produced no results", "returned no results",
+    "search results", "no results for:", "search documentation search changelog",
     "call to action",
     "enjoy the new release",
     "for more details",
@@ -624,10 +652,13 @@ def _is_research_boilerplate(value: str) -> bool:
 
 
 def _question_terms(value: str) -> set[str]:
+    # A supplied URL identifies a source, not the answer's subject. Ranking its
+    # hostname/path words promoted bibliographies over the requested rule.
+    value = re.sub(r'https?://\S+', ' ', str(value or ''), flags=re.I)
     return {
         word
         for word in re.findall(r"[a-z0-9]+", str(value or "").casefold())
-        if len(word) > 1 and word not in _QUESTION_NOISE
+        if len(word) > 1 and word not in _QUESTION_NOISE and word not in {'read','search','public','web','url','urls'}
     }
 
 
@@ -797,7 +828,21 @@ def _select_finaliser_findings(
     def settled_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
         rank = _finding_rank(terms, item)
         version = _version_tuple(_latest_status_version(question, [item]))
-        return rank[:2] + (version,) + rank[2:]
+        requested_type = terms & {"documentation", "manual", "specification", "reference"}
+        source_type_match = any(
+            requested_type & _question_terms(str(source.get("title") or ""))
+            for source in item.get("evidence", [])
+            if isinstance(source, Mapping)
+        )
+        from urllib.parse import urlsplit
+        primary_requested=bool(terms & {'original','official'})
+        from ..research.query import requested_urls
+        supplied={url.rstrip('/') for url in requested_urls(question)}
+        subject_host_match=primary_requested and any(
+            str(source.get('url') or '').rstrip('/') in supplied or
+            bool(terms & set((urlsplit(str(source.get('url') or '')).hostname or '').split('.')))
+            for source in item.get('evidence',[]) if isinstance(source,Mapping))
+        return rank[:1] + (source_type_match,subject_host_match) + rank[1:2] + (version,) + rank[2:]
 
     settled = sorted(
         settled_records,
@@ -855,7 +900,31 @@ def _select_finaliser_findings(
         if len(paired) >= max(0, int(disputed_limit)):
             break
     settled_limit = max(0, int(limit) - len(dispute_pairs))
-    selected = settled[:settled_limit] + dispute_pairs
+    # Reserve most of the packet for the strongest answers before diversifying.
+    # Otherwise six marginal publishers can displace a second crucial sentence
+    # from the primary paper, leaving the model unable to answer a subquestion.
+    core_count = min(settled_limit, max(1, settled_limit - 2))
+    diverse: list[Mapping[str, Any]] = list(settled[:core_count])
+    seen_publishers: set[str] = {
+        str(source.get("independence_key") or source.get("domain") or source.get("url") or "")
+        for item in diverse for source in item.get("evidence", []) if isinstance(source, Mapping)
+    } - {""}
+    for item in settled:
+        if len(diverse) >= settled_limit:
+            break
+        if not _finding_rank(terms, item)[0] or _finding_rank(terms, item)[2] == 0:
+            continue
+        publishers = {
+            str(source.get("independence_key") or source.get("domain") or source.get("url") or "")
+            for source in item.get("evidence", []) if isinstance(source, Mapping)
+        } - {""}
+        if item not in diverse and publishers - seen_publishers:
+            diverse.append(item)
+            seen_publishers.update(publishers)
+        if len(diverse) >= settled_limit:
+            break
+    selected_settled = (diverse + [item for item in settled if item not in diverse])[:settled_limit]
+    selected = selected_settled + dispute_pairs
     return selected or records[: max(1, int(limit))]
 
 
@@ -953,9 +1022,19 @@ def _attach_validated_citations(
 ) -> str:
     """Remove invented links and ensure the answer exposes checked sources."""
 
+    evidence_urls = {
+        _citation_key(str(source.get("url") or ""))
+        for finding in findings
+        for source in finding.get("evidence", [])
+        if isinstance(source, Mapping) and source.get("url")
+    }
+    cited_sources = (
+        [source for source in sources if _citation_key(str(source.get("url") or "")) in evidence_urls]
+        if evidence_urls else sources
+    )
     links = _validated_source_links(
         findings,
-        sources=sources,
+        sources=cited_sources,
         question=question,
     )
     if not links:
@@ -964,6 +1043,11 @@ def _attach_validated_citations(
         _citation_key(url): {"title": title, "url": url}
         for title, url in links
     }
+    for source in [*sources,*(s for finding in findings for s in finding.get('evidence',[]))]:
+        if not isinstance(source,Mapping) or source.get('validation','validated')!='validated':continue
+        url=str(source.get('url') or '')
+        if url.startswith(('http://','https://')):
+            allowed[_citation_key(url)]={'title':str(source.get('title') or 'Source'),'url':url}
     used: set[str] = set()
 
     def keep_known(match: re.Match[str]) -> str:
@@ -1023,7 +1107,7 @@ def _attach_validated_citations(
     missing = [
         (title, url) for title, url in links if _citation_key(url) not in used
     ]
-    if not missing:
+    if not missing or used:
         return safe
     citations = "; ".join(f"[{title}]({url})" for title, url in missing)
     return f"{safe}\n\nValidated sources: {citations}".strip()
@@ -1150,6 +1234,7 @@ class LiveRunners:
         images: Any = None,
         generate: Callable[[list[dict[str, str]]], str] | None = None,
         generate_structured: Callable[[list[dict[str, str]]], str] | None = None,
+        generate_research_review: Callable[[list[dict[str, str]]], str] | None = None,
         generate_with_preview: Callable[
             [list[dict[str, str]], Callable[[Mapping[str, Any]], None]], str
         ]
@@ -1168,6 +1253,8 @@ class LiveRunners:
         approve: Callable[[Mapping[str, Any]], bool] | None = None,
         search: Callable[[str], Sequence[Mapping[str, Any]]] | None = None,
         read: Callable[[str], Mapping[str, Any]] | None = None,
+        read_for_question: Callable[[str, str], Mapping[str, Any]] | None = None,
+        search_site: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
         memory: Any = None,
         mission_memory: Any = None,
         on_step: Callable[[Mapping[str, Any]], None] | None = None,
@@ -1183,10 +1270,13 @@ class LiveRunners:
         research_profile: str = "verification",
     ) -> None:
         self.broker = broker
+        self.search_site = search_site
         self.connectors = connectors
         self.images = images
         self.generate = generate
         self.generate_structured = generate_structured or generate
+        self.generate_research_review = generate_research_review
+        self._coverage_findings: list[Mapping[str, Any]] = []
         self.generate_with_preview = generate_with_preview
         self.generate_structured_with_preview = (
             generate_structured_with_preview or generate_with_preview
@@ -1200,6 +1290,7 @@ class LiveRunners:
         self.approve = approve
         self.search = search
         self.read = read
+        self.read_for_question = read_for_question
 
 
 
@@ -1268,10 +1359,19 @@ class LiveRunners:
                     task=self.task,
                 )
             except CapabilityCallFailed as error:
-
-
-
-
+                # A bad first choice is an observation for the agent, not the
+                # end of a computer task. Keep permission failures terminal;
+                # alternative actions still go through the broker's policy.
+                if (
+                    self.continue_until_satisfied
+                    and (self.generate_structured is not None or self.generate is not None)
+                    and error.kind != "PermissionError"
+                    and not (self.should_stop and self.should_stop())
+                ):
+                    return self._continue_from(decision, route, {
+                        "status": "failed", "failure_kind": error.kind,
+                        "error": str(error),
+                    }, request)
                 return {
                     "answer": (
                         f"I could not carry that out: {error}"
@@ -1675,6 +1775,10 @@ class LiveRunners:
             },
             "goal": request,
             "note": (
+                "This was attempted and failed. Use the failure to choose a different "
+                "approach within the granted tools and original constraints. Do not "
+                "claim this step succeeded or blindly repeat it."
+                if result.get("status") == "failed" else
                 "This already ran. If the goal is now satisfied, respond. "
                 "Otherwise continue from here."
             ),
@@ -1765,9 +1869,10 @@ class LiveRunners:
         "unknown field" can do nothing but guess again.
         """
 
-        if self.generate is None:
+        repair_generate = self.generate_structured or self.generate
+        if repair_generate is None:
             return None
-        reply = self.generate(
+        reply = repair_generate(
             [
                 {
                     "role": "system",
@@ -1862,8 +1967,10 @@ class LiveRunners:
         loop = ResearchLoop(
             question,
             search=self.search,
-            read=self.read,
+            read=(lambda url:self.read_for_question(url,question)) if self.read_for_question else self.read,
+            search_site=self.search_site,
             follow_up=self._follow_up,
+            assess_coverage=self._assess_coverage if self.generate_research_review else None,
             budget=budget,
             task=self.task,
             on_progress=self.on_research,
@@ -1895,6 +2002,11 @@ class LiveRunners:
                     "status_target_version",
                     "status_target_publisher_count",
                     "evidence_sufficient",
+                    "coverage_assessment",
+                    "coverage_required",
+                    "coverage_seconds",
+                    "retrieval_seconds",
+                    "open_questions",
                     "stop_reason",
                     "profile",
                     "hard_ceiling_seconds",
@@ -1909,7 +2021,7 @@ class LiveRunners:
             | {"process_summary": self._summarise(report)},
 
             "sources": report["sources"],
-            "claims": report["claims"][:25],
+            "claims": _select_finaliser_findings(question,report["claims"],limit=25),
 
 
 
@@ -1920,6 +2032,55 @@ class LiveRunners:
 
             "evidence_limits": _evidence_limits(report.get("observations") or []),
         }
+
+    def _assess_coverage(self, ledger: Any) -> dict[str, Any]:
+        from ..research.coverage import assess_coverage
+        all_findings=[c for c in ledger.report()['claims'] if not _is_research_boilerplate(str(c.get('text') or ''))]
+        pool=_select_finaliser_findings(ledger.question,all_findings,limit=40)
+        wanted=_question_terms(ledger.question)
+        uncovered=set(wanted)
+        findings=[]
+        # Repeated sentences about the first requested fact must not crowd out
+        # a less frequently mentioned second/third part of the question.
+        while pool and len(findings)<16:
+            best=max(pool,key=lambda c:(len(uncovered & _question_terms(str(c.get('text') or ''))),
+                _finding_rank(wanted,c)))
+            findings.append(best);pool.remove(best)
+            uncovered-=_question_terms(str(best.get('text') or ''))
+        # Include a small distinct set per publisher too; a mirror's matching
+        # sentence must not hide the original publisher's equivalent evidence.
+        if wanted & {'original','official'}:
+            from urllib.parse import urlsplit
+            originals=[c for c in all_findings if any(
+                wanted & set((urlsplit(str(s.get('url') or '')).hostname or '').split('.'))
+                for s in c.get('evidence',[]) if isinstance(s,Mapping))]
+            primary=[]
+            for need in ledger.question.split('?'):
+                if not need.strip() or need.strip().casefold().startswith('cite '):continue
+                # Cite each requested subtopic, not a pile of generic pages
+                # matching the words "original documentation".
+                import math
+                from collections import Counter
+                need_terms={word[:5] for word in _question_terms(need) if len(word)>2}
+                terms_by_claim=[{word[:5] for word in _question_terms(str(c.get('text') or ''))} for c in originals]
+                frequency=Counter(t for terms in terms_by_claim for t in terms)
+                scored=sorted(zip(originals,terms_by_claim),key=lambda pair:sum(
+                    1+math.log((len(originals)+1)/(frequency[t]+1)) for t in need_terms & pair[1]),reverse=True)
+                candidates=[c for c,_ in scored[:6]]
+                for candidate in candidates:
+                    if candidate not in primary:primary.append(candidate)
+            findings=[*primary,*[c for c in findings if c not in primary]][:24]
+        remaining=min(300.0,ledger.budget.max_seconds)
+        deadline=time.monotonic()+remaining
+        self._coverage_findings=list(findings)
+        def generate_review(messages):
+            seconds=max(0.0,deadline-time.monotonic())
+            if seconds <= 0:
+                return '{}'
+            if self.task is not None:
+                self.task.metrics.planning_model_calls += 1
+            return self.generate_research_review(messages,time_budget_seconds=seconds)
+        return assess_coverage(ledger.question,findings,generate_review)
 
     def _follow_up(self, ledger: Any) -> str | None:
         """One model call decides whether another query is worth making.
@@ -2002,6 +2163,22 @@ class LiveRunners:
 
 
         ordered = _select_finaliser_findings(question, claims)
+        if self._coverage_findings:
+            identifiers={c.get('claim') for c in self._coverage_findings}
+            ordered=[*self._coverage_findings,*[c for c in ordered if c.get('claim') not in identifiers]]
+        coverage=report.get('coverage_assessment') or {}
+        required_ids={cid for item in coverage.get('requirements') or [] for cid in item.get('claims') or []}
+        if required_ids:
+            selected_ids={c.get('claim') for c in ordered}
+            # Preserve evidence explicitly used to assess the user's requested
+            # facts; diversity/ranking must not discard it before the answer.
+            ordered=[c for c in claims if c.get('claim') in required_ids and c.get('claim') not in selected_ids]+ordered
+        for requirement in coverage.get('requirements') or []:
+            need=str(requirement.get('need') or '')
+            if not need:continue
+            selected_ids={c.get('claim') for c in ordered}
+            extra=_select_finaliser_findings(need,claims,limit=2)
+            ordered += [c for c in extra if c.get('claim') not in selected_ids]
 
         if self.generate is not None or self.generate_with_preview is not None:
             if self.task is not None:
@@ -2028,7 +2205,14 @@ class LiveRunners:
                                     "claim": claim.get("claim"),
                                     "text": claim.get("text"),
                                     "source_count": int(claim.get("source_count") or 0),
-                                    "sources": list(claim.get("evidence") or []),
+                                    "sources": [
+                                        {key: source[key] for key in (
+                                            "source", "url", "title", "publisher_domain",
+                                            "validation", "published_at", "updated_at",
+                                        ) if key in source}
+                                        for source in claim.get("evidence", [])
+                                        if isinstance(source, Mapping)
+                                    ],
                                     "disputed": bool(claim.get("disputed")),
                                     "contradicts": list(claim.get("contradicts") or []),
                                     "confidence": claim.get("confidence"),
@@ -2047,6 +2231,11 @@ class LiveRunners:
                     ),
                 },
             ]
+            if coverage:
+                payload=json.loads(messages[-1]['content'])
+                payload['coverage_review']={k:coverage.get(k) for k in ['status','requirements','missing','scope']}
+                payload['coverage_note']='Answer supported parts; explicitly identify unresolved requested facts. Do not fill gaps from memory.'
+                messages[-1]['content']=json.dumps(payload,ensure_ascii=False)
             self._publish_research_stage(report, "drafting")
             if self.generate_with_preview is not None:
                 reply = self.generate_with_preview(
