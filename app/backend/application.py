@@ -193,6 +193,7 @@ class Application:
         mark("workspace_layout_ready")
         mark("database_opening_and_schema_migration_started")
         self.database = Database(self.paths.database)
+        self.data_management.recover()
         self.production_policy = ProductionStatePolicy(self.database)
         mark("database_open_and_schema_migration_completed")
         operation_settings = dict(self.config.section("operations"))

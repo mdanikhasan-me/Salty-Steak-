@@ -12,12 +12,13 @@ import json
 import os
 from pathlib import Path
 import secrets
-import shutil
+import re
 import threading
 import time
 
 SCOPES = {'chats': 'DELETE CHAT SESSIONS', 'all': 'CLEAR APPLICATION DATA'}
 WEIGHT_SUFFIXES = {'.gguf', '.safetensors', '.pt', '.pth', '.ckpt', '.onnx', '.bin'}
+JOURNAL_KEY = 'data.cleanup_journal'
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -87,6 +88,8 @@ class DataManagement:
         return digest.hexdigest()
 
     def _idle(self, connection):
+        if connection.execute('SELECT 1 FROM application_metadata WHERE key=?', (JOURNAL_KEY,)).fetchone():
+            raise RuntimeError('An interrupted cleanup needs recovery; restart the application')
         if connection.execute("SELECT 1 FROM operations WHERE state IN ('queued','running','stop_requested') LIMIT 1").fetchone():
             raise RuntimeError('Finish or stop active tasks before clearing data')
         if connection.execute("SELECT 1 FROM automation_audit_records WHERE outcome='pending' LIMIT 1").fetchone():
@@ -96,17 +99,135 @@ class DataManagement:
         paths = self.app.paths
         protected = [paths.workspace / 'models', paths.versions, paths.runtime, paths.tokenizer, *self._model_paths]
         protected += [paths.project_root / name for name in ('app', 'config', '.python', '.venv', '.git', 'tools', 'node_modules')]
+        protected += [Path(str(database) + suffix)
+                      for database in (paths.database, paths.database.parent / 'salty-memory.db')
+                      for suffix in ('', '-wal', '-shm')]
         return path.suffix.casefold() in WEIGHT_SUFFIXES or any(_inside(path, root.resolve()) for root in protected)
 
-    def _plan(self, scope):
-        if scope not in SCOPES:
-            raise ValueError('Unknown data clearing scope')
+    def _refresh_model_paths(self):
         app = self.app
         self._model_paths = []
         broad = {app.paths.workspace.resolve(),app.paths.project_root.resolve(),app.paths.training.resolve(),app.paths.cache.resolve()}
         for row in app.database.fetch_all('SELECT checkpoint_path FROM saved_versions'):
             path = Path(row['checkpoint_path']).resolve()
             self._model_paths.append(path if path.is_dir() or path.parent in broad else path.parent)
+
+    @contextmanager
+    def _durable_transaction(self):
+        # The control plane normally uses NORMAL durability. File moves require
+        # the intent and commit decision to survive before touching the filesystem.
+        with self.app.database.connection() as connection:
+            connection.execute('PRAGMA synchronous=FULL')
+            connection.execute('BEGIN IMMEDIATE')
+            try:
+                yield connection
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+
+    def recovery_pending(self):
+        return self.app.database.fetch_one('SELECT 1 FROM application_metadata WHERE key=?', (JOURNAL_KEY,)) is not None
+
+    def _save_journal(self, connection, journal):
+        connection.execute('INSERT INTO application_metadata(key,value) VALUES(?,?) '
+                           'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                           (JOURNAL_KEY, json.dumps(journal)))
+
+    def _prepare_journal(self, plan, token):
+        journal = {'version':1, 'state':'prepared', 'scope':plan['scope'], 'token':token,
+                   'workspace':str(self.app.paths.workspace.resolve()), 'files':[]}
+        for index, item in enumerate(plan['files']):
+            source = Path(item['path'])
+            journal['files'].append({**item, 'digest':_digest(source),
+                'staged':str(Path(item['root'])/'.salty-cleanup'/token/str(index))})
+        with self._durable_transaction() as connection:
+            self._idle(connection)
+            self._save_journal(connection, journal)
+        return journal
+
+    def _clear_memories(self):
+        # Recovery runs before workers, model loading, or request handling.
+        chat = getattr(self.app, 'chat', None)
+        if chat is not None:
+            chat.memory.forget_all()
+            chat.mission_memory.clear()
+            return
+        from ..memory import SemanticMemory, AutomationMissionMemory
+        path = self.app.paths.database.parent / 'salty-memory.db'
+        for memory_type, method in ((SemanticMemory,'forget_all'), (AutomationMissionMemory,'clear')):
+            memory = memory_type(path)
+            try:
+                getattr(memory, method)()
+            finally:
+                memory.close()
+
+    def recover(self):
+        """Restore uncommitted moves or finish a committed erasure, idempotently.
+
+        Never overwrite a new file at the original path. A conflict or changed
+        staged file keeps the journal and blocks startup for explicit recovery.
+        """
+        row = self.app.database.fetch_one('SELECT value FROM application_metadata WHERE key=?', (JOURNAL_KEY,))
+        if row is None:
+            return {'files_removed':0, 'bytes_reclaimed':0}
+        journal = json.loads(row['value'])
+        if (journal.get('version') != 1 or journal.get('scope') not in SCOPES
+                or journal.get('state') not in {'prepared','committed'}
+                or journal.get('workspace') != str(self.app.paths.workspace.resolve())
+                or not re.fullmatch(r'[A-Za-z0-9_-]{43}', str(journal.get('token','')))):
+            raise RuntimeError('Cleanup recovery journal is invalid; no files were changed')
+        self._refresh_model_paths()
+        checked = []
+        for index, item in enumerate(journal['files']):
+            source, root, staged = Path(item['path']), Path(item['root']), Path(item['staged'])
+            expected = root/'.salty-cleanup'/journal['token']/str(index)
+            if (not source.is_absolute() or not root.is_absolute() or staged != expected
+                    or not _inside(source, root) or '.salty-cleanup' in source.parts
+                    or _linked_ancestor(source) or _linked_ancestor(staged)
+                    or source.resolve() != source or root.resolve() != root or self._protected(source)):
+                raise RuntimeError('Cleanup recovery path changed; manual recovery is required')
+            if staged.exists():
+                if not staged.is_file() or _digest(staged) != item['digest']:
+                    raise RuntimeError('Staged cleanup data changed; preserved for manual recovery')
+                if journal['state']=='prepared' and source.exists():
+                    raise RuntimeError('Cleanup recovery would overwrite a new file; both copies are preserved')
+            elif journal['state']=='prepared' and not source.exists():
+                raise RuntimeError('Cleanup recovery cannot locate an original file; journal preserved')
+            checked.append((source, staged, item))
+        if journal['state']=='committed' and journal['scope']=='all' and not journal.get('memory_done'):
+            self._clear_memories()
+            journal['memory_done'] = True
+            with self._durable_transaction() as connection:
+                self._save_journal(connection, journal)
+        removed = reclaimed = 0
+        for source, staged, item in checked:
+            if not staged.exists():
+                continue
+            if journal['state']=='prepared':
+                source.parent.mkdir(parents=True, exist_ok=True)
+                staged.rename(source)
+            else:
+                size = staged.stat().st_size
+                staged.unlink()
+                removed += 1
+                reclaimed += size
+        for directory in {staged.parent for _, staged, _ in checked}:
+            try:
+                directory.rmdir()
+                directory.parent.rmdir()
+            except OSError:
+                pass
+        with self._durable_transaction() as connection:
+            connection.execute('PRAGMA secure_delete=ON')
+            connection.execute('DELETE FROM application_metadata WHERE key=?', (JOURNAL_KEY,))
+        return {'files_removed':removed, 'bytes_reclaimed':reclaimed}
+
+    def _plan(self, scope):
+        if scope not in SCOPES:
+            raise ValueError('Unknown data clearing scope')
+        app = self.app
+        self._refresh_model_paths()
         conversations = [dict(row) for row in app.database.fetch_all('SELECT id,updated_at FROM conversations ORDER BY id')]
         message_state=app.database.fetch_one('SELECT COUNT(*) AS n, MAX(created_at) AS latest FROM messages')
         ids = {row['id'] for row in conversations}
@@ -149,7 +270,7 @@ class DataManagement:
             if not _inside(root,app.paths.workspace.resolve()):
                 raise ValueError('Bulk cleanup requires dedicated workspace storage; external files need audited ownership')
             for folder, directories, names in os.walk(root, followlinks=False):
-                directories[:] = [name for name in directories if not _linked(Path(folder)/name)
+                directories[:] = [name for name in directories if name != '.salty-cleanup' and not _linked(Path(folder)/name)
                                   and not self._protected((Path(folder)/name).resolve())]
                 for name in names: add(Path(folder)/name, root)
         if scope == 'chats':
@@ -214,10 +335,18 @@ class DataManagement:
                 raise ValueError('Cleanup preview expired; review the current data again')
             if confirmation != SCOPES[plan['scope']]:
                 raise ValueError('Confirmation text does not match the selected scope')
-            staged, trash_roots = [], set()
+            with app.database.connection() as connection:
+                self._idle(connection)
+            current = self._plan(plan['scope'])
+            if current['fingerprint'] != plan['fingerprint']:
+                raise RuntimeError('Data changed after preview; review a fresh preview')
+            journal = self._prepare_journal(plan, token)
             try:
-                with app.database.transaction() as connection:
-                    self._idle(connection)
+                with self._durable_transaction() as connection:
+                    if connection.execute("SELECT 1 FROM operations WHERE state IN ('queued','running','stop_requested') LIMIT 1").fetchone():
+                        raise RuntimeError('Active work started; cleanup cancelled')
+                    if connection.execute("SELECT 1 FROM automation_audit_records WHERE outcome='pending' LIMIT 1").fetchone():
+                        raise RuntimeError('An automation action started; cleanup cancelled')
                     current = self._plan(plan['scope'])
                     if current['fingerprint'] != plan['fingerprint']:
                         raise RuntimeError('Data changed after preview; review a fresh preview')
@@ -237,13 +366,17 @@ class DataManagement:
                             raise RuntimeError('A planned file changed; cleanup was cancelled')
                         if item['checksum'] and _digest(source)!=item['checksum']:
                             raise RuntimeError('An audited generated file changed')
+                        if _digest(source) != journal['files'][index]['digest']:
+                            raise RuntimeError('Planned cleanup content changed')
                         staging = root/'.salty-cleanup'
                         if staging.exists() and _linked(staging): raise RuntimeError('Cleanup staging folder is linked')
                         trash = staging/str(token)
                         if trash.exists() and _linked(trash): raise RuntimeError('Cleanup staging path is linked')
-                        trash.mkdir(parents=True,exist_ok=True);trash_roots.add(trash)
+                        trash.mkdir(parents=True,exist_ok=True)
                         destination = trash/str(index)
-                        source.replace(destination);staged.append((source,destination))
+                        if destination.exists():
+                            raise RuntimeError('Cleanup destination already exists')
+                        source.replace(destination)
                     connection.execute('PRAGMA secure_delete=ON')
                     connection.execute('DELETE FROM conversations')
                     connection.execute('DELETE FROM conversation_labels')
@@ -261,27 +394,18 @@ class DataManagement:
                     else:
                         connection.executemany('DELETE FROM operations WHERE id=?',[(value,) for value in plan['operations']])
                         self._delete_audits(connection,plan['audit_ids'])
+                    journal['state'] = 'committed'
+                    self._save_journal(connection, journal)
             except BaseException:
-                for original,temporary in reversed(staged):
-                    if temporary.exists(): original.parent.mkdir(parents=True,exist_ok=True);temporary.replace(original)
-                for trash in trash_roots:
-                    if trash.exists(): shutil.rmtree(trash)
+                self.recover()
                 raise
             errors = []
-            if plan['scope']=='all':
-                try:
-                    app.chat.memory.forget_all()
-                    app.chat.mission_memory.clear()
-                except Exception as error: errors.append(f'Memory cleanup: {error}')
             removed = reclaimed = 0
-            for original,temporary in staged:
-                try:
-                    size = temporary.stat().st_size
-                    temporary.unlink();removed += 1;reclaimed += size
-                except OSError as error: errors.append(f'File cleanup: {error}')
-            for trash in trash_roots:
-                try: trash.rmdir();trash.parent.rmdir()
-                except OSError: pass
+            try:
+                result = self.recover()
+                removed, reclaimed = result['files_removed'], result['bytes_reclaimed']
+            except Exception as error:
+                errors.append(f'Cleanup interrupted; restart to recover: {error}')
             try:
                 with app.database.connection() as connection:
                     connection.execute('PRAGMA wal_checkpoint(TRUNCATE)')
@@ -289,4 +413,4 @@ class DataManagement:
             except Exception as error: errors.append(f'Database compaction: {error}')
             return {'status':'partial' if errors else 'completed','scope':plan['scope'],
                     'conversations_removed':len(plan['conversations']),'files_removed':removed,
-                    'bytes_reclaimed':reclaimed,'errors':errors,'restart_recommended':plan['scope']=='all'}
+                    'bytes_reclaimed':reclaimed,'errors':errors,'restart_recommended':bool(errors) or plan['scope']=='all'}

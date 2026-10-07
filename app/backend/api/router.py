@@ -66,6 +66,9 @@ class ApiRouter:
         app = self.application
         parts = tuple(part for part in raw_path.split("/") if part)[1:]
         method = self.method
+        maintenance = getattr(app, 'data_management', None)
+        if method not in {'GET','HEAD'} and maintenance and maintenance.recovery_pending():
+            raise RuntimeError('Data cleanup recovery is pending; restart the application before making changes')
 
         if method == "GET" and parts == ("web", "favicon"):
             from ..tooling.favicon import site_favicon

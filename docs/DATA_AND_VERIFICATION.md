@@ -23,10 +23,19 @@ cleanup. Same-volume staging permits rollback of ordinary file/transaction failu
 successful deletion is permanent. Old tabs cannot restore drafts across a cleanup
 epoch. The UI requires reloading the fresh workspace afterward.
 
+A durable journal records the exact file destinations and content hashes before
+staging. The deletion decision commits with the conversation deletion in the same
+SQLite transaction, using FULL synchronization. Startup recovers before workers or
+models start: uncommitted moves are restored; committed deletions finish. Recovery
+is idempotent and never overwrites new files. Conflicts or altered staged data retain
+the journal and stop startup. A partial cleanup blocks further HTTP mutations until
+restart/recovery. Tests forcibly exit a child process before/after staging, before/
+after commit and during deletion, for both scopes.
+
 Limits: this does not promise forensic erasure on SSDs or removal of copies held by
 external backup services. Legacy external outputs without ownership records remain.
-Abrupt power loss during staged deletion and recovery of a partially completed
-cleanup still need dedicated fault-injection acceptance before production release.
+Abrupt process-exit recovery is tested; physical power-loss and faulty-device behavior
+are not proven by those tests. Windows filesystem durability still depends on storage.
 No production data is cleared merely by adding or testing these controls.
 
 ## Coding verification

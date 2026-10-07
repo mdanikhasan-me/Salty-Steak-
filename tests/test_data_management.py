@@ -235,3 +235,135 @@ def test_live_http_preview_confirm_clear_and_restart(app, scope):
         assert fresh.chat.memory.statistics()['active'] == (1 if scope == 'chats' else 0)
     finally:
         fresh.close()
+
+
+@pytest.mark.parametrize('phase', ['before_move','after_move','before_commit','after_commit','during_delete'])
+@pytest.mark.parametrize('scope', ['chats','all'])
+def test_process_crash_recovers_without_stranding_files_or_restoring_deleted_chats(app, phase, scope):
+    import os
+    import subprocess
+    import sys
+    artifact, cache, weights, unrelated = seed(app)
+    environment = {**os.environ, 'PYTHONPATH':str(Path(__file__).resolve().parents[1])}
+    environment.pop('SALTY_POTATO_WORKSPACE', None)
+    crashed = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()),
+                              str(app.paths.project_root), phase, scope],
+                             env=environment, capture_output=True, text=True, timeout=30)
+    assert crashed.returncode == 71, (crashed.stdout, crashed.stderr)
+    assert app.data_management.recovery_pending()
+    recovered = Application(app.paths.project_root, recover_operations=False)
+    try:
+        committed = phase in {'after_commit','during_delete'}
+        assert artifact.exists() != committed
+        assert cache.exists() == (scope == 'chats' or not committed)
+        assert bool(recovered.list_conversations()) != committed
+        assert recovered.chat.memory.statistics()['active'] == (0 if committed and scope == 'all' else 1)
+        assert weights.read_bytes() == b'preserve weights' and unrelated.exists()
+        assert not recovered.data_management.recovery_pending()
+        assert not list(app.paths.workspace.rglob('.salty-cleanup/*/*'))
+        assert recovered.database.fetch_one('PRAGMA integrity_check')['integrity_check'] == 'ok'
+        assert recovered.data_management.recover()['files_removed'] == 0
+    finally:
+        recovered.close()
+
+
+def test_recovery_never_overwrites_a_new_original_file(app):
+    artifact, *_ = seed(app)
+    plan = app.data_management._plan('chats')
+    token = 'x' * 43
+    journal = app.data_management._prepare_journal(plan, token)
+    staged = Path(journal['files'][0]['staged'])
+    staged.parent.mkdir(parents=True)
+    artifact.replace(staged)
+    artifact.write_text('new user content')
+    with pytest.raises(RuntimeError, match='overwrite'):
+        app.data_management.recover()
+    assert artifact.read_text() == 'new user content'
+    assert staged.read_text() == 'generated chat output'
+    assert app.data_management.recovery_pending()
+
+
+def test_changed_staged_file_is_preserved_for_manual_recovery(app):
+    artifact, *_ = seed(app)
+    journal = app.data_management._prepare_journal(app.data_management._plan('chats'), 'x'*43)
+    staged = Path(journal['files'][0]['staged'])
+    staged.parent.mkdir(parents=True)
+    artifact.replace(staged)
+    staged.write_text('changed')
+    with pytest.raises(RuntimeError, match='Staged cleanup data changed'):
+        app.data_management.recover()
+    assert staged.exists() and app.data_management.recovery_pending()
+
+
+def test_partial_file_deletion_retains_journal_and_recovers_after_restart(app, monkeypatch):
+    artifact, cache, weights, _ = seed(app)
+    original = Path.unlink
+    def locked(path, *args, **kwargs):
+        if '.salty-cleanup' in path.parts:
+            raise PermissionError('simulated transient lock')
+        return original(path, *args, **kwargs)
+    preview = app.data_management.preview('all')
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'unlink', locked)
+        result = app.data_management.execute(preview['token'], preview['confirmation'])
+    assert result['status'] == 'partial' and result['restart_recommended']
+    assert app.data_management.recovery_pending()
+    with pytest.raises(RuntimeError, match='restart'):
+        app.data_management.preview('all')
+    app.data_management.recover()
+    assert not app.data_management.recovery_pending()
+    assert not artifact.exists() and not cache.exists() and weights.exists()
+
+
+def test_pending_recovery_blocks_http_mutations(app):
+    import urllib.request
+    import urllib.error
+    from app.backend.server import start_server
+    seed(app)
+    app.data_management._prepare_journal(app.data_management._plan('chats'), 'x'*43)
+    with start_server(application=app, project_root=app.paths.project_root,
+                      port=0, owns_application=False) as server:
+        request = urllib.request.Request(server.url+'/api/chat/conversations',
+            data=b'{"workspace_mode":"chat"}', headers={'Content-Type':'application/json'})
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request, timeout=5)
+        assert error.value.code == 409
+        assert 'recovery' in json.load(error.value)['error']['message']
+    app.data_management.recover()
+    assert len(app.list_conversations()) == 1
+
+
+def _crash_child(root, phase, scope):
+    """Real abrupt exit, not an exception that the cleanup code can roll back."""
+    import os
+    instance = Application(root, recover_operations=False)
+    management = instance.data_management
+    original_replace, original_unlink = Path.replace, Path.unlink
+    original_save, original_recover = management._save_journal, management.recover
+    def replace(path, target):
+        if '.salty-cleanup' in Path(target).parts:
+            if phase == 'before_move': os._exit(71)
+            result = original_replace(path, target)
+            if phase == 'after_move': os._exit(71)
+            return result
+        return original_replace(path, target)
+    def save(connection, journal):
+        original_save(connection, journal)
+        if phase == 'before_commit' and journal['state'] == 'committed': os._exit(71)
+    def recover():
+        if phase == 'after_commit': os._exit(71)
+        return original_recover()
+    def unlink(path, *args, **kwargs):
+        result = original_unlink(path, *args, **kwargs)
+        if phase == 'during_delete' and '.salty-cleanup' in path.parts: os._exit(71)
+        return result
+    Path.replace, Path.unlink = replace, unlink
+    management._save_journal, management.recover = save, recover
+    preview = management.preview(scope)
+    management.execute(preview['token'], preview['confirmation'])
+    raise AssertionError('Crash injection was not reached')
+
+
+if __name__ == '__main__':
+    import sys
+    _crash_child(Path(sys.argv[1]), sys.argv[2], sys.argv[3])
