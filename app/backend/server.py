@@ -352,6 +352,8 @@ class SaltyRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(size))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if self.close_connection:
+            self.send_header('Connection', 'close')
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header(
@@ -383,6 +385,8 @@ class SaltyRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if self.close_connection:
+            self.send_header('Connection', 'close')
         if request_id:
             self.send_header("X-Request-ID", request_id)
         self.end_headers()
@@ -427,6 +431,10 @@ class SaltyRequestHandler(BaseHTTPRequestHandler):
     def _send_error_json(
         self, status: int, code: str, message: str, request_id: str
     ) -> None:
+        # Routing/maintenance may reject before reading a request body. Never
+        # parse those leftover bytes as the next method on a keep-alive socket.
+        # Closing avoids draining an untrusted or potentially enormous body.
+        self.close_connection = True
         self._send_json(
             status,
             {

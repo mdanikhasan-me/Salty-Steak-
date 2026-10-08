@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import secrets
 import re
+import stat
 import threading
 import time
 
@@ -39,6 +40,24 @@ def _digest(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             value.update(chunk)
     return value.hexdigest()
+
+
+def _unlink_staged(path: Path) -> None:
+    """Remove a verified staging file, including Windows read-only cache files.
+
+    Never change permissions on the original user path or broaden ACLs. Genuine
+    sharing/permission errors remain recoverable failures, not forced deletion.
+    """
+    try:
+        path.unlink()
+    except PermissionError:
+        info = path.lstat()
+        if os.name != 'nt' or not (getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_READONLY):
+            raise
+        if _linked_ancestor(path) or not stat.S_ISREG(info.st_mode):
+            raise RuntimeError('Staged file identity changed before read-only cleanup')
+        path.chmod(info.st_mode | stat.S_IWRITE)
+        path.unlink()
 
 
 class DataManagement:
@@ -209,7 +228,7 @@ class DataManagement:
                 staged.rename(source)
             else:
                 size = staged.stat().st_size
-                staged.unlink()
+                _unlink_staged(staged)
                 removed += 1
                 reclaimed += size
         for directory in {staged.parent for _, staged, _ in checked}:

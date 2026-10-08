@@ -333,6 +333,44 @@ def test_pending_recovery_blocks_http_mutations(app):
     assert len(app.list_conversations()) == 1
 
 
+def test_rejected_cleanup_does_not_corrupt_next_keepalive_request(app):
+    import http.client
+    from urllib.parse import urlsplit
+    from app.backend.server import start_server
+    seed(app)
+    app.data_management._prepare_journal(app.data_management._plan('chats'), 'x'*43)
+    with start_server(application=app,project_root=app.paths.project_root,port=0,owns_application=False) as server:
+        address=urlsplit(server.url)
+        connection=http.client.HTTPConnection(address.hostname,address.port,timeout=5)
+        try:
+            connection.request('POST','/api/data/preview',body='{"scope":"all"}',
+                               headers={'Content-Type':'application/json'})
+            response=connection.getresponse()
+            assert response.status==409
+            response.read()
+            connection.request('GET','/api/health')
+            response=connection.getresponse()
+            assert response.status==200,response.read()
+            assert json.loads(response.read())['data']['status']=='ok'
+        finally:connection.close()
+    app.data_management.recover()
+
+
+def test_clear_removes_readonly_app_owned_cache_file(app):
+    import os
+    import stat
+    if os.name!='nt':pytest.skip('Windows read-only file semantics')
+    seed(app)
+    readonly=app.paths.cache/'readonly-cache.idx'
+    readonly.write_bytes(b'cached pack index')
+    readonly.chmod(stat.S_IREAD)
+    preview=app.data_management.preview('all')
+    result=app.data_management.execute(preview['token'],preview['confirmation'])
+    assert result['status']=='completed',result
+    assert not app.data_management.recovery_pending()
+    assert not readonly.exists()
+
+
 def _crash_child(root, phase, scope):
     """Real abrupt exit, not an exception that the cleanup code can roll back."""
     import os

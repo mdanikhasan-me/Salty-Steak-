@@ -32,6 +32,12 @@ the journal and stop startup. A partial cleanup blocks further HTTP mutations un
 restart/recovery. Tests forcibly exit a child process before/after staging, before/
 after commit and during deletion, for both scopes.
 
+Windows read-only cache files are handled only after their staged identity and content
+hash have been verified. The recovery worker removes the read-only attribute on that
+staged file, not on original paths or model files; ACL/sharing failures remain errors.
+Rejected HTTP requests close their connection so an unread request body cannot corrupt
+the next request on a reused connection.
+
 Limits: this does not promise forensic erasure on SSDs or removal of copies held by
 external backup services. Legacy external outputs without ownership records remain.
 Abrupt process-exit recovery is tested; physical power-loss and faulty-device behavior
