@@ -6,6 +6,31 @@ Successful HTTP status alone does not establish correct extraction or answer qua
 
 ## Source reading
 
+Static HTML navigation resolves relative links and explicit form actions against
+the first observed document base URL, itself resolved against the final redirected
+URL. Empty form actions remain bound to the document. Template bases are ignored;
+malformed and credential-bearing links are excluded without discarding readable
+article content. Resolution does not authorize a request: public-address checks
+still apply at retrieval and on redirects/connections.
+
+Text decoding honors Unicode BOMs, then valid HTTP charset declarations, then HTML
+meta declarations in the first 1,024 bytes, with a deterministic UTF-8 fallback.
+Common HTML ASCII/Latin-1 labels use Windows-1252 web semantics. Unsupported labels
+and non-text transformation codecs cannot crash or transform the reader. This is
+not a complete browser encoding sniffer or statistical language detector. Selected
+encoding, declaration source, ignored labels and replacement-character count are
+retained in source provenance alongside the document base URL.
+
+Browser text can retain list-item lines while omitting numbering. Bounded lists
+following an explicit colon introduction are retained as a single verbatim claim,
+in their original order. A small part of the claim-selection budget preserves these
+relevant groups so repeated keyword-heavy sentences cannot evict all the steps of
+a precedence rule. No numbering or missing list item is invented. This does not
+yet cover every HTML/PDF layout or prove the model interpreted the list correctly.
+The structure marker persists through checkpoints and bounded coverage/answer
+selection. A source repeating only part of a grouped claim cannot corroborate the
+whole group; grouped claims merge only when their retained text is equal.
+
 Static HTML reading excludes explicit hidden subtrees, inline display/visibility
 suppression, scripts, templates and other non-readable markup. Hidden links and
 forms are excluded from discovery too; hidden tables cannot rewrite visible column
@@ -74,3 +99,14 @@ retains both URLs but counts one contributing origin; unidentified copies can st
 inflate the heuristic count. Do not treat that heuristic as proof of independent
 corroboration. Fresh full-model acceptance
 and installed native release gates remain separate from source/test success.
+
+The 8 October document-fidelity evaluation used the application's own live search,
+HTTP/browser fallback, ledger, coverage and unchanged local27B final-answer path.
+W3C plain HTTP returned403; the owned browser read the original document. The
+baseline omitted all three requested base-URI precedence levels despite having read
+them. Final source retained their introductory context and order, and answered all
+three correctly with citations to the original page. One coverage attempt succeeded;
+total308.48s, source retrieval26.95s, coverage86.03s. This is a scoped correctness
+pass, not a controlled speed benchmark or acceptable-latency claim. Python Unicode
+and NASA Moon facts also passed separate live reader-only checks. Earlier failed and
+intermediate runs remain in local validation evidence.

@@ -297,6 +297,7 @@ class Claim:
 
     contradicts: list[str] = field(default_factory=list)
     confidence: float = 0.5
+    structure: str = ""
 
     @property
     def corroborated(self) -> bool:
@@ -316,6 +317,7 @@ class Claim:
             "disputed": self.disputed,
             "contradicts": list(self.contradicts),
             "confidence": round(self.confidence, 2),
+            "structure": self.structure,
         }
 
 
@@ -473,7 +475,7 @@ class ResearchLedger:
             }
         )
 
-    def add_claim(self, text: str, source_id: str) -> Claim:
+    def add_claim(self, text: str, source_id: str, *, structure: str = "") -> Claim:
         """Add a statement, merging duplicates and flagging disagreements.
 
         A claim found in two places is one claim with two sources — that is
@@ -483,7 +485,12 @@ class ResearchLedger:
         """
 
         text = " ".join(str(text).split())
+        structure = 'contextual_list' if structure == 'contextual_list' else ''
         for existing in self.claims.values():
+            # A page repeating one item does not support the complete list.
+            # Compound evidence merges only when the retained text is equal.
+            if (structure or existing.structure) and existing.text != text:
+                continue
             if not _same_statement(existing.text, text):
                 continue
             if self._conflicts(existing.text, text):
@@ -492,10 +499,12 @@ class ResearchLedger:
                 existing.sources.append(source_id)
 
                 existing.confidence = min(0.99, existing.confidence + 0.2)
+            if structure:
+                existing.structure = structure
             return existing
 
         claim = Claim(
-            claim_id=f"clm-{len(self.claims) + 1}", text=text, sources=[source_id]
+            claim_id=f"clm-{len(self.claims) + 1}", text=text, sources=[source_id], structure=structure
         )
         for existing in self.claims.values():
             if (
@@ -534,16 +543,18 @@ class ResearchLedger:
         self.observations.append(dict(observation))
 
     def ingest(
-        self, source: Source, statements: Iterable[str]
+        self, source: Source, statements: Iterable[str], *, context_blocks: Iterable[str] = ()
     ) -> dict[str, Any]:
         """Take everything one page had to say and fold it in."""
 
+        contexts = {' '.join(str(block).split()) for block in context_blocks}
         added, merged = 0, 0
         before = len(self.claims)
         for statement in statements:
             if not str(statement).strip():
                 continue
-            claim = self.add_claim(statement, source.source_id)
+            claim = self.add_claim(statement, source.source_id,
+                structure='contextual_list' if ' '.join(str(statement).split()) in contexts else '')
             if len(self.claims) > before:
                 added += 1
                 before = len(self.claims)
@@ -967,6 +978,7 @@ class ResearchLedger:
                 sources=[str(value) for value in item.get("sources") or []],
                 contradicts=[str(value) for value in item.get("contradicts") or []],
                 confidence=float(item.get("confidence") or 0.5),
+                structure='contextual_list' if item.get('structure') == 'contextual_list' else '',
             )
             ledger.claims[claim.claim_id] = claim
         ledger.observations = [

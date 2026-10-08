@@ -898,6 +898,12 @@ def _select_finaliser_findings(
         if len(paired) >= max(0, int(disputed_limit)):
             break
     settled_limit = max(0, int(limit) - len(dispute_pairs))
+    # Structural units retain their subject and ordered constraints. Reserve a
+    # bounded pair of relevant complete units instead of favoring short fragments
+    # merely because their vocabulary is denser. Dispute handling stays separate.
+    structural = [item for item in settled if item.get('structure') == 'contextual_list'
+                  and _finding_rank(terms, item)[0] and _finding_rank(terms, item)[2] > 0][:min(2, settled_limit)]
+    settled = [*structural, *[item for item in settled if item not in structural]]
     # Reserve most of the packet for the strongest answers before diversifying.
     # Otherwise six marginal publishers can displace a second crucial sentence
     # from the primary paper, leaving the model unable to answer a subquestion.
@@ -2042,7 +2048,11 @@ class LiveRunners:
         pool=_select_finaliser_findings(ledger.question,all_findings,limit=40)
         wanted=_question_terms(ledger.question)
         uncovered=set(wanted)
-        findings=[]
+        findings=[c for c in pool if c.get('structure') == 'contextual_list'
+                  and not c.get('disputed') and wanted & _question_terms(str(c.get('text') or ''))][:2]
+        for claim in findings:
+            pool.remove(claim)
+            uncovered-=_question_terms(str(claim.get('text') or ''))
         # Repeated sentences about the first requested fact must not crowd out
         # a less frequently mentioned second/third part of the question.
         while pool and len(findings)<16:

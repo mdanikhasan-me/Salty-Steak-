@@ -152,6 +152,11 @@ def statements_from_page(
     # PDF/OCR lines and table rows often lack sentence punctuation. Keep their
     # page context and split at line boundaries instead of dropping a whole page.
     chunks = []
+    from .passages import contextual_list_blocks
+    ordered_lists = contextual_list_blocks(text) if not page.get('pages') else []
+    list_blocks = set(ordered_lists)
+    # Preserve document order before relevance ranking; never iterate the set.
+    chunks.extend((block, '') for block in ordered_lists)
     statement_limit = 900 if page.get('content_type') in {'text/markdown','text/x-markdown'} else MAX_STATEMENT_CHARACTERS
     table_rows = set(str(row) for row in page.get('table_rows') or [])
     if page.get("pages"):
@@ -178,7 +183,7 @@ def statements_from_page(
                 chunks.extend((raw, '') for raw in SENTENCE.split(line))
     for raw, page_reference in chunks:
         statement = " ".join(str(raw).split())
-        row_limit = 2000 if raw in table_rows or (page.get('table_rows_read') and ' | ' in raw) else statement_limit
+        row_limit = 2000 if raw in list_blocks or raw in table_rows or (page.get('table_rows_read') and ' | ' in raw) else statement_limit
         if len(statement) > row_limit:
             continue
         if len(statement.split()) < MIN_STATEMENT_WORDS:
@@ -200,6 +205,12 @@ def statements_from_page(
                     if len(word) >= 4 and word not in noise}
         wanted = terms(re.sub(r'https?://\S+', ' ', question, flags=re.I))
         found.sort(key=lambda value: len(wanted & terms(value)), reverse=True)
+        # Sentence frequency is not structural importance. Reserve at most a
+        # tenth of the packet for relevant complete lists so repeated short
+        # definitions cannot erase precedence, exceptions or procedural order.
+        grouped = [value for value in found if value in list_blocks and wanted & terms(value)]
+        retained = grouped[:max(1, limit // 10)] if limit > 0 else []
+        found = [*retained, *[value for value in found if value not in retained]]
     return found[:limit]
 
 
@@ -552,6 +563,7 @@ class ResearchLoop:
                         'selected_ranges','selection','source_text_characters',
                         'content_type','table_rows_read','scanned_text_characters',
                         'page_text_characters','fallback_reason','render_wait_seconds','visibility',
+                        'document_base_url','decoding',
                     ) if key in page
                 }
                 if candidate.get('_discovered_from'):
@@ -576,7 +588,9 @@ class ResearchLoop:
                 if observation is not None:
                     self.ledger.record_observation(observation)
 
-                summary = self.ledger.ingest(source, statements)
+                from .passages import contextual_list_blocks
+                contexts = contextual_list_blocks(str(page.get('summary') or page.get('text') or '')) if not page.get('pages') else []
+                summary = self.ledger.ingest(source, statements, context_blocks=contexts)
                 opened += 1
                 self._event(
                     "research_source", **summary, url=url, page_type=page_type

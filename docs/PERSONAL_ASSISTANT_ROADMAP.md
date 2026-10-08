@@ -34,3 +34,26 @@ The assistant may eventually propose and implement improvements to its own appli
 ## Honest acceptance
 
 No claim of superiority to ChatGPT, Claude Code, or Antigravity without an appropriate same-task comparison. No promise to access every Internet resource: unavailable servers, authentication, paywalls, verification challenges, and unreadable formats remain explicit limits. Track both answer/action quality and elapsed time; do not improve speed by silently dropping requirements or sources.
+
+## Remaining work register (8 October 2026)
+
+- Research: broaden real-host and difficult-format evaluations; fix incomplete
+  evidence coverage and invalid structured reviews; reduce measured retrieval,
+  review and answer latency without dropping requested facets. Separate reading,
+  factual support, citation membership and final-answer correctness in reports.
+- Computer use: validate complete tasks beyond the passing browser action matrix,
+  including state refresh, action recovery and the real installed native interface.
+- Coding: expand unseen behavioral tasks and failure repairs beyond current samples;
+  preserve fixed tests across repairs and clearly display actual execution evidence.
+- UI/vision: retain screenshot previews, file diffs and theme work; obtain native
+  visual acceptance, and distinguish available vision weights from demonstrated
+  image understanding and end-to-end screenshot-driven action quality.
+- Data/storage: r212 repairs the owner's interrupted cleanup and HTTP501; keep
+  model/app preservation and scope regressions. Improve the generic busy message
+  during model warm-up. Obsolete-package cleanup remains subject to exact targets
+  and the earlier execution-control rejection; do not bypass that rejection.
+- Fine-tuning: not started. Stabilize the harness and held-out evaluations before
+  considering a reversible adapter. Supervised self-improvement remains future work.
+
+The installed release and acceptance boundaries are recorded in RELEASE_STATUS.md;
+an individual passed milestone never means this whole register is complete.

@@ -5,6 +5,28 @@ from collections import Counter
 from .query import QUERY_NOISE
 
 
+def contextual_list_blocks(text: str) -> list[str]:
+    """Keep a list's introductory constraint bound to its adjacent items.
+
+    Browser innerText preserves list item lines but can omit bullet/ordinal
+    markers. Only an explicit colon introduction and a bounded following block
+    qualify; copy their words and order without manufacturing numbering.
+    """
+    paragraphs = re.split(r'\n\s*\n', text.replace('\r\n', '\n'))
+    result = []
+    for introduction, body in zip(paragraphs, paragraphs[1:]):
+        lead = introduction.strip().splitlines()[-1:]
+        if not lead or not lead[0].endswith(':') or len(lead[0]) > 400:
+            continue
+        lines = [line.strip() for line in body.splitlines() if line.strip()]
+        if not 2 <= len(lines) <= 12:
+            continue
+        block = ' '.join([lead[0], *lines])
+        if len(block) <= 2000:
+            result.append(block)
+    return result
+
+
 def pdf_blocks(text: str) -> list[str]:
     """Rejoin wrapped PDF prose without joining headings or numeric rows."""
     blocks, current = [], []

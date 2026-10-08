@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import codecs
 import http.client
 import ipaddress
 import re
@@ -15,6 +16,14 @@ from html.parser import HTMLParser
 MAX_BYTES = 2_000_000
 PUBLIC_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 VOID_TAGS = frozenset({'area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'})
+DOCUMENT_ENCODINGS = frozenset({
+    'utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be',
+    'ascii', 'cp866', 'koi8-r', 'koi8-u', 'mac-roman', 'mac-cyrillic',
+    'shift_jis', 'euc_jp', 'iso2022_jp', 'euc_kr', 'cp949',
+    'gb2312', 'gbk', 'gb18030', 'big5', 'big5hkscs',
+    *(f'cp{number}' for number in range(1250, 1259)),
+    *(f'iso8859-{number}' for number in range(1, 17) if number != 12),
+})
 
 
 def _explicitly_hidden(tag, attributes):
@@ -119,6 +128,8 @@ class PageText(HTMLParser):
         self._last_heading = ''
         self._table_context = ''
         self._pre_depth = 0
+        self.base_href = None
+        self.meta_charset = None
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
@@ -130,6 +141,15 @@ class PageText(HTMLParser):
             self.hidden += int(hidden)
         if self.hidden or hidden:
             return
+        if tag == 'base' and self.base_href is None and 'href' in attributes:
+            self.base_href = attributes['href'] or ''
+        if tag == 'meta' and self.meta_charset is None:
+            label = attributes.get('charset')
+            if not label and (attributes.get('http-equiv') or '').casefold() == 'content-type':
+                match = re.search(r'charset\s*=\s*[\"\']?([^\s;\"\']+)', attributes.get('content') or '', re.I)
+                label = match.group(1) if match else None
+            if label:
+                self.meta_charset = label
         if tag=='pre':self._pre_depth+=1
         if tag in {'h1','h2','h3','h4','h5','h6'}:self._heading=[]
         if tag == 'table':self._table_headers=[];self._table_context=self._last_heading
@@ -205,6 +225,59 @@ class PageText(HTMLParser):
         if self.title_depth and not self.hidden: self.title.append(data)
         elif not self.hidden and self._cell is None: self.parts.append(data)
 
+def _document_url(base: str, reference: str) -> str | None:
+    """Resolve navigation, not permission: every fetch still checks public peers."""
+    try:
+        value = urllib.parse.urljoin(base, reference.strip())
+        parsed = urllib.parse.urlsplit(value)
+        if (parsed.scheme not in {'http', 'https'} or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None):
+            return None
+        parsed.port  # Reject malformed ports here without DNS/network access.
+        return value
+    except ValueError:
+        return None
+
+
+def _decode_document(payload: bytes, transport_charset: str | None, content_type: str):
+    """Honor explicit encodings; report a deterministic fallback, not guessed text.
+
+    HTML declarations are prescanned within the first 1024 bytes. This is not a
+    statistical language detector or a complete browser encoding implementation.
+    """
+    candidates = []
+    for bom, encoding in ((codecs.BOM_UTF8, 'utf-8-sig'),
+                          (codecs.BOM_UTF16_LE, 'utf-16'), (codecs.BOM_UTF16_BE, 'utf-16')):
+        if payload.startswith(bom):
+            candidates.append((encoding, 'bom'))
+            break
+    if transport_charset:
+        candidates.append((transport_charset, 'http_header'))
+    if content_type == 'text/html':
+        head = PageText()
+        head.feed(payload[:1024].decode('latin-1'))
+        if head.meta_charset:
+            candidates.append((head.meta_charset, 'html_meta'))
+    candidates.append(('utf-8', 'utf8_default'))
+    ignored = []
+    for label, source in candidates:
+        try:
+            encoding = codecs.lookup(label.strip()).name
+            if encoding not in DOCUMENT_ENCODINGS:
+                raise LookupError('Not a supported document character encoding')
+            # HTML treats these common legacy labels as Windows-1252.
+            if content_type == 'text/html' and encoding in {'iso8859-1', 'ascii'}:
+                encoding = 'cp1252'
+            text = payload.decode(encoding, errors='replace')
+        except (LookupError, ValueError, TypeError):
+            ignored.append(str(label)[:80])
+            continue
+        return text, {'encoding': encoding, 'source': source,
+                      'replacement_characters': text.count('\ufffd'),
+                      'ignored_labels': ignored}
+    raise ValueError('Source text encoding could not be decoded')
+
+
 def read_public_page(url: str, *, timeout: float = 8.0, question: str = "") -> dict:
     address = checked_public_url(url)
     if address.startswith("http://"):
@@ -271,18 +344,28 @@ def _read_public_page(url: str, *, timeout: float = 8.0, question: str = "",
             return {**result, "url": response.geturl(), "title": result['title'] or urllib.parse.urlsplit(address).path.rsplit('/',1)[-1],
                     "summary": text, "retrieval": "public_pdf", "content_sha256": hashlib.sha256(payload).hexdigest(),
                     "hash_scope":"response_body_bytes", "content_characters": len(text), "content_type": content_type}
-        text = payload.decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+        text, decoding = _decode_document(payload, response.headers.get_content_charset(), content_type)
         final_url = response.geturl()
     forms=[]
     visibility = None
     table_rows=[]
+    document_base = final_url
     if content_type in {"text/html", "application/xhtml+xml"}:
         parser = PageText(); parser.feed(text)
         title = " ".join("".join(parser.title).split())
         text = "\n".join(line for part in "".join(parser.parts).splitlines() if (line := " ".join(part.split())))
-        links = [{**item,"url":urllib.parse.urljoin(final_url,item['url'])} for item in parser.links[:200]
-                 if urllib.parse.urlsplit(urllib.parse.urljoin(final_url,item['url'])).scheme in {'http','https'}]
-        forms=parser.forms[:8]
+        if parser.base_href is not None:
+            document_base = _document_url(final_url, parser.base_href) or final_url
+        links = [{**item, 'url': address} for item in parser.links[:200]
+                 if not item['url'].strip().startswith('#')
+                 and (address := _document_url(document_base, item['url']))]
+        forms = []
+        for form in parser.forms[:8]:
+            # Empty/omitted form action submits to the document, not <base>.
+            action = form.get('action') or ''
+            resolved = _document_url(document_base, action) if action.strip() else ''
+            if resolved is not None:
+                forms.append({**form, 'action': resolved})
         table_rows=parser.table_rows
         visibility = {'method':'explicit_html_and_inline_styles',
                       'hidden_elements':parser.hidden_elements, 'computed_styles':False}
@@ -306,6 +389,7 @@ def _read_public_page(url: str, *, timeout: float = 8.0, question: str = "",
     # bindings must survive the subsequent statement parser as one unit.
     retained_rows=[row for row in table_rows if row in selected['summary']]
     return {"url": final_url, "title": title, "content_type":content_type, **selected,
+            "document_base_url": document_base, "decoding": decoding,
             "content_sha256": hashlib.sha256(payload).hexdigest(),
             "hash_scope":"response_body_bytes",
             "document_fingerprint":fingerprint,
