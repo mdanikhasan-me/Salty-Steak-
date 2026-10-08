@@ -318,6 +318,24 @@ def passing_test_evidence(argv: list[str], output: str) -> dict:
             'scope':'exit status and explicit assertions; test count not observed'}
 
 
+def execution_summary(report: dict) -> str:
+    """Host-authored outcome after drafting; never infer execution from prose."""
+    if report.get('kind') != 'project' or report.get('status') != 'passed':
+        return ''
+    checks = report.get('checks') or []
+    if not checks or not all(check.get('status')=='completed' and check.get('passed') is True
+                             and check.get('exit_code')==check.get('expected_exit_code',0)
+                             for check in checks):
+        return ''
+    count = sum(max(0,check.get('test_evidence',{}).get('passing',0)) for check in checks)
+    measured = f' ({count} reported passing tests)' if count else ''
+    return (f'**Application execution — after drafting:** {len(checks)} local '
+            f'command{"s" if len(checks)!=1 else ""} passed{measured}. '
+            'All declared requirements have passing recorded checks. '
+            'This measured result supersedes any earlier draft statement that execution was unavailable. '
+            'It verifies only the recorded checks, not every possible input.')
+
+
 def verify_project(answer: str, request: str, *, work_root: Path, plan_factory: Callable,
                    should_stop: Callable[[],bool], publish: Callable[[dict],None],
                    tools: dict[str,list[str]] | None = None, runner: Callable = run_check,

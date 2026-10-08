@@ -121,6 +121,18 @@ def test_script_named_pytest_is_not_mistaken_for_the_pytest_runner():
     assert evidence['runner']=='custom'
 
 
+def test_execution_summary_uses_recorded_commands_not_model_claims():
+    from app.backend.chat.code_verification import execution_summary
+    assert execution_summary({'kind':'project','status':'passed'}) == ''
+    report={'kind':'project','status':'passed','checks':[{'status':'completed','passed':True,
+        'exit_code':0,'expected_exit_code':0,'test_evidence':{'passing':16}}]}
+    summary=execution_summary(report)
+    assert '1 local command passed (16 reported passing tests)' in summary
+    assert 'after drafting' in summary and 'supersedes' in summary
+    report['status']='unverified'
+    assert execution_summary(report)==''
+
+
 def test_real_pytest_expected_failure_is_not_a_behavioral_pass(tmp_path):
     plan=python_plan()
     plan['test_files'][0]['content']='''import pytest

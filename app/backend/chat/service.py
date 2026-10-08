@@ -8160,7 +8160,10 @@ class ChatService:
                         "and a verification plan before writing. Produce a complete usable answer. "
                         "For executable artifacts, wire every requested interaction and include all "
                         "required code. Do not claim you executed tests unless tool evidence proves it. "
-                        "The application will review the draft and run supported checks afterward."
+                        "This is the authoring stage: the application will execute supported local checks "
+                        "afterward under this turn's Lock In authority. Do not state that the application "
+                        "lacks an interpreter or terminal; execution results are not available until that "
+                        "stage completes. Keep this draft focused on the requested source and explanation."
                     )})
                 generation_arguments["reasoning_mode"] = initial_reasoning_mode
                 generation_arguments["maximum_output_mode"] = str(
@@ -9643,6 +9646,11 @@ class ChatService:
             relationship["lock_in_verification"] = verification
             details["response_mode"] = "lock_in"
             failed = verification["status"] == "failed"
+            if not research_review:
+                from .code_verification import execution_summary
+                recorded_execution = execution_summary(verification)
+                if recorded_execution:
+                    assistant_content += '\n\n' + recorded_execution
             if failed:
                 turn_status_override = "partial"
                 assistant_content += "\n\n**Lock In check:** Some checks still failed after two repair attempts. This draft needs further work."

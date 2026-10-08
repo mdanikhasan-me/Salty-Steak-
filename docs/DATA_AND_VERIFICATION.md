@@ -63,3 +63,8 @@ triggering speculative source rewrites. No dependency is installed automatically
 Fresh work folders and bounded processes are not an operating-system sandbox.
 Tests establish only the behaviors they actually exercise. A model critique is not
 execution evidence, and a successful replay is not a fresh end-to-end model turn.
+
+After a passed project run, the application appends a host-authored execution outcome
+from the recorded commands and observed passing-test counts. This comes after drafting
+and explicitly supersedes a draft's stale claim that execution was unavailable. It
+does not alter the tested source or invent results from the model's prose.

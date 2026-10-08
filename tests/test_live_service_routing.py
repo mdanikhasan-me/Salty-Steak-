@@ -660,12 +660,13 @@ def test_lock_in_runs_real_terminal_tests_repairs_and_retests(application,tmp_pa
     _wire(application,tmp_path,reply);application.chat.model_bundle['runtime_family']='salty_native_steak35'
     _,messages=_send(application,'Write add(a,b) in Python.',settings={'reasoning_mode':'lock_in'})
     answer=messages[-1];report=answer['technical_details']['lock_in_verification']
-    assert answer['content']==fixed
+    assert answer['content'].startswith(fixed)
     assert report['status']=='passed' and report['repairs']==1
     assert report['attempts'][0]['checks'][0]['exit_code']!=0
     assert report['attempts'][1]['checks'][0]['exit_code']==0
     assert report['attempts'][0]['artifact_sha256']!=report['attempts'][1]['artifact_sha256']
     assert report['checks'][0]['audit_record_id']
+    assert 'Application execution' in answer['content']
     assert Path(report['work_directory'],'_evidence/result.json').is_file()
 
 
