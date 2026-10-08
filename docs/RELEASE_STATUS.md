@@ -1,19 +1,53 @@
 # Release status — 8 October 2026
 
-**r212 is installed and running.** Native-window visual acceptance remains with the
+**r213 is installed and running.** Native-window visual acceptance remains with the
 owner, who explicitly requested installation for personal inspection.
 The owner's full priorities and constraints remain in `PERSONAL_ASSISTANT_ROADMAP.md`.
 
-## Installed cleanup repair
+## Installed research document-evidence repair (r213)
 
-- The owner intentionally cleared chats and application data in r211. Conversations,
-  messages and memories are now zero; old chats were not restored.
+- Base-URL resolution, malformed-link isolation, declared text decoding and decoding
+  provenance are repaired. Complete ordered lists now survive extraction, evidence
+  checkpoints, coverage review and final-answer selection. Partial repetition does
+  not corroborate an entire compound claim.
+- Actual full-app research recovered a W3C source through the owned-browser fallback
+  after HTTP403, then correctly answered all three requested precedence levels with
+  original-source citations. The baseline had read the source but lost its answer
+  evidence. Final run308.48s; retrieval26.95s and coverage86.03s. This is not a controlled
+  speed benchmark or acceptable-latency claim.
+- Final backend1,734 passed/8 skipped; frontend325 passed; Vite built. Packaged
+  browser action matrix14/14 and disposable package checks18/18 passed, including
+  Python execution, cleanup regressions and complete-evidence preservation.
+- Candidate, staged and postlaunch installed integrity audits passed:15,572 files,
+  5,117,027,771 bytes. Installed live checks passed; model ready/integrity verified.
+- The owner's new1 conversation/2 messages after clearing data were preserved
+  byte-for-byte at row level. All19 model-file inventory entries and manifests were
+  unchanged. No new production clearing was performed.
+- Desktop shortcut targets the installed r213 executable and original workspace.
+  r212 is retained as rollback. The installed service's rendered Edge interface was
+  inspected; chat-data review showed1 conversation and required typed confirmation.
+  Cancel was clicked. This is not native-window automation acceptance.
+
+Installed build: `2.0.0+20261008.native-r213`; source commit `c17f3bd`.
+
+Frozen source SHA-256:
+`4c7b2fafa3445e8b565a0d8446ae92a478f94e0165be76a1e5fe8a9c9ed3e1b8`
+
+Local evidence: `validation/RELEASE_R213.md`, `r213-installed-check.json`,
+`r213-installed-audit.json`, `r213-disposable-check.json`, `r213-settings.png`, and
+`research-coverage/document-evidence-final-20261008{,-score,-audit}.json`.
+
+## Earlier cleanup repair (r212)
+
+- The owner intentionally cleared chats and application data in r211. At r212
+  verification, conversations/messages/memories were zero; old chats were not restored.
+  Subsequent new data is preserved as recorded above.
 - Cleanup had committed but stopped on Windows read-only cached Git pack files.
   Recovery finished the already-confirmed deletion: 24,320 remaining staged files,
   10,926,585,022 bytes reclaimed. Model inventory and manifests were unchanged.
 - Rejected HTTP requests now close their connections, preventing unread request
   bodies from corrupting the following method and producing HTTP 501.
-- Current source: 1,709 backend tests passed, 8 skipped; 325 frontend tests passed;
+- r212 source: 1,709 backend tests passed, 8 skipped; 325 frontend tests passed;
   production frontend build passed. All 15 packaged disposable checks passed.
 - Independent candidate, staged and post-launch installed audits passed: 15,572
   files, 5,117,020,107 bytes; no missing, extra, mismatched or forbidden bytecode files.
@@ -30,7 +64,7 @@ The owner's full priorities and constraints remain in `PERSONAL_ASSISTANT_ROADMA
 - Desktop shortcut targets `D:/Program Files/Salty Steak/Salty Steak.exe` with
   workspace `D:/Salty Steak/workspace`. The previous r211 package is retained.
 
-Installed build: `2.0.0+20261008.native-r212`
+Earlier build: `2.0.0+20261008.native-r212`
 
 Frozen source SHA-256:
 `2ca1585aaa49ec02f2579142866f438e209cb29edd2ad8bdd6e7461fcd472a55`
