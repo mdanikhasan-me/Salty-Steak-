@@ -834,13 +834,11 @@ def _select_finaliser_findings(
             for source in item.get("evidence", [])
             if isinstance(source, Mapping)
         )
-        from urllib.parse import urlsplit
         primary_requested=bool(terms & {'original','official'})
         from ..research.query import requested_urls
         supplied={url.rstrip('/') for url in requested_urls(question)}
         subject_host_match=primary_requested and any(
-            str(source.get('url') or '').rstrip('/') in supplied or
-            bool(terms & set((urlsplit(str(source.get('url') or '')).hostname or '').split('.')))
+            str(source.get('url') or '').rstrip('/') in supplied
             for source in item.get('evidence',[]) if isinstance(source,Mapping))
         return rank[:1] + (source_type_match,subject_host_match) + rank[1:2] + (version,) + rank[2:]
 
@@ -2055,26 +2053,26 @@ class LiveRunners:
         # Include a small distinct set per publisher too; a mirror's matching
         # sentence must not hide the original publisher's equivalent evidence.
         if wanted & {'original','official'}:
-            from urllib.parse import urlsplit
-            originals=[c for c in all_findings if any(
-                wanted & set((urlsplit(str(s.get('url') or '')).hostname or '').split('.'))
-                for s in c.get('evidence',[]) if isinstance(s,Mapping))]
-            primary=[]
-            for need in ledger.question.split('?'):
-                if not need.strip() or need.strip().casefold().startswith('cite '):continue
-                # Cite each requested subtopic, not a pile of generic pages
-                # matching the words "original documentation".
-                import math
-                from collections import Counter
-                need_terms={word[:5] for word in _question_terms(need) if len(word)>2}
-                terms_by_claim=[{word[:5] for word in _question_terms(str(c.get('text') or ''))} for c in originals]
-                frequency=Counter(t for terms in terms_by_claim for t in terms)
-                scored=sorted(zip(originals,terms_by_claim),key=lambda pair:sum(
-                    1+math.log((len(originals)+1)/(frequency[t]+1)) for t in need_terms & pair[1]),reverse=True)
-                candidates=[c for c,_ in scored[:6]]
-                for candidate in candidates:
-                    if candidate not in primary:primary.append(candidate)
-            findings=[*primary,*[c for c in findings if c not in primary]][:24]
+            # A hostname containing a query word is not proof of authorship.
+            # Preserve several claims per observed source for the reviewer to
+            # compare, without letting an early keyword-domain crowd out a
+            # later specification or report. Do not label these as primary.
+            from ..research.query import requested_urls
+            supplied={url.rstrip('/') for url in requested_urls(ledger.question)}
+            groups=[]
+            for source in ledger.sources.values():
+                candidates=[c for c in all_findings if source.source_id in c.get('sources',[])]
+                candidates.sort(key=lambda c:_finding_rank(wanted,c),reverse=True)
+                candidates=[c for c in candidates if _finding_rank(wanted,c)[2]>0]
+                if candidates:
+                    groups.append((source.url.rstrip('/') in supplied,candidates))
+            groups.sort(key=lambda item:(item[0],_finding_rank(wanted,item[1][0])),reverse=True)
+            balanced=[]
+            for index in range(2):
+                for _,candidates in groups[:10]:
+                    if index<len(candidates) and candidates[index] not in balanced:
+                        balanced.append(candidates[index])
+            findings=[*balanced,*[c for c in findings if c not in balanced]][:24]
         remaining=min(300.0,ledger.budget.max_seconds)
         deadline=time.monotonic()+remaining
         self._coverage_findings=list(findings)

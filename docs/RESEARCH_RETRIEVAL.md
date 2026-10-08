@@ -40,6 +40,12 @@ Saved answer provenance contains the same selected claims that were sent to the
 answering pass. It is not independently reranked afterward: doing that can hide
 primary evidence that actually supported the answer, especially after coverage review.
 
+For original-source requests, matching a query word in a hostname does not establish
+authority. Only explicitly supplied source URLs receive that direct-source preference.
+The coverage packet also preserves a bounded spread of relevant claims across observed
+sources so an early keyword-matching site cannot crowd out a later specification. Source
+authority still needs evidence review; this sampling alone does not label a page primary.
+
 For complete static HTML/Markdown/text reads, a bounded content sketch is computed
 before question-specific passages are selected. It retains the lowest 256 fixed
 hashes of seven-word sequences (no random seed). Long near-duplicate documents share

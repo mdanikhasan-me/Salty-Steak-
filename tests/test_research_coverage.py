@@ -1,4 +1,8 @@
 import json
+import pytest
+from app.backend.research.coverage import assess_coverage
+from app.backend.research.loop import ResearchLoop
+from app.backend.research.ledger import Budget,ResearchLedger
 
 
 def test_coverage_timeout_preserves_unknown_coverage_without_retrying_transport():
@@ -62,10 +66,6 @@ def test_runner_returns_exact_evidence_used_for_answer_not_a_second_ranking(monk
     assert seen
     assert [c['claim'] for c in result['claims']]==[c['claim'] for c in seen]
     assert all(c['evidence'] for c in result['claims'])
-import pytest
-from app.backend.research.coverage import assess_coverage
-from app.backend.research.loop import ResearchLoop
-from app.backend.research.ledger import Budget,ResearchLedger
 
 @pytest.mark.parametrize('value',[
     {'requirements':[{'need':'requested date','claims':['invented']}],'missing':[],'query':None},
@@ -166,6 +166,23 @@ def test_coverage_packet_preserves_less_repeated_question_part():
     runner=LiveRunners(generate_research_review=generate)
     runner._assess_coverage(ledger)
     assert len(captured[0]['evidence'])<=16
+
+
+def test_keyword_hostname_cannot_displace_later_source_facets():
+    from app.backend.chat.runners import LiveRunners
+    ledger=ResearchLedger('Read original Zephyr documentation. What value formats and recovery delay apply?')
+    early=ledger.add_source('https://zephyr.example/guide','Unofficial guide')
+    for index in range(18):
+        ledger.add_claim(f'Zephyr documentation lists value format example {index} for recovery delay guidance.',early.source_id)
+    later=ledger.add_source('https://standards.example/specification','Protocol specification')
+    facts=['Zephyr value formats are either a calendar date or a duration in seconds.',
+           'Zephyr recovery delay specifies the expected period of service unavailability.']
+    for fact in facts:ledger.add_claim(fact,later.source_id)
+    runner=LiveRunners(generate_research_review=lambda *args,**kwargs:'{}')
+    runner._assess_coverage(ledger)
+    packet=runner._coverage_findings
+    assert all(any(c['text']==fact for c in packet) for fact in facts)
+    assert len(packet)<=24
 
 
 def test_disputed_only_support_does_not_close_a_requirement():
