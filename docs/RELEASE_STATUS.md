@@ -1,9 +1,46 @@
 # Release status — 8 October 2026
 
-**r211 has passed prelaunch checks; it is not installed.** Production remains r208.
+**r212 is installed and running.** Native-window visual acceptance remains with the
+owner, who explicitly requested installation for personal inspection.
 The owner's full priorities and constraints remain in `PERSONAL_ASSISTANT_ROADMAP.md`.
 
-## Completed checks
+## Installed cleanup repair
+
+- The owner intentionally cleared chats and application data in r211. Conversations,
+  messages and memories are now zero; old chats were not restored.
+- Cleanup had committed but stopped on Windows read-only cached Git pack files.
+  Recovery finished the already-confirmed deletion: 24,320 remaining staged files,
+  10,926,585,022 bytes reclaimed. Model inventory and manifests were unchanged.
+- Rejected HTTP requests now close their connections, preventing unread request
+  bodies from corrupting the following method and producing HTTP 501.
+- Current source: 1,709 backend tests passed, 8 skipped; 325 frontend tests passed;
+  production frontend build passed. All 15 packaged disposable checks passed.
+- Independent candidate, staged and post-launch installed audits passed: 15,572
+  files, 5,117,020,107 bytes; no missing, extra, mismatched or forbidden bytecode files.
+- Installed data checks passed: empty conversations/memory preserved, model inventory
+  and manifests unchanged, runtime ready and base-model integrity verified. Both
+  preview endpoints returned 200; invalid deletion returned 400, followed by health
+  200 on the reused client connection. No additional production deletion was performed.
+- Both review controls were operated against the installed server in Edge. Their
+  rendered scope/counts and disabled confirmation buttons were inspected, then
+  cancelled. This is browser-rendered evidence, not native-window acceptance.
+- Immediately after startup, previews correctly returned busy/409 while background
+  model warm-up held the lifecycle lock. They succeeded once warm-up finished. The
+  generic busy explanation could be clearer; it is not a recurrence of the 501 bug.
+- Desktop shortcut targets `D:/Program Files/Salty Steak/Salty Steak.exe` with
+  workspace `D:/Salty Steak/workspace`. The previous r211 package is retained.
+
+Installed build: `2.0.0+20261008.native-r212`
+
+Frozen source SHA-256:
+`2ca1585aaa49ec02f2579142866f438e209cb29edd2ad8bdd6e7461fcd472a55`
+
+Evidence: `validation/RELEASE_R212.md`, `r212-installed-check.json`,
+`r212-installed-audit.json`, `r212-disposable-check.json`,
+`user-cleanup-recovery-20261008.json`, `r212-all-data-review.png` and
+`r212-chat-data-review.png`. These local reports/screenshots are not uploaded to Git.
+
+## Earlier research and coding checks (r211)
 
 - Final source: 1,707 backend tests passed, 8 skipped; 325 frontend tests passed;
   production frontend build passed.
@@ -15,7 +52,7 @@ The owner's full priorities and constraints remain in `PERSONAL_ASSISTANT_ROADMA
   The original RFC source contains both requested facts and is cited for both.
 - Data controls: separate chat/all-data scopes, model preservation, stale-preview and
   stale-tab protection, recovery from10 abrupt-process exit cases, and disposable HTTP
-  deletion/reopen tests. No production chats or model weights were cleared.
+  deletion/reopen tests. Subsequent owner-initiated production clearing is recorded above.
 - Packaged runtime:12 disposable checks passed, including actual code execution and
   both data-clear scopes. Packaged browser helper:14 action checks passed.
 - Initial independent r211 audit:15,572 files /5,117,018,913 bytes checked; no missing,
@@ -23,7 +60,7 @@ The owner's full priorities and constraints remain in `PERSONAL_ASSISTANT_ROADMA
   The post-test integrity audit also passed, confirming those checks did not mutate
   the sealed package.
 
-Candidate: `D:/Salty Steak/dist/Salty-Steak-native-r211`
+Earlier candidate: `D:/Salty Steak/dist/Salty-Steak-native-r211`
 
 Build ID: `2.0.0+20261008.native-r211`
 
@@ -38,8 +75,8 @@ Validation artifacts and private workspaces are deliberately not uploaded to Git
 
 ## Not accepted or complete
 
-- Installed native UI, shortcut routing, production data-preservation and postlaunch
-  checks. Windows Computer Use still fails with missing native pipe OS error2. Client
+- Automated installed native-window interaction. Windows Computer Use previously
+  failed with missing native pipe OS error2. Client
   reset/reimport and plugin discovery found no available reconnection operation. Browser
   and API acceptance are not substitutes for installed/native acceptance.
 - Old r209 candidate cleanup: deletion was blocked by execution controls; files remain.
@@ -52,4 +89,6 @@ Validation artifacts and private workspaces are deliberately not uploaded to Git
 - Image-only PDF OCR, universal website access, broad unseen-task reliability and future
   model fine-tuning are not claimed complete.
 
-The candidate must pass remaining native and cutover gates before replacement of r208.
+The cleanup repair is installed, not completion of the broader research/computer-use
+roadmap. Fine-tuning has not begun; stable tool contracts and held-out evaluations
+remain prerequisites.
